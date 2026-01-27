@@ -93,6 +93,7 @@ const GradientLoader = () => {
 };
 
 const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenProps) => {
+  const androidTopInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
   const { t } = useI18n();
   const USERNAME_MAX_LENGTH = 22; // Incluye el '@'
   const RECTIFICATION_MAX_LENGTH = 220;
@@ -979,7 +980,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
       {/* Botón de retroceso */}
       <TouchableOpacity
-        style={styles.backButton}
+        style={[styles.backButton, { top: 16 + androidTopInset }]}
         onPress={handleBack}
         activeOpacity={0.7}
         disabled={isUiBlocked}>

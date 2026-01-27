@@ -160,6 +160,7 @@ interface LoginScreenProps {
 }
 
 const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken }: LoginScreenProps) => {
+  const androidTopInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
   const { t, language, setLanguage } = useI18n();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -503,7 +504,7 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}>
         <View style={styles.content}>
-          <View style={styles.languageSwitcher}>
+          <View style={[styles.languageSwitcher, { top: 6 + androidTopInset }]}>
             <View style={[styles.languagePill, screenDisabled && styles.languagePillDisabled]}>
               <TouchableOpacity
                 onPress={() => setLanguage('en')}
