@@ -1,0 +1,46 @@
+buildscript {
+    ext {
+        buildToolsVersion = "35.0.0"
+        minSdkVersion = 24
+        compileSdkVersion = 35
+        targetSdkVersion = 35
+        ndkVersion = "26.1.10909125"
+        kotlinVersion = "1.9.24"
+    }
+    repositories {
+        // Plugin Portal can host Gradle plugins and sometimes resolves artifacts used by plugin DSL
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        // Android Gradle Plugin - choose a version compatible with the Gradle wrapper (gradle-8.x)
+        classpath("com.android.tools.build:gradle:8.1.1")
+        // Kotlin Gradle Plugin - keep in sync with rootProject.ext.kotlinVersion
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:${kotlinVersion}")
+    }
+}
+
+plugins {
+    id("com.facebook.react.rootproject")
+}
+
+subprojects {
+    configurations.configureEach {
+        resolutionStrategy.eachDependency { details ->
+            if (details.requested.group == "com.google.android.gms" && details.requested.name == "play-services-ads") {
+                // Workaround: pick a version that doesn't require Kotlin 2.1 metadata.
+                details.useVersion("23.2.0")
+            }
+
+            // `react-native-inappbrowser-reborn` can resolve an alpha androidx.browser version
+            // which requires compileSdk 36+ and newer AGP. Pin to a stable version.
+            if (details.requested.group == "androidx.browser" && details.requested.name == "browser") {
+                details.useVersion("1.8.0")
+            }
+        }
+    }
+}
+
+// React Native root project plugin is applied via the plugins DSL above.
+

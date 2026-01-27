@@ -1,0 +1,18 @@
+# Archivos de configuración
+*.config.js
+.eslintrc.js
+react-native.config.js
+metro.config.js
+babel.config.js
+jest.config.js
+
+# Scripts
+verify-photo-setup.js
+
+# Directorios de build
+android/
+ios/
+node_modules/
+.expo/
+build/
+dist/

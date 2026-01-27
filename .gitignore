@@ -1,0 +1,36 @@
+# --- Secrets / env files ---
+# Never commit real secrets. Use .env.example templates instead.
+.env
+.env.*
+!/Frontend/.env.example
+!/Backend/.env.example
+
+# --- OS / Editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc
+
+# --- Node / React Native ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# --- Backend runtime artifacts ---
+Backend/uploads/
+Backend/uploads/**
+
+# --- Android / iOS build artifacts (Frontend already has its own .gitignore too) ---
+Frontend/android/.gradle/
+Frontend/android/.idea/
+Frontend/android/app/build/
+Frontend/ios/Pods/
+Frontend/ios/build/
+
+# --- Keys ---
+*.keystore
+**/keystore.properties

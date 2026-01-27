@@ -1,0 +1,33 @@
+// Ensure plugin resolution can find plugins from common plugin repositories
+pluginManagement {
+	repositories {
+		gradlePluginPortal()
+		google()
+		mavenCentral()
+	}
+	// Allow resolving the React Native Gradle plugins from node_modules.
+	includeBuild("../node_modules/@react-native/gradle-plugin")
+}
+
+plugins {
+	id("com.facebook.react.settings")
+}
+
+extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
+	ex.autolinkLibrariesFromCommand()
+}
+
+// Ensure all modules use the same repositories for dependencies
+dependencyResolutionManagement {
+	repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+	repositories {
+		google()
+		mavenCentral()
+		maven { url 'https://jitpack.io' }
+	}
+}
+
+rootProject.name = 'KeintiApp'
+include ':app'
+
+// React Native Gradle plugins are resolved via pluginManagement.includeBuild.

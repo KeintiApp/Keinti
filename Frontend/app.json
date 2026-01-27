@@ -1,0 +1,8 @@
+{
+  "name": "Keinti",
+  "displayName": "Keinti",
+  "react-native-google-mobile-ads": {
+    "android_app_id": "ca-app-pub-2435078373922090~4991297093",
+    "ios_app_id": "ca-app-pub-3940256099942544~1458002511"
+  }
+}
