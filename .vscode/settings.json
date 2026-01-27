@@ -1,0 +1,49 @@
+{
+    "java.compile.nullAnalysis.mode": "automatic",
+    "java.configuration.updateBuildConfiguration": "interactive",
+    "java.errors.incompleteClasspath.severity": "ignore",
+    "java.import.gradle.enabled": false,
+    "java.gradle.buildServer.enabled": "off",
+    "java.import.exclusions": [
+        "**/node_modules/**",
+        "**/Frontend/android/**",
+        "**/Backend/**"
+    ],
+    "files.exclude": {
+        "**/Frontend/android/**/build/**": true,
+        "**/Frontend/android/app/build/**": true,
+        "**/Frontend/android/build/**": true
+    },
+    "search.exclude": {
+        "**/Frontend/android/**/build/**": true,
+        "**/Frontend/android/app/build/**": true,
+        "**/Frontend/android/build/**": true
+    },
+    "files.watcherExclude": {
+        "**/Frontend/android/**/build/**": true,
+        "**/Frontend/android/app/build/**": true,
+        "**/Frontend/android/build/**": true
+    },
+    "files.associations": {
+        "**/*.gradle": "groovy",
+        "**/*.gradle.kts": "kotlin",
+        "*.h": "objective-c",
+        "*.m": "objective-c",
+        "*.mm": "objective-cpp"
+    },
+    "C_Cpp.files.exclude": {
+        "**/Frontend/ios/**": true
+    },
+    "eslint.workingDirectories": [
+        { "directory": "./Frontend", "changeProcessCWD": true }
+    ],
+    "eslint.options": {
+        "ignorePattern": [
+            "**/.eslintrc.js",
+            "**/verify-photo-setup.js",
+            "**/*.config.js"
+        ]
+    },
+    "typescript.disableAutomaticTypeAcquisition": true,
+    "javascript.disableAutomaticTypeAcquisition": true
+}
