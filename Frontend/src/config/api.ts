@@ -8,7 +8,7 @@ const DEV_API_URL = 'http://127.0.0.1:3000';
 
 // TODO: cambia esto cuando tengas tu backend desplegado (HTTPS) antes de generar el release.
 // Ej: https://api.tudominio.com
-const PROD_API_URL = 'https://api.tudominio.com';
+const PROD_API_URL = 'https://keinti.onrender.com';
 
 export const API_URL = (() => {
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
