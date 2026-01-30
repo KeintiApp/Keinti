@@ -2,6 +2,16 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 
+// React Native's Linking export often points to this internal module.
+// Mock it directly so App.tsx can subscribe to deep links in Jest.
+jest.mock('react-native/Libraries/Linking/Linking', () => ({
+  getInitialURL: jest.fn(() => Promise.resolve(null)),
+  addEventListener: jest.fn(() => ({ remove: jest.fn() })),
+  removeEventListener: jest.fn(),
+  openURL: jest.fn(() => Promise.resolve()),
+  canOpenURL: jest.fn(() => Promise.resolve(true)),
+}));
+
 // Some React Native versions / Jest environments can end up with missing core exports.
 // Provide safe fallbacks to avoid crashing snapshot/render tests.
 try {
@@ -9,6 +19,16 @@ try {
   const RN = require('react-native');
   if (!RN.SafeAreaView) RN.SafeAreaView = RN.View;
   if (!RN.KeyboardAvoidingView) RN.KeyboardAvoidingView = RN.View;
+
+  // In some Jest environments, the RN preset provides a partial Linking mock
+  // without addEventListener/getInitialURL. Patch the instance directly.
+  const linking = RN.Linking;
+  if (linking && typeof linking.getInitialURL !== 'function') {
+    linking.getInitialURL = () => Promise.resolve(null);
+  }
+  if (linking && typeof linking.addEventListener !== 'function') {
+    linking.addEventListener = () => ({ remove: () => {} });
+  }
 } catch {
   // ignore
 }

@@ -245,16 +245,32 @@ function App() {
     };
 
     const checkInitial = async () => {
-      const initialUrl = await Linking.getInitialURL().catch(() => null);
+      const anyLinking: any = Linking as any;
+      const initialUrl = await (typeof anyLinking.getInitialURL === 'function'
+        ? anyLinking.getInitialURL()
+        : Promise.resolve(null)).catch(() => null);
       if (cancelled) return;
       if (initialUrl) {
         await handleSupabaseCallback(initialUrl);
       }
     };
 
-    const sub = Linking.addEventListener('url', ({ url }) => {
-      handleSupabaseCallback(url);
-    });
+    const subscribeToLinks = () => {
+      const anyLinking: any = Linking as any;
+      const handler = ({ url }: { url: string }) => {
+        handleSupabaseCallback(url);
+      };
+
+      if (typeof anyLinking.addEventListener === 'function') {
+        return anyLinking.addEventListener('url', handler);
+      }
+      if (typeof anyLinking.addListener === 'function') {
+        return anyLinking.addListener('url', handler);
+      }
+      return { remove: () => {} };
+    };
+
+    const sub = subscribeToLinks();
 
     checkInitial();
 

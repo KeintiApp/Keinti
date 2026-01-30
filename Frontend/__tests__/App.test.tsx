@@ -9,7 +9,7 @@ import React from 'react';
 import {it} from '@jest/globals';
 
 // Note: test renderer must be required after react-native.
-import renderer from 'react-test-renderer';
+import renderer, {act} from 'react-test-renderer';
 
 // This is a smoke test: we just verify the app entry renders.
 // Mock heavy screens to avoid native-module rendering issues in Jest.
@@ -40,6 +40,14 @@ jest.mock('../src/screens/Configuration', () => {
 // Import after mocks.
 const App = require('../App').default;
 
-it('renders correctly', () => {
-  renderer.create(<App />);
+it('renders correctly', async () => {
+  let tree: renderer.ReactTestRenderer | null = null;
+
+  await act(async () => {
+    tree = renderer.create(<App />);
+    // Flush at least one tick for passive effects.
+    await Promise.resolve();
+  });
+
+  tree?.unmount();
 });

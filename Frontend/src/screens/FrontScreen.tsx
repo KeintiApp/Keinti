@@ -10,6 +10,7 @@ import {
   Image,
   Modal,
   TouchableWithoutFeedback,
+  Keyboard,
   KeyboardAvoidingView,
   StatusBar,
   ActivityIndicator,
@@ -65,6 +66,9 @@ const CHANNEL_IMAGE_LOCK_OVERLAY_TEXT_TOP = 'Visualizar imagen';
 const CHANNEL_IMAGE_LOCK_OVERLAY_TEXT_BOTTOM = '(ver anuncio)';
 // RN Image blurRadius is a platform-specific numeric value; this approximates ~80% blur.
 const CHANNEL_IMAGE_LOCK_BLUR_RADIUS = 22;
+
+// Height reserved by the custom bottom nav bar (plus a small safety margin).
+const BOTTOM_NAV_OVERLAY_HEIGHT = 60;
 
 const hashString = (input: string) => {
   // Simple non-crypto hash for stable storage keys.
@@ -441,6 +445,14 @@ const REACTION_ITEM_SIZE = (SCREEN_WIDTH - 40) * 0.16 - 6;
 const CHAT_TABS_DEFAULT_OFFSET = 90;
 const CHAT_TABS_TOP = 20;
 const CHAT_TABS_GAP = 10;
+
+const ANDROID_STATUS_BAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
+
+const SOCIAL_PANEL_BASE_HEIGHT = 280;
+const SOCIAL_PANEL_HEIGHT = SOCIAL_PANEL_BASE_HEIGHT + ANDROID_STATUS_BAR_HEIGHT;
+
+// Extra spacing above the keyboard so the chat input doesn't feel glued/clipped to it.
+const CHAT_INPUT_KEYBOARD_GAP = Platform.OS === 'ios' ? 18 : 10;
 
 const GROUP_MEMBERS_PANEL_HEIGHT = Math.round(SCREEN_HEIGHT * 0.6);
 
@@ -1626,6 +1638,11 @@ const FrontScreen = ({
     initialSocialNetworks || [],
   );
   const [activeBottomTab, setActiveBottomTab] = useState('home');
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [bottomNavHeight, setBottomNavHeight] = useState<number>(BOTTOM_NAV_OVERLAY_HEIGHT);
+  const [channelInputBarHeight, setChannelInputBarHeight] = useState<number>(72);
+  const [groupInputBarHeight, setGroupInputBarHeight] = useState<number>(72);
   const [channelChatMountKey, setChannelChatMountKey] = useState(0);
   const prevActiveBottomTabRef = useRef<string>('home');
   const [isHomePostsLoading, setIsHomePostsLoading] = useState(false);
@@ -1868,6 +1885,26 @@ const FrontScreen = ({
     }
     prevActiveBottomTabRef.current = activeBottomTab;
   }, [activeBottomTab]);
+
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvt, (e: any) => {
+      setIsKeyboardVisible(true);
+      const h = e?.endCoordinates?.height;
+      setKeyboardHeight(typeof h === 'number' && h > 0 ? h : 0);
+    });
+    const hideSub = Keyboard.addListener(hideEvt, () => {
+      setIsKeyboardVisible(false);
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   useEffect(() => {
     if (chatView !== 'channel' || channelTab !== 'Tu canal') {
@@ -4623,7 +4660,7 @@ const FrontScreen = ({
   };
 
   const [showSocialPanel, setShowSocialPanel] = useState(false);
-  const [socialPanelAnimation] = useState(new Animated.Value(-280)); // Updated to match height
+  const [socialPanelAnimation] = useState(new Animated.Value(-SOCIAL_PANEL_HEIGHT));
   const [selectedSocialNetwork, setSelectedSocialNetwork] = useState<string | null>(null);
   const [socialLink, setSocialLink] = useState('');
   const [linkError, setLinkError] = useState('');
@@ -4987,7 +5024,7 @@ const FrontScreen = ({
   };
 
   const toggleSocialPanel = () => {
-    const toValue = showSocialPanel ? -280 : 0; // Updated to match height
+    const toValue = showSocialPanel ? -SOCIAL_PANEL_HEIGHT : 0;
     Animated.timing(socialPanelAnimation, {
       toValue,
       duration: 300,
@@ -6565,7 +6602,7 @@ const FrontScreen = ({
       {
         activeBottomTab === 'chat' && !selectedChannel && chatView !== 'groupChat' && (
           <View
-            style={[styles.topCenterContainer, { top: CHAT_TABS_TOP }]}
+            style={[styles.topCenterContainer, { top: ANDROID_STATUS_BAR_HEIGHT + CHAT_TABS_TOP }]}
             onLayout={(e) => {
               const { height } = e.nativeEvent.layout;
               if (Number.isFinite(height) && height > 0 && height !== chatTopTabsHeight) {
@@ -6726,7 +6763,7 @@ const FrontScreen = ({
       <View style={styles.content}>
         {/* Pantalla Home */}
         {activeBottomTab === 'home' && (
-          <View style={[styles.homeScreenContainer, { paddingTop: 8, paddingBottom: 0 }]}>
+          <View style={[styles.homeScreenContainer, { paddingTop: Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT + 8 : 8, paddingBottom: 0 }]}>
             <ScrollView
               style={{ flex: 1 }}
               contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingBottom: 71 }}
@@ -8280,7 +8317,10 @@ const FrontScreen = ({
                 </ScrollView>
               ) : profileView === 'presentation' ? (
                 <View style={{ flex: 1 }}>
-                  <ScrollView scrollEnabled={!isPublished}>
+                  <ScrollView
+                    scrollEnabled={!isPublished}
+                    contentContainerStyle={{ paddingTop: 0, paddingBottom: 80 }}
+                  >
                     <View style={styles.categorySelectorContainer}>
                     <Text style={styles.categoryLabel}>{t('front.category' as TranslationKey)}</Text>
                     <TouchableOpacity
@@ -8449,7 +8489,7 @@ const FrontScreen = ({
                   )}
                 </View>
               ) : (
-                <ScrollView contentContainerStyle={{ paddingTop: 20 }}>
+                <ScrollView contentContainerStyle={{ paddingTop: 20, paddingBottom: 80 }}>
 
                   <View
                     pointerEvents={hasImageOrTextIntimidad ? 'none' : 'auto'}
@@ -9312,7 +9352,12 @@ const FrontScreen = ({
         {/* Pantalla Chat */}
         {
           activeBottomTab === 'chat' && (
-            <View style={{ flex: 1 }}>
+            <KeyboardAvoidingView
+              style={{ flex: 1 }}
+              enabled={false}
+              behavior={undefined}
+              keyboardVerticalOffset={0}
+            >
               {chatView === 'groupChat' ? (
                 <View style={{ flex: 1, backgroundColor: '#000000' }}>
                   <View style={{
@@ -9369,7 +9414,15 @@ const FrontScreen = ({
 
                   <ScrollView
                     style={[styles.scrollContainer, { paddingTop: 0, paddingBottom: 0, marginTop: 60, flex: 1 }]}
-                    contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end', paddingBottom: 20 }}
+                    contentContainerStyle={{
+                      flexGrow: 1,
+                      justifyContent: 'flex-end',
+                      paddingBottom:
+                        (groupInputBarHeight || 72) +
+                        (isKeyboardVisible
+                          ? (keyboardHeight || 0) + CHAT_INPUT_KEYBOARD_GAP + 12
+                          : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + 12),
+                    }}
                     ref={groupChatScrollViewRef}
                     scrollEventThrottle={16}
                     onScroll={(e) => {
@@ -9767,7 +9820,23 @@ const FrontScreen = ({
                     </View>
                   </ScrollView>
 
-                  <View style={{ padding: 20, paddingBottom: 82 }}>
+                  <View
+                    onLayout={(e) => {
+                      const h = Math.ceil(e.nativeEvent.layout.height);
+                      if (h > 0) setGroupInputBarHeight(prev => (prev === h ? prev : h));
+                    }}
+                    style={{
+                      position: 'absolute',
+                      left: 0,
+                      right: 0,
+                      bottom: isKeyboardVisible
+                        ? (keyboardHeight || 0) + CHAT_INPUT_KEYBOARD_GAP
+                        : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT),
+                      paddingHorizontal: 20,
+                      paddingTop: 20,
+                      paddingBottom: isKeyboardVisible ? 8 : 0,
+                    }}
+                  >
                     {showGroupScrollToLatest && (
                       <View style={{ alignItems: 'flex-end', marginBottom: 6 }}>
                         <TouchableOpacity
@@ -10301,7 +10370,11 @@ const FrontScreen = ({
                                 justifyContent: 'flex-end',
                                 paddingHorizontal: 20,
                                 paddingTop: 20,
-                                paddingBottom: 20,
+                                paddingBottom:
+                                  (channelInputBarHeight || 72) +
+                                  (isKeyboardVisible
+                                    ? (keyboardHeight || 0) + CHAT_INPUT_KEYBOARD_GAP + 12
+                                    : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + 12),
                               }}
                               data={messagesToRender}
                               keyExtractor={(msg: any, index: number) => String((msg as any)?.__key ?? (msg as any)?.id ?? `idx-${index}`)}
@@ -10548,7 +10621,7 @@ const FrontScreen = ({
                                                     const replyIsOwnerImageCandidate = isViewerInJoinedChannel && reply.author === 'publisher';
                                                     const parsedReplyImage = replyIsOwnerImageCandidate
                                                       ? parseChannelImageMessage(String(reply.content || '').trim())
-                                                      : null;
+                                                     : null;
                                                     const replyMediaUri = parsedReplyImage ? resolveChannelMediaUri(parsedReplyImage.url) : '';
                                                     const replyKey = String(reply?.id ?? `${messageKey}-r-${rIdx}`);
                                                     const replyUnlockKey = parsedReplyImage
@@ -10863,9 +10936,24 @@ const FrontScreen = ({
                       </View>
                     </ScrollView>
                   )}
-                  <View style={{ padding: 10, paddingBottom: (userPublication || selectedChannel) ? 82 : 100 }}>
-                    {(userPublication || selectedChannel) && channelTab === 'Tu canal' && (
-                      <>
+                  {(userPublication || selectedChannel) && channelTab === 'Tu canal' && (
+                    <View
+                      onLayout={(e) => {
+                        const h = Math.ceil(e.nativeEvent.layout.height);
+                        if (h > 0) setChannelInputBarHeight(prev => (prev === h ? prev : h));
+                      }}
+                      style={{
+                        position: 'absolute',
+                        left: 0,
+                        right: 0,
+                        bottom: isKeyboardVisible
+                          ? (keyboardHeight || 0) + CHAT_INPUT_KEYBOARD_GAP
+                          : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT),
+                        paddingHorizontal: 10,
+                        paddingTop: 10,
+                        paddingBottom: isKeyboardVisible ? 8 : 4,
+                      }}
+                    >
                         {showChannelScrollToLatest && (
                           <View style={{ alignItems: 'flex-end', marginBottom: 6 }}>
                             <TouchableOpacity
@@ -10995,7 +11083,7 @@ const FrontScreen = ({
                                 backgroundColor: 'rgba(255,255,255,0.1)',
                                 borderRadius: 20,
                                 paddingRight: 10,
-                                marginBottom: 10,
+                                marginBottom: 0,
                                 position: 'relative'
                               }}>
                                 {(channelTab === 'Tu canal' && userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) && showChannelAttachmentPanel && (
@@ -11159,6 +11247,80 @@ const FrontScreen = ({
                           );
                         })()}
 
+                        {!isKeyboardVisible && (
+                          <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', position: 'relative', marginTop: 8 }}>
+                            {(userPublication || selectedChannel) && channelTab === 'Tu canal' ? (
+                              <View style={{ flexDirection: 'row', alignItems: 'center', position: 'absolute', left: 0 }}>
+                                <MaterialIcons name="person" size={14} color="#6e6e6eff" style={{ marginRight: 4 }} />
+                                <Text style={{ color: '#6e6e6eff', fontSize: 12 }}>
+                                  {channelInteractions.length}
+                                </Text>
+                              </View>
+                            ) : null}
+
+                            {(userPublication || selectedChannel) && channelTab === 'Tu canal' && userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail) && (
+                              <View style={{ position: 'absolute', right: 0, flexDirection: 'row', alignItems: 'center' }}>
+                                {(userEmail && channelOwnerEmail && userEmail !== channelOwnerEmail) && (
+                                  <Text style={{ color: '#6e6e6eff', fontSize: 12, marginRight: 10 }}>
+                                    ({chatInputValue.length}/280)
+                                  </Text>
+                                )}
+
+                                <TouchableOpacity
+                                  activeOpacity={0.85}
+                                  onPress={() => {
+                                    setChannelMessagesTab(prev => prev === 'General' ? 'Respuestas' : 'General');
+                                    setReplyingToMessageIndex(null);
+                                    setReplyingToUsername(null);
+                                    setExpandedMention(null);
+                                  }}
+                                  style={{ paddingHorizontal: 8, paddingVertical: 2, alignItems: 'center' }}
+                                >
+                                  <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' }}>
+                                    {channelMessagesTab === 'General'
+                                      ? 'General'
+                                      : ((userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) ? 'Tus hilos' : 'Respuesta')}
+                                  </Text>
+                                  <Svg
+                                    height="3"
+                                    width={channelMessagesTab === 'General' ? 26 : ((userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) ? 60 : 30)}
+                                    style={{ marginTop: 3 }}
+                                  >
+                                    <Defs>
+                                      <LinearGradient id="grad_line_channel_toggle" x1="0" y1="0" x2="1" y2="0">
+                                        <Stop offset="0" stopColor="#ff9900" stopOpacity="1" />
+                                        <Stop offset="1" stopColor="#ffe45c" stopOpacity="1" />
+                                      </LinearGradient>
+                                    </Defs>
+                                    <Rect
+                                      x="0"
+                                      y="0"
+                                      width={channelMessagesTab === 'General' ? 26 : ((userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) ? 60 : 30)}
+                                      height="3"
+                                      fill="url(#grad_line_channel_toggle)"
+                                      rx="1.5"
+                                    />
+                                  </Svg>
+                                </TouchableOpacity>
+                              </View>
+                            )}
+
+                            {!selectedChannel && (
+                              <></>
+                            )}
+
+                            {(userPublication || selectedChannel) && channelTab === 'Tu canal' ? (
+                              <CountdownTimer
+                                createdAt={selectedChannel ? selectedChannel.post_created_at : (userPublication?.createdAt || new Date(0).toISOString())}
+                                style={{ color: '#6e6e6eff', fontSize: 12 }}
+                              />
+                            ) : null}
+                          </View>
+                        )}
+
+                    </View>
+                  )}
+
                         <Modal
                           visible={showChannelImageComposer}
                           transparent={false}
@@ -11280,84 +11442,13 @@ const FrontScreen = ({
                             </View>
                           </View>
                         </Modal>
-                      </>
-                    )}
 
-                    <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', position: 'relative' }}>
-                      {(userPublication || selectedChannel) && channelTab === 'Tu canal' ? (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', position: 'absolute', left: 0 }}>
-                          <MaterialIcons name="person" size={14} color="#6e6e6eff" style={{ marginRight: 4 }} />
-                          <Text style={{ color: '#6e6e6eff', fontSize: 12 }}>
-                            {channelInteractions.length}
-                          </Text>
-                        </View>
-                      ) : null}
-
-                      {(userPublication || selectedChannel) && channelTab === 'Tu canal' && userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail) && (
-                        <View style={{ position: 'absolute', right: 0, flexDirection: 'row', alignItems: 'center' }}>
-                          {(userEmail && channelOwnerEmail && userEmail !== channelOwnerEmail) && (
-                            <Text style={{ color: '#6e6e6eff', fontSize: 12, marginRight: 10 }}>
-                              ({chatInputValue.length}/280)
-                            </Text>
-                          )}
-
-                          <TouchableOpacity
-                            activeOpacity={0.85}
-                            onPress={() => {
-                              setChannelMessagesTab(prev => prev === 'General' ? 'Respuestas' : 'General');
-                              setReplyingToMessageIndex(null);
-                              setReplyingToUsername(null);
-                              setExpandedMention(null);
-                            }}
-                            style={{ paddingHorizontal: 8, paddingVertical: 2, alignItems: 'center' }}
-                          >
-                            <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' }}>
-                              {channelMessagesTab === 'General'
-                                ? 'General'
-                                : ((userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) ? 'Tus hilos' : 'Respuesta')}
-                            </Text>
-                            <Svg
-                              height="3"
-                              width={channelMessagesTab === 'General' ? 26 : ((userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) ? 60 : 30)}
-                              style={{ marginTop: 3 }}
-                            >
-                              <Defs>
-                                <LinearGradient id="grad_line_channel_toggle" x1="0" y1="0" x2="1" y2="0">
-                                  <Stop offset="0" stopColor="#ff9900" stopOpacity="1" />
-                                  <Stop offset="1" stopColor="#ffe45c" stopOpacity="1" />
-                                </LinearGradient>
-                              </Defs>
-                              <Rect
-                                x="0"
-                                y="0"
-                                width={channelMessagesTab === 'General' ? 26 : ((userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) ? 60 : 30)}
-                                height="3"
-                                fill="url(#grad_line_channel_toggle)"
-                                rx="1.5"
-                              />
-                            </Svg>
-                          </TouchableOpacity>
-                        </View>
-                      )}
-
-                      {!selectedChannel && (
-                        <></>
-                      )}
-
-                      {(userPublication || selectedChannel) && channelTab === 'Tu canal' ? (
-                        <CountdownTimer
-                          createdAt={selectedChannel ? selectedChannel.post_created_at : (userPublication?.createdAt || new Date(0).toISOString())}
-                          style={{ color: '#6e6e6eff', fontSize: 12 }}
-                        />
-                      ) : null}
-                    </View>
-                  </View>
                 </View>
               ) : (
                 <View style={{ flex: 1, position: 'relative', paddingBottom: 120 }}>
                   <ScrollView
-                    style={{ flex: 1, width: '100%', marginTop: chatPanelsTopOffset }}
-                    contentContainerStyle={{ alignItems: 'center', paddingTop: 0, paddingBottom: 2 }}
+                    style={{ flex: 1, width: '100%', marginTop: chatPanelsTopOffset + 12 }}
+                    contentContainerStyle={{ alignItems: 'center', paddingTop: 6, paddingBottom: 2 }}
                     showsVerticalScrollIndicator={false}
                   >
                     {(!authToken || !accountVerified) ? (
@@ -11707,7 +11798,7 @@ const FrontScreen = ({
 
                 </View>
               )}
-            </View>
+            </KeyboardAvoidingView>
           )
         }
 
@@ -12249,8 +12340,16 @@ const FrontScreen = ({
       </Modal >
 
       {/* Barra de navegación inferior */}
-      {activeBottomTab !== 'notifications' && (
-        <View style={[styles.bottomNavBar, { justifyContent: 'space-evenly' }]}>
+      {activeBottomTab !== 'notifications' && !isKeyboardVisible && (
+        <View
+          style={[styles.bottomNavBar, { justifyContent: 'space-evenly' }]}
+          onLayout={(e) => {
+            const h = e?.nativeEvent?.layout?.height;
+            if (typeof h === 'number' && h > 0) {
+              setBottomNavHeight(prev => (prev === h ? prev : h));
+            }
+          }}
+        >
             {/* Chat (Left) */}
             <TouchableOpacity
               style={styles.bottomNavItem}
@@ -13675,7 +13774,7 @@ const styles = StyleSheet.create({
   },
   topLeftContainer: {
     position: 'absolute',
-    top: 20,
+    top: ANDROID_STATUS_BAR_HEIGHT + 20,
     left: 20,
     zIndex: 10,
     flexDirection: 'row',
@@ -13683,7 +13782,7 @@ const styles = StyleSheet.create({
   },
   topCenterContainer: {
     position: 'absolute',
-    top: 10,
+    top: ANDROID_STATUS_BAR_HEIGHT + 10,
     left: 0,
     right: 0,
     zIndex: 1000,
@@ -13694,7 +13793,7 @@ const styles = StyleSheet.create({
   },
   topRightContainer: {
     position: 'absolute',
-    top: 20,
+    top: ANDROID_STATUS_BAR_HEIGHT + 20,
     right: 20,
     zIndex: 10,
     alignItems: 'center',
@@ -14159,7 +14258,7 @@ const styles = StyleSheet.create({
   // Estilos para pantalla Profile
   profileScreenContainer: {
     flex: 1,
-    paddingTop: 68,
+    paddingTop: Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT + 68 : 68,
     paddingBottom: 68,
     paddingHorizontal: 2,
   },
@@ -14811,13 +14910,13 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: 280,
+    height: SOCIAL_PANEL_HEIGHT,
     backgroundColor: '#000000',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'flex-start',
     zIndex: 999,
-    paddingTop: Platform.OS === 'ios' ? 40 : 10,
+    paddingTop: Platform.OS === 'ios' ? 40 : ANDROID_STATUS_BAR_HEIGHT + 10,
     borderBottomWidth: 0,
   },
   socialIconsRow: {

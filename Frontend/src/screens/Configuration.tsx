@@ -12,6 +12,8 @@ import PasswordResetModal from '../components/PasswordResetModal';
 import HighlightedI18nText from '../components/HighlightedI18nText';
 import { COUNTRIES } from '../constants/countries';
 
+const ANDROID_TOP_INSET = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
+
 interface ConfigurationProps {
   onBack: () => void;
   authToken: string;
@@ -3316,10 +3318,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#000000',
   },
   header: {
-    height: 56,
+    height: 56 + ANDROID_TOP_INSET,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
+    paddingTop: ANDROID_TOP_INSET,
     borderBottomWidth: 1,
     borderBottomColor: '#1E1E1E',
   },
