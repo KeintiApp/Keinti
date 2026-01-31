@@ -57,7 +57,16 @@ router.get('/', async (req, res) => {
   try {
     // Obtener posts
     const result = await pool.query(
-      `SELECT p.*, u.username, u.profile_photo_uri, u.nationality, u.social_networks,
+          `SELECT
+            p.id,
+            p.user_email,
+            p.presentation,
+            p.intimidades,
+            p.reactions,
+            (p.created_at AT TIME ZONE 'UTC') AS created_at,
+            (p.updated_at AT TIME ZONE 'UTC') AS updated_at,
+            (p.deleted_at AT TIME ZONE 'UTC') AS deleted_at,
+            u.username, u.profile_photo_uri, u.nationality, u.social_networks,
               aa.verified AS account_verified,
               aa.keinti_verified AS keinti_verified
        FROM Post_users p
@@ -246,7 +255,15 @@ router.post('/', authenticateToken, async (req, res) => {
     const result = await pool.query(
       `INSERT INTO Post_users (user_email, presentation, intimidades, reactions)
        VALUES ($1, $2, $3, $4)
-       RETURNING *`,
+       RETURNING
+         id,
+         user_email,
+         presentation,
+         intimidades,
+         reactions,
+         (created_at AT TIME ZONE 'UTC') AS created_at,
+         (updated_at AT TIME ZONE 'UTC') AS updated_at,
+         (deleted_at AT TIME ZONE 'UTC') AS deleted_at`,
       [userEmail, JSON.stringify(presentation), JSON.stringify(intimidades), JSON.stringify(reactions)]
     );
 

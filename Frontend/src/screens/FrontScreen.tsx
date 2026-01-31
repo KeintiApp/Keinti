@@ -454,6 +454,10 @@ const SOCIAL_PANEL_HEIGHT = SOCIAL_PANEL_BASE_HEIGHT + ANDROID_STATUS_BAR_HEIGHT
 // Extra spacing above the keyboard so the chat input doesn't feel glued/clipped to it.
 const CHAT_INPUT_KEYBOARD_GAP = Platform.OS === 'ios' ? 18 : 10;
 
+// Cap the multiline chat input so it doesn't grow indefinitely.
+// After reaching this height, the TextInput becomes internally scrollable.
+const CHAT_INPUT_MAX_HEIGHT = 140;
+
 const GROUP_MEMBERS_PANEL_HEIGHT = Math.round(SCREEN_HEIGHT * 0.6);
 
 function shuffleArray<T>(array: T[]): T[] {
@@ -728,8 +732,25 @@ interface FrontScreenProps {
   authToken?: string;
 }
 
+const parseServerDate = (value: Date | string) => {
+  if (value instanceof Date) return value;
+
+  const raw = String(value);
+  // If the string already includes a timezone (Z or ±hh:mm), native parsing is safe.
+  const hasTimezone = /([zZ]|[+-]\d{2}:\d{2})$/.test(raw);
+  if (hasTimezone) return new Date(raw);
+
+  // Normalize common DB formats (timestamp without timezone) and treat them as UTC.
+  const normalized = raw.includes(' ') ? raw.replace(' ', 'T') : raw;
+  const looksLikeIsoNoTz = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?$/.test(normalized);
+  if (looksLikeIsoNoTz) return new Date(`${normalized}Z`);
+
+  return new Date(raw);
+};
+
 const getRemainingTime = (createdAt: Date | string) => {
-  const created = new Date(createdAt);
+  const created = parseServerDate(createdAt);
+  if (!Number.isFinite(created.getTime())) return 'Tiempo agotado';
   const now = new Date();
   const expiration = new Date(created.getTime() + POST_TTL_MS);
   const diff = expiration.getTime() - now.getTime();
@@ -8061,7 +8082,7 @@ const FrontScreen = ({
                                             // Mostrar stats SOLO cuando la publicación esté activa en Home (24h)
                                             if (!isPublished || !myPublication) return null;
 
-                                            const created = new Date(myPublication.createdAt as any);
+                                            const created = parseServerDate(myPublication.createdAt as any);
                                             if (!Number.isFinite(created.getTime())) return null;
                                             const expiresAt = created.getTime() + POST_TTL_MS;
                                             if (Date.now() >= expiresAt) return null;
@@ -8087,7 +8108,7 @@ const FrontScreen = ({
                                               const stats = quizData?.stats;
                                               const correctOption = quizData?.correctOption as ('a' | 'b' | 'c' | 'd' | undefined);
 
-                                              const created = myPublication ? new Date(myPublication.createdAt as any) : null;
+                                              const created = myPublication ? parseServerDate(myPublication.createdAt as any) : null;
                                               const isActive = !!(isPublished && myPublication && created && Number.isFinite(created.getTime()) && (Date.now() < (created.getTime() + POST_TTL_MS)));
                                               const canShowStats = isActive && !!stats && !!correctOption;
 
@@ -9362,7 +9383,7 @@ const FrontScreen = ({
                 <View style={{ flex: 1, backgroundColor: '#000000' }}>
                   <View style={{
                     position: 'absolute',
-                    top: 10,
+                    top: ANDROID_STATUS_BAR_HEIGHT + 10,
                     left: 10,
                     zIndex: 10,
                     flexDirection: 'row',
@@ -9951,6 +9972,7 @@ const FrontScreen = ({
                           paddingHorizontal: 15,
                           paddingLeft: groupReplyingToUsername ? 5 : 15,
                           paddingVertical: 10,
+                          maxHeight: CHAT_INPUT_MAX_HEIGHT,
                           color: '#FFFFFF',
                         }}
                         placeholder={t('chat.interactPlaceholder' as TranslationKey)}
@@ -9958,6 +9980,7 @@ const FrontScreen = ({
                         value={groupChatInputValue}
                         onChangeText={setGroupChatInputValue}
                         multiline
+                        scrollEnabled
                         textAlignVertical="top"
                       />
                       <TouchableOpacity
@@ -10041,7 +10064,7 @@ const FrontScreen = ({
                           alignItems: 'center',
                           justifyContent: 'space-between',
                           paddingHorizontal: 12,
-                          paddingTop: 14,
+                          paddingTop: ANDROID_STATUS_BAR_HEIGHT + 14,
                           paddingBottom: 10,
                           backgroundColor: 'rgba(0,0,0,0.6)',
                         }}
@@ -10121,7 +10144,7 @@ const FrontScreen = ({
                     onRequestClose={closeGroupImageViewer}
                   >
                     <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.98)' }}>
-                      <View style={{ position: 'absolute', top: 12, left: 12, zIndex: 10 }}>
+                      <View style={{ position: 'absolute', top: ANDROID_STATUS_BAR_HEIGHT + 12, left: 12, zIndex: 10 }}>
                         <TouchableOpacity
                           activeOpacity={0.85}
                           onPress={closeGroupImageViewer}
@@ -10155,7 +10178,7 @@ const FrontScreen = ({
                   {selectedChannel && (
                     <View style={{
                       position: 'absolute',
-                      top: 10,
+                      top: ANDROID_STATUS_BAR_HEIGHT + 10,
                       left: 10,
                       zIndex: 10,
                       flexDirection: 'row',
@@ -11153,7 +11176,7 @@ const FrontScreen = ({
                                     paddingHorizontal: 15,
                                     paddingLeft: replyingToUsername ? 5 : 15,
                                     paddingVertical: 10,
-                                    maxHeight: 110,
+                                    maxHeight: CHAT_INPUT_MAX_HEIGHT,
                                     color: '#FFFFFF',
                                   }}
                                   placeholder={t('chat.interactPlaceholder' as TranslationKey)}
@@ -11161,6 +11184,7 @@ const FrontScreen = ({
                                   value={chatInputValue}
                                   onChangeText={setChatInputValue}
                                   multiline
+                                  scrollEnabled
                                   textAlignVertical="top"
                                   maxLength={isViewer ? 280 : undefined}
                                   editable={!expired}
@@ -11805,7 +11829,16 @@ const FrontScreen = ({
         {/* Pantalla Notificaciones */}
         {activeBottomTab === 'notifications' && (
           <View style={{ flex: 1, backgroundColor: '#000000' }}>
-            <View style={styles.header}>
+            <View
+              style={[
+                styles.header,
+                {
+                  paddingTop: ANDROID_STATUS_BAR_HEIGHT,
+                  height: 56 + ANDROID_STATUS_BAR_HEIGHT,
+                  alignItems: 'flex-end',
+                },
+              ]}
+            >
               <TouchableOpacity
                 style={styles.backButton}
                 onPress={() => setActiveBottomTab('profile')}
@@ -13750,8 +13783,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1E1E1E',
   },
   backButton: {
     width: 44,
