@@ -13,8 +13,6 @@ Estos estándares describen:
 - Qué medidas toma Keinti.
 - Cómo contactar con Keinti para asuntos de seguridad infantil (a través de keintisoporte@gmail.com)
 
-Nota: para requisitos de cumplimiento en Google Play Console, Keinti puede usar como contacto oficial el correo de la cuenta de desarrollador.
-
 ## 2. Alcance y edad
 
 - Keinti está destinada a mayores de 18 años.
@@ -81,10 +79,6 @@ Cuando sea legalmente requerido o apropiado, Keinti podrá cooperar con autorida
 Contacto para asuntos de seguridad infantil y cumplimiento:
 
 - Email: keintisoporte@gmail.com
-
-Contacto oficial de cumplimiento (Google Play Console / cuenta de desarrollador):
-
-- Email: antoniodavid01gm@gmail.com
 
 ---
 
@@ -162,7 +156,3 @@ Where legally required or appropriate, Keinti may cooperate with authorities and
 Child safety contact:
 
 - Email: keintisoporte@gmail.com
-
-Official compliance contact (Google Play Console / developer account):
-
-- Email: antoniodavid01gm@gmail.com
