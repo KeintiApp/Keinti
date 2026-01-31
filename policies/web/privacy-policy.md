@@ -149,6 +149,10 @@ Podemos actualizar esta Política de Privacidad para reflejar cambios legales, t
 
 Esta política se rige por el RGPD cuando aplique y por la normativa de privacidad aplicable en la jurisdicción del usuario (incluida normativa estatal de EE. UU. cuando corresponda).
 
+## 15. Seguridad infantil y denuncias
+
+Keinti mantiene una política de tolerancia cero frente a cualquier contenido relacionado con explotación o abuso sexual infantil (EASI/CSAE). Los usuarios pueden denunciar contenido o cuentas desde la app y/o contactar con soporte en keintisoporte@gmail.com.
+
 ---
 
 # PRIVACY POLICY – KEINTI
