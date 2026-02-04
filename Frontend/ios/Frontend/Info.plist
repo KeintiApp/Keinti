@@ -34,7 +34,7 @@
 		<true/>
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string/>
+	<string>Keinti necesita acceso a tu ubicación para que puedas seleccionar una ubicación en el mapa y añadirla a tu aro.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>$(PRODUCT_NAME) necesita acceso a tu galería de fotos para que puedas seleccionar imágenes.</string>
 	<key>NSCameraUsageDescription</key>

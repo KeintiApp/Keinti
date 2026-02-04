@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     
     <!-- Permisos de almacenamiento para Android 12 y anteriores -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" 
@@ -37,6 +39,11 @@
       android:theme="@style/AppTheme"
       android:supportsRtl="true"
             android:usesCleartextTraffic="false">
+
+                        <!-- Google Maps API Key (required for react-native-maps on Android) -->
+                        <meta-data
+                                android:name="com.google.android.geo.API_KEY"
+                                android:value="@string/google_maps_api_key" />
 
             <!-- AdMob App ID -->
             <meta-data

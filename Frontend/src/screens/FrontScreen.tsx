@@ -27,8 +27,12 @@ import {
 } from 'react-native';
 import type { ImageSourcePropType, ViewToken } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
+import Geolocation from '@react-native-community/geolocation';
 import {
   AdEventType,
+  BannerAd,
+  BannerAdSize,
   InterstitialAd,
   RewardedAd,
   RewardedAdEventType,
@@ -39,8 +43,9 @@ import ProfilePhotoEdit from './ProfilePhotoEdit';
 import CarouselImageEditor from './CarouselImageEditor';
 import { deleteDraftUploadedImageByUrl, getAccountAuthStatus, getMyDevicePermissions, getMyUiHints, setMyDevicePermissions, setMyUiHints, updateProfilePhoto, updateSocialNetworks, uploadImage } from '../services/userService';
 import { API_URL, getServerResourceUrl } from '../config/api';
-import { INTERSTITIAL_AD_UNIT_ID, REWARDED_AD_UNIT_ID } from '../config/admob';
+import { BANNER_AD_UNIT_ID, INTERSTITIAL_AD_UNIT_ID, REWARDED_AD_UNIT_ID } from '../config/admob';
 import { POST_TTL_MS } from '../config/postTtl';
+import { GOOGLE_MAPS_API_KEY } from '../config/googleMaps';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Language, TranslationKey } from '../i18n/translations';
 
@@ -107,6 +112,30 @@ const parseChannelImageMessage = (raw: string): { url: string; caption: string }
   } catch {
     return null;
   }
+};
+
+const withHexAlpha = (color: string, alpha: number) => {
+  const a = Number.isFinite(alpha) ? Math.max(0, Math.min(1, alpha)) : 1;
+  const raw = String(color || '').trim();
+  if (!raw) return `rgba(255,255,255,${a})`;
+
+  if (raw.startsWith('#')) {
+    let hex = raw.slice(1);
+    if (hex.length === 3) {
+      hex = `${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`;
+    }
+    if (hex.length >= 6) {
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      if ([r, g, b].every(n => Number.isFinite(n))) {
+        return `rgba(${r},${g},${b},${a})`;
+      }
+    }
+  }
+
+  // Fallback (named colors / existing rgba): keep as-is.
+  return raw;
 };
 
 const GROUP_MEMBERS_VISIBLE_CARDS = 5;
@@ -447,9 +476,13 @@ const CHAT_TABS_TOP = 20;
 const CHAT_TABS_GAP = 10;
 
 const ANDROID_STATUS_BAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
+// Some Android devices/ROMs can report StatusBar.currentHeight as 0 even when
+// the status bar is visible. Use a small fallback so top headers don't render
+// behind the system status bar.
+const ANDROID_SAFE_TOP = Platform.OS === 'android' ? (ANDROID_STATUS_BAR_HEIGHT || 24) : 0;
 
 const SOCIAL_PANEL_BASE_HEIGHT = 280;
-const SOCIAL_PANEL_HEIGHT = SOCIAL_PANEL_BASE_HEIGHT + ANDROID_STATUS_BAR_HEIGHT;
+const SOCIAL_PANEL_HEIGHT = SOCIAL_PANEL_BASE_HEIGHT + ANDROID_SAFE_TOP;
 
 // Extra spacing above the keyboard so the chat input doesn't feel glued/clipped to it.
 const CHAT_INPUT_KEYBOARD_GAP = Platform.OS === 'ios' ? 18 : 10;
@@ -661,11 +694,31 @@ const REACTION_EMOJIS = [
   '🚀', '🌈', '🍕', '🍺', '⚽'
 ];
 
+type ProfileRingPoint = {
+  id: string;
+  imageIndex: number;
+  x: number; // 0..1 relative
+  y: number; // 0..1 relative
+  color: string;
+  colorSelected: boolean;
+  name: string;
+  description: string;
+  linkNetwork: string | null;
+  linkUrl: string;
+  locationLabel: string;
+  locationUrl: string;
+  locationPlaceId: string | null;
+  locationLat: number | null;
+  locationLng: number | null;
+  isCreated: boolean;
+};
+
 interface PresentationContent {
   images: CarouselImageData[];
   title: string;
   text: string;
   category?: string;
+  profileRings?: ProfileRingPoint[];
 }
 
 interface SocialNetwork {
@@ -1738,6 +1791,7 @@ const FrontScreen = ({
   const [myChannels, setMyChannels] = useState<any[]>([]);
   const [channelInteractions, setChannelInteractions] = useState<any[]>([]);
   const [channelTab, setChannelTab] = useState<'Tu canal' | 'tusCanales'>('Tu canal');
+  const [activeJoinedChannelOptionsKey, setActiveJoinedChannelOptionsKey] = useState<string | null>(null);
   // Used to place chat panels exactly below the top tabs (Groups/Channel).
   const [chatTopTabsHeight, setChatTopTabsHeight] = useState<number>(0);
   const chatPanelsTopOffset = useMemo(() => {
@@ -2577,9 +2631,33 @@ const FrontScreen = ({
     return `https://${trimmed}`;
   };
 
+  const resolveGoogleMapsShortUrlIfNeeded = async (url: string): Promise<string> => {
+    const candidate = String(url || '').trim();
+    if (!/^https?:/i.test(candidate)) return candidate;
+
+    try {
+      const hostMatch = candidate.match(/^https?:\/\/([^\/?#]+)/i);
+      const host = String(hostMatch?.[1] || '').toLowerCase();
+      if (!host) return candidate;
+
+      // Common Google Maps share shorteners.
+      const isShortHost = host === 'maps.app.goo.gl' || host === 'goo.gl' || host.endsWith('.goo.gl');
+      if (!isShortHost) return candidate;
+
+      // Follow redirects to get a stable https://www.google.com/maps/... URL.
+      const resp = await fetch(candidate, { method: 'GET', redirect: 'follow' as any });
+      const finalUrl = String((resp as any)?.url || '').trim();
+      return finalUrl || candidate;
+    } catch {
+      return candidate;
+    }
+  };
+
   const openExternalLink = async (rawUrl: string) => {
-    const url = normalizeExternalUrl(rawUrl);
+    let url = normalizeExternalUrl(rawUrl);
     if (!url) return;
+
+    url = await resolveGoogleMapsShortUrlIfNeeded(url);
 
     // Avoid invalid characters breaking Android intents.
     const safeUrl = encodeURI(url);
@@ -2903,6 +2981,561 @@ const FrontScreen = ({
   const [profilePresentationImagesLoaded, setProfilePresentationImagesLoaded] = useState<Record<number, boolean>>({});
   const profilePresentationPrefetchSigRef = useRef<string>('');
 
+  const [profileRingHintMessage, setProfileRingHintMessage] = useState<string | null>(null);
+  const showProfileRingHint = profileRingHintMessage != null;
+  const [profileRingPlacementEnabled, setProfileRingPlacementEnabled] = useState(false);
+  const profileRingPlacementEnabledRef = useRef(false);
+  const profileRingHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [profileRingPoints, setProfileRingPoints] = useState<ProfileRingPoint[]>([]);
+  const [profileCarouselImageLayouts, setProfileCarouselImageLayouts] = useState<Record<number, { width: number; height: number }>>({});
+
+  const [isProfileRingsHydrating, setIsProfileRingsHydrating] = useState(false);
+  const isProfileRingsHydratingRef = useRef(false);
+  const profileRingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const profileRingsLastSavedSigRef = useRef<string>('');
+
+  useEffect(() => {
+    isProfileRingsHydratingRef.current = isProfileRingsHydrating;
+  }, [isProfileRingsHydrating]);
+
+  const makeProfileRingsSig = useCallback((rings: ProfileRingPoint[]) => {
+    const created = (rings || []).filter(r => r?.isCreated).slice(0, 5);
+    const stable = created
+      .map(r => ({
+        id: String(r.id),
+        imageIndex: Number(r.imageIndex),
+        x: Number(r.x),
+        y: Number(r.y),
+        color: String(r.color),
+        colorSelected: Boolean(r.colorSelected),
+        name: String(r.name || ''),
+        description: String(r.description || ''),
+        linkNetwork: r.linkNetwork ? String(r.linkNetwork) : null,
+        linkUrl: String(r.linkUrl || ''),
+        locationLabel: String(r.locationLabel || ''),
+        locationUrl: String(r.locationUrl || ''),
+        locationPlaceId: r.locationPlaceId ? String(r.locationPlaceId) : null,
+        locationLat: r.locationLat == null ? null : Number(r.locationLat),
+        locationLng: r.locationLng == null ? null : Number(r.locationLng),
+        isCreated: true,
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    return JSON.stringify(stable);
+  }, []);
+
+  const normalizeProfileRingsFromApi = useCallback((raw: any): ProfileRingPoint[] => {
+    const arr = Array.isArray(raw) ? raw : [];
+    const normalized = arr
+      .filter(Boolean)
+      .slice(0, 5)
+      .map((r: any) => {
+        const id = String(r?.id || '').trim();
+        const imageIndex = Number(r?.imageIndex);
+        const x = Number(r?.x);
+        const y = Number(r?.y);
+        const color = String(r?.color || '#FFFFFF');
+        const colorSelected = r?.colorSelected === true || (color && color.toUpperCase() !== '#FFFFFF');
+
+        const safeX = Number.isFinite(x) ? Math.max(0, Math.min(1, x)) : 0.5;
+        const safeY = Number.isFinite(y) ? Math.max(0, Math.min(1, y)) : 0.5;
+
+        const locationLat = r?.locationLat == null ? null : Number(r.locationLat);
+        const locationLng = r?.locationLng == null ? null : Number(r.locationLng);
+        const locationLabel = String(r?.locationLabel || '');
+        const rawLocationUrl = String(r?.locationUrl || '');
+        const locationPlaceId = r?.locationPlaceId ? String(r.locationPlaceId) : null;
+
+        // Backfill URL when older data stored an empty URL.
+        const trimmedUrl = rawLocationUrl.trim();
+        const trimmedLabel = String(locationLabel || '').trim();
+        const trimmedPlaceId = String(locationPlaceId || '').trim();
+
+        const locationUrl = trimmedUrl
+          ? trimmedUrl
+          : trimmedPlaceId
+            ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(trimmedLabel || `${locationLat},${locationLng}`)}&query_place_id=${encodeURIComponent(trimmedPlaceId)}`
+            : trimmedLabel
+              ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(trimmedLabel)}`
+              : (Number.isFinite(locationLat) && Number.isFinite(locationLng)
+                  ? `https://www.google.com/maps?q=${locationLat},${locationLng}`
+                  : rawLocationUrl);
+
+        return {
+          id,
+          imageIndex: Number.isFinite(imageIndex) ? Math.max(0, Math.floor(imageIndex)) : 0,
+          x: safeX,
+          y: safeY,
+          color,
+          colorSelected,
+          name: String(r?.name || ''),
+          description: String(r?.description || ''),
+          linkNetwork: r?.linkNetwork ? String(r.linkNetwork) : null,
+          linkUrl: String(r?.linkUrl || ''),
+          locationLabel,
+          locationUrl,
+          locationPlaceId,
+          locationLat: Number.isFinite(locationLat) ? locationLat : null,
+          locationLng: Number.isFinite(locationLng) ? locationLng : null,
+          isCreated: true,
+        } as ProfileRingPoint;
+      })
+      .filter(r => r.id);
+
+    return normalized;
+  }, []);
+
+  // Hydrate created rings from Supabase (via backend) when session starts.
+  useEffect(() => {
+    if (!authToken) {
+      setProfileRingPoints([]);
+      profileRingsLastSavedSigRef.current = '';
+      return;
+    }
+
+    let didCancel = false;
+    (async () => {
+      setIsProfileRingsHydrating(true);
+      isProfileRingsHydratingRef.current = true;
+
+      try {
+        const resp = await fetch(`${API_URL}/api/edit-profile/profile-rings`, {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            Accept: 'application/json',
+          },
+        });
+
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) return;
+
+        const rings = normalizeProfileRingsFromApi((data as any)?.rings);
+        const sig = makeProfileRingsSig(rings);
+        profileRingsLastSavedSigRef.current = sig;
+
+        if (!didCancel) {
+          setProfileRingPoints(rings);
+        }
+      } catch (e) {
+        console.error('Error hydrating profile rings:', e);
+      } finally {
+        isProfileRingsHydratingRef.current = false;
+        if (!didCancel) setIsProfileRingsHydrating(false);
+      }
+    })();
+
+    return () => {
+      didCancel = true;
+    };
+  }, [API_URL, authToken, makeProfileRingsSig, normalizeProfileRingsFromApi]);
+
+  const createdProfileRings = useMemo(() => (
+    profileRingPoints.filter(r => r.isCreated).slice(0, 5)
+  ), [profileRingPoints]);
+
+  const createdProfileRingsSig = useMemo(() => (
+    makeProfileRingsSig(profileRingPoints)
+  ), [makeProfileRingsSig, profileRingPoints]);
+
+  const persistProfileRingsImmediately = useCallback(async (rings: ProfileRingPoint[]) => {
+    if (!authToken) return;
+    if (isProfileRingsHydratingRef.current) return;
+
+    if (profileRingsSaveTimerRef.current) {
+      clearTimeout(profileRingsSaveTimerRef.current);
+      profileRingsSaveTimerRef.current = null;
+    }
+
+    const created = (rings || []).filter(r => r?.isCreated).slice(0, 5);
+    const sig = makeProfileRingsSig(rings);
+
+    try {
+      const resp = await fetch(`${API_URL}/api/edit-profile/profile-rings`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ rings: created }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        console.error('Failed to persist profile rings (immediate):', resp.status, err);
+        return;
+      }
+
+      profileRingsLastSavedSigRef.current = sig;
+    } catch (e) {
+      console.error('Error persisting profile rings (immediate):', e);
+    }
+  }, [API_URL, authToken, makeProfileRingsSig]);
+
+  // Persist created rings (debounced) to Supabase via backend.
+  useEffect(() => {
+    if (!authToken) return;
+    if (isProfileRingsHydratingRef.current) return;
+    if (createdProfileRingsSig === profileRingsLastSavedSigRef.current) return;
+
+    if (profileRingsSaveTimerRef.current) {
+      clearTimeout(profileRingsSaveTimerRef.current);
+      profileRingsSaveTimerRef.current = null;
+    }
+
+    const sigAtSchedule = createdProfileRingsSig;
+    profileRingsSaveTimerRef.current = setTimeout(async () => {
+      profileRingsSaveTimerRef.current = null;
+
+      try {
+        const resp = await fetch(`${API_URL}/api/edit-profile/profile-rings`, {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ rings: createdProfileRings }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          console.error('Failed to persist profile rings:', resp.status, err);
+          return;
+        }
+
+        profileRingsLastSavedSigRef.current = sigAtSchedule;
+      } catch (e) {
+        console.error('Error persisting profile rings:', e);
+      }
+    }, 900);
+  }, [API_URL, authToken, createdProfileRings, createdProfileRingsSig]);
+
+  useEffect(() => {
+    return () => {
+      if (profileRingsSaveTimerRef.current) {
+        clearTimeout(profileRingsSaveTimerRef.current);
+        profileRingsSaveTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    profileRingPlacementEnabledRef.current = profileRingPlacementEnabled;
+  }, [profileRingPlacementEnabled]);
+
+  const PROFILE_RING_COLOR_OPTIONS = useMemo(() => ([
+    { key: 'pink', color: '#FF4FD8' },
+    { key: 'yellow', color: '#ffe45c' },
+    { key: 'green', color: '#4DFF88' },
+    { key: 'purple', color: '#A855F7' },
+    { key: 'orange', color: '#FF9800' },
+  ]), []);
+
+  const [showProfileRingColorPanel, setShowProfileRingColorPanel] = useState(false);
+  const PROFILE_RING_PANEL_HIDDEN_Y = SCREEN_HEIGHT + 320;
+  const [profileRingColorPanelAnimation] = useState(new Animated.Value(PROFILE_RING_PANEL_HIDDEN_Y));
+  const [selectedProfileRingId, setSelectedProfileRingId] = useState<string | null>(null);
+
+  const [showProfileRingViewerPanel, setShowProfileRingViewerPanel] = useState(false);
+  const [profileRingViewerPanelAnimation] = useState(new Animated.Value(PROFILE_RING_PANEL_HIDDEN_Y));
+  const [viewingProfileRingId, setViewingProfileRingId] = useState<string | null>(null);
+  const [viewingProfileRingSource, setViewingProfileRingSource] = useState<'profile' | 'home'>('profile');
+  const [viewingProfileRingHomePostId, setViewingProfileRingHomePostId] = useState<string | null>(null);
+  const [viewingProfileRingOverride, setViewingProfileRingOverride] = useState<ProfileRingPoint | null>(null);
+
+  const [showDeleteProfileRingModal, setShowDeleteProfileRingModal] = useState(false);
+  const [pendingDeleteProfileRingId, setPendingDeleteProfileRingId] = useState<string | null>(null);
+
+  const [isProfileRingLinkExpanded, setIsProfileRingLinkExpanded] = useState(false);
+  const [profileRingLinkNetworkDraft, setProfileRingLinkNetworkDraft] = useState<string | null>(null);
+  const [profileRingLinkUrlDraft, setProfileRingLinkUrlDraft] = useState('');
+  const [profileRingLinkErrorDraft, setProfileRingLinkErrorDraft] = useState('');
+
+  const [profileRingColorDraft, setProfileRingColorDraft] = useState('#FFFFFF');
+  const [profileRingColorSelectedDraft, setProfileRingColorSelectedDraft] = useState(false);
+  const [profileRingNameDraft, setProfileRingNameDraft] = useState('');
+  const [profileRingDescriptionDraft, setProfileRingDescriptionDraft] = useState('');
+
+  const [profileRingLocationLabelDraft, setProfileRingLocationLabelDraft] = useState('');
+  const [profileRingLocationUrlDraft, setProfileRingLocationUrlDraft] = useState('');
+  const [profileRingLocationPlaceIdDraft, setProfileRingLocationPlaceIdDraft] = useState<string | null>(null);
+  const [profileRingLocationLatDraft, setProfileRingLocationLatDraft] = useState<number | null>(null);
+  const [profileRingLocationLngDraft, setProfileRingLocationLngDraft] = useState<number | null>(null);
+
+  const makeGoogleMapsLatLngUrl = useCallback((lat: number, lng: number, label?: string | null, placeId?: string | null) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return 'https://www.google.com/maps';
+
+    const coords = `${lat},${lng}`;
+    const safeLabel = String(label || '').trim();
+    const safePlaceId = String(placeId || '').trim();
+
+    // If we have a placeId, open the exact place and keep a friendly label.
+    if (safePlaceId) {
+      const q = safeLabel || coords;
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}&query_place_id=${encodeURIComponent(safePlaceId)}`;
+    }
+
+    // Otherwise, prefer showing the label in Maps rather than raw coordinates.
+    if (safeLabel) {
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(safeLabel)}`;
+    }
+
+    // Coordinates fallback (keeps commas unescaped).
+    return `https://www.google.com/maps?q=${coords}`;
+  }, []);
+
+  const [showProfileRingLocationPicker, setShowProfileRingLocationPicker] = useState(false);
+  const [profileRingPickedLatLng, setProfileRingPickedLatLng] = useState<{ lat: number; lng: number } | null>(null);
+  const [isProfileRingLocating, setIsProfileRingLocating] = useState(false);
+  const profileRingLocationMapRef = useRef<MapView | null>(null);
+  const profileRingLocationAutoMoveRef = useRef(false);
+
+  const [profileRingPickedLocationLabel, setProfileRingPickedLocationLabel] = useState<string | null>(null);
+  const [profileRingPickedLocationPlaceId, setProfileRingPickedLocationPlaceId] = useState<string | null>(null);
+  const [profileRingLocationSearchQuery, setProfileRingLocationSearchQuery] = useState('');
+  const [profileRingLocationPredictions, setProfileRingLocationPredictions] = useState<Array<{ placeId: string; description: string }>>([]);
+  const [isProfileRingLocationSearching, setIsProfileRingLocationSearching] = useState(false);
+  const [profileRingLocationSearchError, setProfileRingLocationSearchError] = useState('');
+
+  const selectedProfileRing = useMemo(() => {
+    if (!selectedProfileRingId) return null;
+    return profileRingPoints.find(p => p.id === selectedProfileRingId) ?? null;
+  }, [profileRingPoints, selectedProfileRingId]);
+
+  const viewingProfileRing = useMemo(() => {
+    if (!viewingProfileRingId) return null;
+    if (viewingProfileRingSource === 'profile') {
+      return profileRingPoints.find(p => p.id === viewingProfileRingId) ?? null;
+    }
+
+    if (!viewingProfileRingOverride) return null;
+    if (String(viewingProfileRingOverride?.id) !== String(viewingProfileRingId)) return null;
+    return viewingProfileRingOverride;
+  }, [profileRingPoints, viewingProfileRingId, viewingProfileRingOverride, viewingProfileRingSource]);
+
+  const requestLocationPermissionIfNeeded = useCallback(async () => {
+    if (Platform.OS !== 'android') return true;
+
+    try {
+      const fine = PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION;
+      const granted = await PermissionsAndroid.request(fine, {
+        title: 'Permiso de ubicación',
+        message: 'Keinti necesita acceso a tu ubicación para que puedas seleccionar una ubicación en el mapa.',
+        buttonPositive: 'Permitir',
+        buttonNegative: 'Cancelar',
+      });
+
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const openProfileRingLocationPicker = useCallback(async () => {
+    const ok = await requestLocationPermissionIfNeeded();
+    if (!ok) {
+      Alert.alert('Permiso requerido', 'Activa el permiso de ubicación para seleccionar una ubicación.');
+      return;
+    }
+
+    // Pre-fill search with current draft (or saved) label.
+    const savedLabel = String(profileRingLocationLabelDraft || '').trim();
+    setProfileRingPickedLocationLabel(savedLabel || null);
+    setProfileRingPickedLocationPlaceId(profileRingLocationPlaceIdDraft ? String(profileRingLocationPlaceIdDraft) : null);
+    setProfileRingLocationSearchQuery(savedLabel);
+    setProfileRingLocationPredictions([]);
+    setProfileRingLocationSearchError('');
+
+    // Center the map immediately so the modal doesn't render empty.
+    if (!profileRingPickedLatLng) {
+      const savedLat = Number(profileRingLocationLatDraft ?? NaN);
+      const savedLng = Number(profileRingLocationLngDraft ?? NaN);
+      if (Number.isFinite(savedLat) && Number.isFinite(savedLng)) {
+        setProfileRingPickedLatLng({ lat: savedLat, lng: savedLng });
+      } else {
+        setProfileRingPickedLatLng({ lat: 40.4168, lng: -3.7038 }); // Madrid fallback
+      }
+    }
+
+    setIsProfileRingLocating(true);
+    setShowProfileRingLocationPicker(true);
+
+    Geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = Number(pos?.coords?.latitude);
+        const lng = Number(pos?.coords?.longitude);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          profileRingLocationAutoMoveRef.current = true;
+          setProfileRingPickedLatLng({ lat, lng });
+          setProfileRingPickedLocationLabel(null);
+          setProfileRingPickedLocationPlaceId(null);
+        }
+        setIsProfileRingLocating(false);
+      },
+      () => {
+        // If we can't get current location, still show map; user can move.
+        setIsProfileRingLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 15000 }
+    );
+  }, [profileRingLocationLabelDraft, profileRingLocationLatDraft, profileRingLocationLngDraft, profileRingLocationPlaceIdDraft, profileRingPickedLatLng, requestLocationPermissionIfNeeded]);
+
+  const isGooglePlacesSearchConfigured = useMemo(() => {
+    const key = String(GOOGLE_MAPS_API_KEY || '').trim();
+    if (!key) return false;
+    if (key.toUpperCase().includes('REPLACE_WITH')) return false;
+    if (key.toUpperCase().includes('YOUR_GOOGLE_MAPS_API_KEY')) return false;
+    return key.length >= 20;
+  }, []);
+
+  useEffect(() => {
+    if (!showProfileRingLocationPicker) return;
+    if (!isGooglePlacesSearchConfigured) return;
+    const q = String(profileRingLocationSearchQuery || '').trim();
+    if (q.length < 3) {
+      setProfileRingLocationPredictions([]);
+      setProfileRingLocationSearchError('');
+      return;
+    }
+
+    let isActive = true;
+    const timeout = setTimeout(async () => {
+      setIsProfileRingLocationSearching(true);
+      setProfileRingLocationSearchError('');
+      try {
+        const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(q)}&key=${encodeURIComponent(
+          GOOGLE_MAPS_API_KEY
+        )}&language=es`;
+        const resp = await fetch(url);
+        const data = await resp.json();
+
+        const status = String(data?.status || '');
+        if (status === 'OK') {
+          const preds = Array.isArray(data?.predictions) ? data.predictions : [];
+          const items = preds
+            .map((p: any) => ({
+              placeId: String(p?.place_id || ''),
+              description: String(p?.description || ''),
+            }))
+            .filter((p: any) => p.placeId && p.description)
+            .slice(0, 8);
+
+          if (isActive) setProfileRingLocationPredictions(items);
+        } else if (status === 'ZERO_RESULTS') {
+          if (isActive) setProfileRingLocationPredictions([]);
+        } else {
+          if (isActive) {
+            setProfileRingLocationPredictions([]);
+            setProfileRingLocationSearchError('No se pudo buscar la ubicación. Revisa tu API key de Google Places.');
+          }
+        }
+      } catch {
+        if (isActive) {
+          setProfileRingLocationPredictions([]);
+          setProfileRingLocationSearchError('No se pudo buscar la ubicación.');
+        }
+      } finally {
+        if (isActive) setIsProfileRingLocationSearching(false);
+      }
+    }, 350);
+
+    return () => {
+      isActive = false;
+      clearTimeout(timeout);
+    };
+  }, [profileRingLocationSearchQuery, showProfileRingLocationPicker, isGooglePlacesSearchConfigured]);
+
+  const moveProfileRingLocationMapTo = useCallback((lat: number, lng: number) => {
+    const region = {
+      latitude: lat,
+      longitude: lng,
+      latitudeDelta: 0.01,
+      longitudeDelta: 0.01,
+    };
+
+    profileRingLocationAutoMoveRef.current = true;
+    setProfileRingPickedLatLng({ lat, lng });
+    requestAnimationFrame(() => {
+      profileRingLocationMapRef.current?.animateToRegion(region, 350);
+    });
+  }, []);
+
+  const handleSelectProfileRingLocationPrediction = useCallback(async (placeId: string, description: string) => {
+    if (!isGooglePlacesSearchConfigured) return;
+    const safePlaceId = String(placeId || '').trim();
+    if (!safePlaceId) return;
+
+    setIsProfileRingLocationSearching(true);
+    setProfileRingLocationSearchError('');
+    try {
+      const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(
+        safePlaceId
+      )}&fields=geometry,name,formatted_address&key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}&language=es`;
+      const resp = await fetch(url);
+      const data = await resp.json();
+      const status = String(data?.status || '');
+      if (status !== 'OK') {
+        setProfileRingLocationSearchError('No se pudo obtener detalles del lugar.');
+        return;
+      }
+
+      const loc = data?.result?.geometry?.location;
+      const lat = Number(loc?.lat);
+      const lng = Number(loc?.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        setProfileRingLocationSearchError('Ubicación inválida.');
+        return;
+      }
+
+      const label = String(data?.result?.formatted_address || data?.result?.name || description || '').trim();
+      setProfileRingPickedLocationLabel(label || null);
+      setProfileRingPickedLocationPlaceId(safePlaceId);
+      setProfileRingLocationSearchQuery(label || description);
+      setProfileRingLocationPredictions([]);
+      moveProfileRingLocationMapTo(lat, lng);
+      Keyboard.dismiss();
+    } catch {
+      setProfileRingLocationSearchError('No se pudo obtener detalles del lugar.');
+    } finally {
+      setIsProfileRingLocationSearching(false);
+    }
+  }, [isGooglePlacesSearchConfigured, moveProfileRingLocationMapTo]);
+
+  const closeProfileRingLocationPicker = useCallback(() => {
+    setShowProfileRingLocationPicker(false);
+    setIsProfileRingLocating(false);
+    setProfileRingLocationPredictions([]);
+    setProfileRingLocationSearchError('');
+    setProfileRingPickedLocationPlaceId(null);
+  }, []);
+
+  const applyProfileRingPickedLocation = useCallback(() => {
+    if (!selectedProfileRingId) return;
+    const picked = profileRingPickedLatLng;
+    if (!picked) return;
+
+    const lat = picked.lat;
+    const lng = picked.lng;
+    const label = String(profileRingPickedLocationLabel || '').trim() || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    const url = makeGoogleMapsLatLngUrl(lat, lng, label, profileRingPickedLocationPlaceId);
+
+    setProfileRingLocationLatDraft(lat);
+    setProfileRingLocationLngDraft(lng);
+    setProfileRingLocationLabelDraft(label);
+    setProfileRingLocationUrlDraft(url);
+    setProfileRingLocationPlaceIdDraft(profileRingPickedLocationPlaceId ? String(profileRingPickedLocationPlaceId) : null);
+
+    closeProfileRingLocationPicker();
+  }, [closeProfileRingLocationPicker, makeGoogleMapsLatLngUrl, profileRingPickedLatLng, profileRingPickedLocationLabel, profileRingPickedLocationPlaceId, selectedProfileRingId]);
+
+  const canCreateProfileRingMeta = useMemo(() => {
+    const hasColor = !!profileRingColorSelectedDraft;
+    const hasName = String(profileRingNameDraft || '').trim().length >= 1;
+    const hasDescription = String(profileRingDescriptionDraft || '').trim().length >= 1;
+    const hasValidLinkDraft = !profileRingLinkErrorDraft;
+    return hasColor && hasName && hasDescription && hasValidLinkDraft;
+  }, [profileRingColorSelectedDraft, profileRingDescriptionDraft, profileRingLinkErrorDraft, profileRingNameDraft]);
+
   const [isProfileTextExpanded, setIsProfileTextExpanded] = useState(false);
   const [isPresentationOverlayVisible, setIsPresentationOverlayVisible] = useState(true);
   const [selectedCorrectOption, setSelectedCorrectOption] = useState<string | null>(null);
@@ -2966,8 +3599,457 @@ const FrontScreen = ({
         clearTimeout(bottomToastTimerRef.current);
         bottomToastTimerRef.current = null;
       }
+      if (profileRingHintTimerRef.current) {
+        clearTimeout(profileRingHintTimerRef.current);
+        profileRingHintTimerRef.current = null;
+      }
     };
   }, []);
+
+  const closeProfileRingColorPanelAndThen = useCallback((afterClose?: () => void) => {
+    if (!showProfileRingColorPanel) {
+      afterClose?.();
+      return;
+    }
+
+    Keyboard.dismiss();
+    profileRingColorPanelAnimation.stopAnimation();
+    Animated.timing(profileRingColorPanelAnimation, {
+      toValue: PROFILE_RING_PANEL_HIDDEN_Y,
+      duration: 260,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      setShowProfileRingColorPanel(false);
+      setSelectedProfileRingId(null);
+      setIsProfileRingLinkExpanded(false);
+      setProfileRingLinkNetworkDraft(null);
+      setProfileRingLinkUrlDraft('');
+      setProfileRingLinkErrorDraft('');
+      setProfileRingColorDraft('#FFFFFF');
+      setProfileRingColorSelectedDraft(false);
+      setProfileRingNameDraft('');
+      setProfileRingDescriptionDraft('');
+      setProfileRingLocationLabelDraft('');
+      setProfileRingLocationUrlDraft('');
+      setProfileRingLocationPlaceIdDraft(null);
+      setProfileRingLocationLatDraft(null);
+      setProfileRingLocationLngDraft(null);
+      afterClose?.();
+    });
+  }, [PROFILE_RING_PANEL_HIDDEN_Y, profileRingColorPanelAnimation, showProfileRingColorPanel]);
+
+  const closeProfileRingColorPanel = useCallback(() => {
+    closeProfileRingColorPanelAndThen();
+  }, [closeProfileRingColorPanelAndThen]);
+
+  const closeProfileRingViewerPanelAndThen = useCallback((afterClose?: () => void) => {
+    if (!showProfileRingViewerPanel) {
+      afterClose?.();
+      return;
+    }
+
+    Keyboard.dismiss();
+    profileRingViewerPanelAnimation.stopAnimation();
+    Animated.timing(profileRingViewerPanelAnimation, {
+      toValue: PROFILE_RING_PANEL_HIDDEN_Y,
+      duration: 260,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      setShowProfileRingViewerPanel(false);
+      setViewingProfileRingId(null);
+      setViewingProfileRingSource('profile');
+      setViewingProfileRingHomePostId(null);
+      setViewingProfileRingOverride(null);
+      afterClose?.();
+    });
+  }, [PROFILE_RING_PANEL_HIDDEN_Y, profileRingViewerPanelAnimation, showProfileRingViewerPanel]);
+
+  const closeProfileRingViewerPanel = useCallback(() => {
+    closeProfileRingViewerPanelAndThen();
+  }, [closeProfileRingViewerPanelAndThen]);
+
+  useEffect(() => {
+    if (!showProfileRingViewerPanel) return;
+    if (!viewingProfileRingId) return;
+    if (viewingProfileRing) return;
+    closeProfileRingViewerPanel();
+  }, [closeProfileRingViewerPanel, showProfileRingViewerPanel, viewingProfileRing, viewingProfileRingId]);
+
+  const openProfileRingColorPanel = useCallback((ringId: string) => {
+    const ring = profileRingPoints.find(p => p.id === ringId) ?? null;
+
+    setSelectedProfileRingId(ringId);
+    setIsProfileRingLinkExpanded(false);
+    setProfileRingLinkNetworkDraft(ring?.linkNetwork ?? null);
+    setProfileRingLinkUrlDraft(ring?.linkUrl ?? '');
+    setProfileRingLinkErrorDraft('');
+
+    setProfileRingColorDraft(ring?.color ?? '#FFFFFF');
+    setProfileRingColorSelectedDraft(Boolean(ring?.colorSelected));
+    setProfileRingNameDraft(ring?.name ?? '');
+    setProfileRingDescriptionDraft(ring?.description ?? '');
+    setProfileRingLocationLabelDraft(ring?.locationLabel ?? '');
+    setProfileRingLocationUrlDraft(ring?.locationUrl ?? '');
+    setProfileRingLocationPlaceIdDraft(ring?.locationPlaceId ? String(ring.locationPlaceId) : null);
+    setProfileRingLocationLatDraft(ring?.locationLat ?? null);
+    setProfileRingLocationLngDraft(ring?.locationLng ?? null);
+
+    if (showProfileRingViewerPanel) {
+      closeProfileRingViewerPanelAndThen();
+    }
+    if (showReactionPanel) {
+      Animated.timing(reactionPanelAnimation, {
+        toValue: 400,
+        duration: 200,
+        useNativeDriver: true,
+      }).start(() => setShowReactionPanel(false));
+    }
+
+    if (showProfileRingColorPanel) return;
+
+    profileRingColorPanelAnimation.stopAnimation();
+    setShowProfileRingColorPanel(true);
+    profileRingColorPanelAnimation.setValue(PROFILE_RING_PANEL_HIDDEN_Y);
+    Animated.timing(profileRingColorPanelAnimation, {
+      toValue: 0,
+      duration: 260,
+      useNativeDriver: true,
+    }).start();
+  }, [PROFILE_RING_PANEL_HIDDEN_Y, closeProfileRingViewerPanelAndThen, profileRingColorPanelAnimation, profileRingPoints, showProfileRingColorPanel, showProfileRingViewerPanel, showReactionPanel, reactionPanelAnimation]);
+
+  const openProfileRingViewerPanel = useCallback((ringId: string) => {
+    setViewingProfileRingId(ringId);
+
+    if (showProfileRingColorPanel) {
+      closeProfileRingColorPanelAndThen();
+    }
+
+    if (showReactionPanel) {
+      Animated.timing(reactionPanelAnimation, {
+        toValue: 400,
+        duration: 200,
+        useNativeDriver: true,
+      }).start(() => setShowReactionPanel(false));
+    }
+
+    if (showProfileRingViewerPanel) return;
+
+    profileRingViewerPanelAnimation.stopAnimation();
+    setShowProfileRingViewerPanel(true);
+    profileRingViewerPanelAnimation.setValue(PROFILE_RING_PANEL_HIDDEN_Y);
+    Animated.timing(profileRingViewerPanelAnimation, {
+      toValue: 0,
+      duration: 260,
+      useNativeDriver: true,
+    }).start();
+  }, [PROFILE_RING_PANEL_HIDDEN_Y, closeProfileRingColorPanelAndThen, profileRingViewerPanelAnimation, reactionPanelAnimation, showProfileRingColorPanel, showProfileRingViewerPanel, showReactionPanel]);
+
+  const openHomeProfileRingViewerPanel = useCallback((postId: string | number, ringId: string) => {
+    // Backwards compatible signature (old calls) – keep in case some callsite still passes (postId, ringId).
+    const rid = String(ringId || '').trim();
+    if (!rid) return;
+    setViewingProfileRingSource('home');
+    setViewingProfileRingHomePostId(String(postId || '').trim() || null);
+    setViewingProfileRingOverride(null);
+    openProfileRingViewerPanel(rid);
+  }, [openProfileRingViewerPanel]);
+
+  const openHomeProfileRingViewerPanelFromRing = useCallback((ring: ProfileRingPoint) => {
+    const rid = String(ring?.id || '').trim();
+    if (!rid) return;
+    setViewingProfileRingSource('home');
+    setViewingProfileRingHomePostId(null);
+    setViewingProfileRingOverride(ring);
+    openProfileRingViewerPanel(rid);
+  }, [openProfileRingViewerPanel]);
+
+  const handleEditViewingProfileRing = useCallback(() => {
+    if (viewingProfileRingSource !== 'profile') return;
+    if (!viewingProfileRingId) return;
+    const id = viewingProfileRingId;
+    // Open editor immediately; it will close the viewer internally.
+    openProfileRingColorPanel(id);
+  }, [openProfileRingColorPanel, viewingProfileRingId, viewingProfileRingSource]);
+
+  const requestDeleteViewingProfileRing = useCallback(() => {
+    if (viewingProfileRingSource !== 'profile') return;
+    if (!viewingProfileRingId) return;
+    setPendingDeleteProfileRingId(viewingProfileRingId);
+    setShowDeleteProfileRingModal(true);
+  }, [viewingProfileRingId, viewingProfileRingSource]);
+
+  const closeDeleteProfileRingModal = useCallback(() => {
+    setShowDeleteProfileRingModal(false);
+    setPendingDeleteProfileRingId(null);
+  }, []);
+
+  const confirmDeleteProfileRing = useCallback(() => {
+    const id = pendingDeleteProfileRingId;
+    if (!id) return;
+
+    const next = profileRingPoints.filter(p => p.id !== id);
+    setProfileRingPoints(next);
+    closeProfileRingViewerPanel();
+    closeDeleteProfileRingModal();
+    void persistProfileRingsImmediately(next);
+  }, [closeDeleteProfileRingModal, closeProfileRingViewerPanel, pendingDeleteProfileRingId, persistProfileRingsImmediately, profileRingPoints]);
+
+  const handleProfileRingPress = useCallback((ringId: string) => {
+    const ring = profileRingPoints.find(p => p.id === ringId);
+    if (!ring) return;
+    if (ring.isCreated) {
+      setViewingProfileRingSource('profile');
+      setViewingProfileRingHomePostId(null);
+      setViewingProfileRingOverride(null);
+      openProfileRingViewerPanel(ringId);
+      return;
+    }
+    setViewingProfileRingSource('profile');
+    setViewingProfileRingHomePostId(null);
+    setViewingProfileRingOverride(null);
+    openProfileRingColorPanel(ringId);
+  }, [openProfileRingColorPanel, openProfileRingViewerPanel, profileRingPoints]);
+
+  const createSelectedProfileRing = useCallback(() => {
+    if (!selectedProfileRingId) return;
+    if (!canCreateProfileRingMeta) return;
+
+    const ringId = selectedProfileRingId;
+    const draftNetwork = String(profileRingLinkNetworkDraft || '').trim();
+    const draftUrl = String(profileRingLinkUrlDraft || '').trim();
+
+    const next = profileRingPoints.map(p => {
+      if (p.id !== ringId) return p;
+
+      const nextName = String(profileRingNameDraft || '').slice(0, 38);
+      const nextDescription = String(profileRingDescriptionDraft || '').slice(0, 280);
+
+      const trimmedLocationLabel = String(profileRingLocationLabelDraft || '').trim();
+      const hasAnyLocation = !!trimmedLocationLabel || (profileRingLocationLatDraft != null && profileRingLocationLngDraft != null);
+
+      let nextLinkNetwork: string | null = p.linkNetwork;
+      let nextLinkUrl: string = p.linkUrl;
+      if (!draftNetwork && !draftUrl) {
+        nextLinkNetwork = null;
+        nextLinkUrl = '';
+      } else if (draftNetwork && draftUrl && !profileRingLinkErrorDraft) {
+        nextLinkNetwork = draftNetwork;
+        nextLinkUrl = draftUrl;
+      }
+
+      return {
+        ...p,
+        isCreated: true,
+        color: String(profileRingColorDraft || '#FFFFFF'),
+        colorSelected: Boolean(profileRingColorSelectedDraft),
+        name: nextName,
+        description: nextDescription,
+        linkNetwork: nextLinkNetwork,
+        linkUrl: nextLinkUrl,
+        locationLabel: hasAnyLocation ? String(profileRingLocationLabelDraft || '') : '',
+        locationUrl: hasAnyLocation ? String(profileRingLocationUrlDraft || '') : '',
+        locationPlaceId: hasAnyLocation ? (profileRingLocationPlaceIdDraft ? String(profileRingLocationPlaceIdDraft) : null) : null,
+        locationLat: hasAnyLocation ? (profileRingLocationLatDraft == null ? null : Number(profileRingLocationLatDraft)) : null,
+        locationLng: hasAnyLocation ? (profileRingLocationLngDraft == null ? null : Number(profileRingLocationLngDraft)) : null,
+      };
+    });
+
+    setProfileRingPoints(next);
+    void persistProfileRingsImmediately(next);
+
+    closeProfileRingColorPanelAndThen(() => {
+      setViewingProfileRingSource('profile');
+      setViewingProfileRingHomePostId(null);
+      setViewingProfileRingOverride(null);
+      openProfileRingViewerPanel(ringId);
+    });
+  }, [canCreateProfileRingMeta, closeProfileRingColorPanelAndThen, openProfileRingViewerPanel, persistProfileRingsImmediately, profileRingColorDraft, profileRingColorSelectedDraft, profileRingDescriptionDraft, profileRingLinkErrorDraft, profileRingLinkNetworkDraft, profileRingLinkUrlDraft, profileRingLocationLabelDraft, profileRingLocationLatDraft, profileRingLocationLngDraft, profileRingLocationPlaceIdDraft, profileRingLocationUrlDraft, profileRingNameDraft, profileRingPoints, selectedProfileRingId]);
+
+  const toggleProfileRingLinkExpanded = useCallback(() => {
+    setIsProfileRingLinkExpanded(prev => {
+      return !prev;
+    });
+  }, []);
+
+  const handleSelectProfileRingLinkNetwork = useCallback((network: string) => {
+    const normalized = String(network || '').trim();
+    if (!normalized) return;
+    setProfileRingLinkNetworkDraft(prev => (prev === normalized ? null : normalized));
+    setProfileRingLinkUrlDraft('');
+    setProfileRingLinkErrorDraft('');
+  }, []);
+
+  const handleProfileRingLinkUrlChange = useCallback((text: string) => {
+    setProfileRingLinkUrlDraft(text);
+
+    const network = profileRingLinkNetworkDraft;
+    if (network && text.trim()) {
+      const ok = validateSocialLink(network, text);
+      if (!ok) {
+        const platformNames: Record<string, string> = {
+          facebook: 'Facebook',
+          instagram: 'Instagram',
+          onlyfans: 'OnlyFans',
+          pinterest: 'Pinterest',
+          telegram: 'Telegram',
+          tiktok: 'TikTok',
+          twitter: 'X/Twitter',
+          youtube: 'YouTube',
+          discord: 'Discord',
+          threads: 'Threads',
+          linkedin: 'LinkedIn',
+          kick: 'Kick',
+          twitch: 'Twitch',
+        };
+        setProfileRingLinkErrorDraft(`${t('front.linkMustBeFrom' as TranslationKey)} ${platformNames[network] ?? network}`);
+      } else {
+        setProfileRingLinkErrorDraft('');
+      }
+    } else {
+      setProfileRingLinkErrorDraft('');
+    }
+  }, [profileRingLinkNetworkDraft, t]);
+
+  const clearProfileRingLinkDraft = useCallback(() => {
+    setProfileRingLinkNetworkDraft(null);
+    setProfileRingLinkUrlDraft('');
+    setProfileRingLinkErrorDraft('');
+    setIsProfileRingLinkExpanded(false);
+  }, []);
+
+  const clearProfileRingLocationDraft = useCallback(() => {
+    setProfileRingLocationLabelDraft('');
+    setProfileRingLocationUrlDraft('');
+    setProfileRingLocationPlaceIdDraft(null);
+    setProfileRingLocationLatDraft(null);
+    setProfileRingLocationLngDraft(null);
+
+    // Also reset picker local state so the next open starts clean.
+    setProfileRingPickedLocationLabel(null);
+    setProfileRingPickedLocationPlaceId(null);
+    setProfileRingLocationSearchQuery('');
+    setProfileRingLocationPredictions([]);
+    setProfileRingLocationSearchError('');
+  }, []);
+
+  const applyProfileRingLinkDraft = useCallback(() => {
+    if (!selectedProfileRingId) return;
+    if (!profileRingLinkNetworkDraft || !!profileRingLinkErrorDraft) return;
+    const link = String(profileRingLinkUrlDraft || '').trim();
+    if (!link) return;
+
+    setIsProfileRingLinkExpanded(false);
+  }, [profileRingLinkErrorDraft, profileRingLinkNetworkDraft, profileRingLinkUrlDraft, selectedProfileRingId]);
+
+  const applyColorToSelectedRing = useCallback((color: string) => {
+    if (!selectedProfileRingId) return;
+    setProfileRingColorDraft(color);
+    setProfileRingColorSelectedDraft(true);
+  }, [selectedProfileRingId]);
+
+  const updateSelectedProfileRingName = useCallback((name: string) => {
+    if (!selectedProfileRingId) return;
+    setProfileRingNameDraft(name);
+  }, [selectedProfileRingId]);
+
+  const updateSelectedProfileRingDescription = useCallback((description: string) => {
+    if (!selectedProfileRingId) return;
+    setProfileRingDescriptionDraft(description);
+  }, [selectedProfileRingId]);
+
+  const deleteSelectedProfileRing = useCallback(() => {
+    if (!selectedProfileRingId) {
+      closeProfileRingColorPanel();
+      return;
+    }
+
+    const next = profileRingPoints.filter(p => p.id !== selectedProfileRingId);
+    setProfileRingPoints(next);
+    void persistProfileRingsImmediately(next);
+    closeProfileRingColorPanel();
+  }, [closeProfileRingColorPanel, persistProfileRingsImmediately, profileRingPoints, selectedProfileRingId]);
+  
+  const handleProfileRingIconPress = useCallback(() => {
+    if (profileRingHintTimerRef.current) {
+      clearTimeout(profileRingHintTimerRef.current);
+      profileRingHintTimerRef.current = null;
+    }
+
+    if (profileRingPoints.length >= 5) {
+      setProfileRingPlacementEnabled(false);
+      setProfileRingHintMessage(t('front.profileRingHintMaxRings' as TranslationKey));
+      profileRingHintTimerRef.current = setTimeout(() => {
+        setProfileRingHintMessage(null);
+        profileRingHintTimerRef.current = null;
+      }, 2000);
+      return;
+    }
+
+    // Toggle off if already enabled or hint showing.
+    if (profileRingPlacementEnabled || showProfileRingHint) {
+      setProfileRingHintMessage(null);
+      setProfileRingPlacementEnabled(false);
+      return;
+    }
+
+    setProfileRingPlacementEnabled(false);
+    setProfileRingHintMessage(t('front.profileRingHintSelect' as TranslationKey));
+    profileRingHintTimerRef.current = setTimeout(() => {
+      setProfileRingHintMessage(null);
+      setProfileRingPlacementEnabled(true);
+      profileRingHintTimerRef.current = null;
+    }, 2000);
+  }, [profileRingPoints.length, profileRingPlacementEnabled, showProfileRingHint, t]);
+
+  const handleProfileCarouselImagePress = useCallback((imageIndex: number, e: any) => {
+    // Require explicitly re-enabling ring placement via the ring icon after each ring is added.
+    if (!profileRingPlacementEnabledRef.current || showProfileRingHint) return;
+
+    if (profileRingPoints.length >= 5) {
+      showActionToast(t('front.profileRingHintMaxRings' as TranslationKey));
+      return;
+    }
+
+    // Disable placement immediately to avoid rapid taps placing multiple rings.
+    profileRingPlacementEnabledRef.current = false;
+    setProfileRingPlacementEnabled(false);
+
+    const layout = profileCarouselImageLayouts[imageIndex];
+    const locationX = Number(e?.nativeEvent?.locationX ?? NaN);
+    const locationY = Number(e?.nativeEvent?.locationY ?? NaN);
+
+    let x = 0.5;
+    let y = 0.5;
+    if (layout?.width && layout?.height && Number.isFinite(locationX) && Number.isFinite(locationY)) {
+      x = Math.max(0, Math.min(1, locationX / layout.width));
+      y = Math.max(0, Math.min(1, locationY / layout.height));
+    }
+
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setProfileRingPoints(prev => {
+      if (prev.length >= 5) return prev;
+      return [...prev, {
+        id,
+        imageIndex,
+        x,
+        y,
+        color: '#FFFFFF',
+        colorSelected: false,
+        name: '',
+        description: '',
+        linkNetwork: null,
+        linkUrl: '',
+        locationLabel: '',
+        locationUrl: '',
+        locationPlaceId: null,
+        locationLat: null,
+        locationLng: null,
+        isCreated: false,
+      }];
+    });
+  }, [profileRingPoints.length, showProfileRingHint, profileCarouselImageLayouts, t]);
 
   const [publications, setPublications] = useState<Publication[]>([]);
   const [currentPostIndex, setCurrentPostIndex] = useState(0);
@@ -4055,6 +5137,8 @@ const FrontScreen = ({
     { value: 'Spam', labelKey: 'report.reason.spam' as const },
     { value: 'Suplantación de identidad', labelKey: 'report.reason.impersonation' as const },
     { value: 'Contenido ilegal', labelKey: 'report.reason.illegalContent' as const },
+    { value: 'Abuso/sexualización infantil', labelKey: 'report.reason.childSexualAbuse' as const },
+    { value: 'Incitación al uso de armas/drogas', labelKey: 'report.reason.weaponsOrDrugsIncitement' as const },
     { value: 'Conducta inapropiada', labelKey: 'report.reason.inappropriateConduct' as const },
     { value: 'Otros', labelKey: 'report.reason.other' as const },
   ] as const;
@@ -4103,11 +5187,166 @@ const FrontScreen = ({
     setShowPublicationReportModal(true);
   };
 
+  const getJoinedChannelKey = useCallback((channel: any, fallbackIndex?: number) => {
+    return String(
+      channel?.post_id ??
+      channel?.postId ??
+      channel?.id ??
+      `${channel?.publisher_email ?? channel?.publisherEmail ?? 'unknown'}-${channel?.post_created_at ?? fallbackIndex ?? ''}`
+    );
+  }, []);
+
+  const getJoinedChannelPostId = useCallback((channel: any) => {
+    return String(channel?.post_id ?? channel?.postId ?? channel?.id ?? '').trim();
+  }, []);
+
+  const getJoinedChannelPublisherEmail = useCallback((channel: any) => {
+    return String(channel?.publisher_email ?? channel?.publisherEmail ?? '').trim();
+  }, []);
+
+  const leaveJoinedChannel = useCallback(async (channel: any) => {
+    if (!authToken) {
+      Alert.alert(t('auth.sessionRequiredTitle' as TranslationKey), t('auth.signInToBlockUsers' as TranslationKey));
+      return;
+    }
+
+    const postId = getJoinedChannelPostId(channel);
+    if (!postId) return;
+
+    setActiveJoinedChannelOptionsKey(null);
+    const channelKey = getJoinedChannelKey(channel);
+
+    // Optimistic UI: remove from list immediately.
+    setMyChannels(prev => prev.filter(c => getJoinedChannelKey(c) !== channelKey));
+
+    try {
+      const resp = await fetch(`${API_URL}/api/channels/leave/${encodeURIComponent(postId)}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      const contentType = resp.headers.get('content-type') || '';
+      const body: any = contentType.includes('application/json')
+        ? await resp.json().catch(() => null)
+        : { text: await resp.text().catch(() => '') };
+
+      // Treat the "not subscribed" case as success (idempotent leave).
+      const isNotSubscribed = resp.status === 404 && String(body?.error || '').includes('No estabas suscrito');
+
+      if (!resp.ok && !isNotSubscribed) {
+        const message =
+          body?.error ||
+          body?.message ||
+          (typeof body?.text === 'string' && body.text.trim()) ||
+          'No se pudo salir del canal';
+        throw new Error(message);
+      }
+
+      // Re-sync so Home can immediately show the chat icon again.
+      fetchMyChannels();
+    } catch (e: any) {
+      console.error('Error leaving joined channel:', e);
+      // Re-sync list if leaving failed.
+      fetchMyChannels();
+      Alert.alert('Error', e?.message || 'No se pudo salir del canal');
+    }
+  }, [authToken, fetchMyChannels, getJoinedChannelKey, getJoinedChannelPostId, t]);
+
+  const leaveAndBlockJoinedChannel = useCallback(async (channel: any) => {
+    if (!authToken) {
+      Alert.alert(t('auth.sessionRequiredTitle' as TranslationKey), t('auth.signInToBlockUsers' as TranslationKey));
+      return;
+    }
+
+    const publisherEmail = getJoinedChannelPublisherEmail(channel);
+    if (!publisherEmail) return;
+
+    setActiveJoinedChannelOptionsKey(null);
+
+    try {
+      const blockResp = await fetch(`${API_URL}/api/group-requests/block`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email: publisherEmail }),
+      });
+
+      if (!blockResp.ok) {
+        const err = await blockResp.json().catch(() => ({}));
+        throw new Error(err?.error || t('errors.unableToBlockUser' as TranslationKey));
+      }
+
+      // After blocking, the backend won't return this channel anymore.
+      await leaveJoinedChannel(channel);
+    } catch (e: any) {
+      console.error('Error leaving+blocking joined channel:', e);
+      Alert.alert('Error', e?.message || t('errors.unableToBlockUser' as TranslationKey));
+      fetchMyChannels();
+    }
+  }, [authToken, fetchMyChannels, getJoinedChannelPublisherEmail, leaveJoinedChannel, t]);
+
+  const reportJoinedChannel = useCallback((channel: any) => {
+    const publisherEmail = getJoinedChannelPublisherEmail(channel);
+    if (!publisherEmail) return;
+
+    const postId = getJoinedChannelPostId(channel);
+    if (!postId) return;
+
+    setActiveJoinedChannelOptionsKey(null);
+    openPublicationReportModal({
+      id: postId,
+      user: {
+        email: publisherEmail,
+        username: String(channel?.username || 'usuario'),
+      },
+    } as any);
+  }, [getJoinedChannelPostId, getJoinedChannelPublisherEmail, openPublicationReportModal]);
+
   const [activeIntimidadIndices, setActiveIntimidadIndices] = useState<Record<string, number>>({});
   const [intimidadesVisible, setIntimidadesVisible] = useState<Record<string, boolean>>({});
   const [activePresentationIndices, setActivePresentationIndices] = useState<Record<string, number>>({});
   const [presentationOverlayVisible, setPresentationOverlayVisible] = useState<Record<string, boolean>>({});
   const [expandedProfileTexts, setExpandedProfileTexts] = useState<Record<string, boolean>>({});
+
+  // Home: show/hide profile rings overlay per publication (default: hidden)
+  const [homeProfileRingsVisibleByPostId, setHomeProfileRingsVisibleByPostId] = useState<Record<string, boolean>>({});
+
+  // Home: track carousel layout per publication+image index so rings can be placed correctly.
+  const [homePresentationImageLayouts, setHomePresentationImageLayouts] = useState<Record<string, Record<number, { width: number; height: number }>>>({});
+
+  const setHomePresentationImageLayout = useCallback((pubId: string | number, imageIndex: number, width: number, height: number) => {
+    const key = String(pubId || '');
+    if (!key) return;
+    const idx = Number(imageIndex);
+    if (!Number.isFinite(idx) || idx < 0) return;
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+
+    setHomePresentationImageLayouts(prev => {
+      const current = prev[key] || {};
+      const existing = current[idx];
+      if (existing && existing.width === width && existing.height === height) return prev;
+      return {
+        ...prev,
+        [key]: {
+          ...current,
+          [idx]: { width, height },
+        },
+      };
+    });
+  }, []);
+
+  const toggleHomeProfileRingsVisible = useCallback((postId: string) => {
+    const key = String(postId || '');
+    if (!key) return;
+    setHomeProfileRingsVisibleByPostId(prev => {
+      const isVisible = prev[key] === true;
+      return { ...prev, [key]: !isVisible };
+    });
+  }, []);
 
   // Home: track which carousel images have finished loading per publication.
   // This lets us show a loader overlay until all images are ready.
@@ -4243,6 +5482,7 @@ const FrontScreen = ({
 
   const publicationAnimations = useRef<Record<string, { scale: Animated.Value, opacity: Animated.Value }>>({});
   const publicationLastTaps = useRef<Record<string, number>>({});
+  const homeRingTapSuppressUntilRef = useRef<Record<string, number>>({});
   const [publicationDoubleTapState, setPublicationDoubleTapState] = useState<Record<string, { visible: boolean, emoji: string }>>({});
 
 
@@ -4329,6 +5569,13 @@ const FrontScreen = ({
 
   const handlePublicationDoubleTap = (pubId: string, reactions: { selected: string[], counts: Record<string, number>, userReaction: string | null }) => {
     const now = Date.now();
+
+    const suppressUntil = homeRingTapSuppressUntilRef.current[String(pubId)] || 0;
+    if (now < suppressUntil) {
+      publicationLastTaps.current[pubId] = now;
+      return;
+    }
+
     const DOUBLE_PRESS_DELAY = 300;
     const lastTap = publicationLastTaps.current[pubId] || 0;
 
@@ -4369,6 +5616,33 @@ const FrontScreen = ({
       return;
     }
 
+    const createdProfileRings: ProfileRingPoint[] = (profileRingPoints || [])
+      .filter(r => r?.isCreated)
+      .slice(0, 5)
+      .map(r => ({
+        id: String(r.id),
+        imageIndex: Number(r.imageIndex),
+        x: Number(r.x),
+        y: Number(r.y),
+        color: String(r.color || '#FFFFFF'),
+        colorSelected: Boolean(r.colorSelected),
+        name: String(r.name || ''),
+        description: String(r.description || ''),
+        linkNetwork: r.linkNetwork ? String(r.linkNetwork) : null,
+        linkUrl: String(r.linkUrl || ''),
+        locationLabel: String(r.locationLabel || ''),
+        locationUrl: String(r.locationUrl || ''),
+        locationPlaceId: r.locationPlaceId ? String(r.locationPlaceId) : null,
+        locationLat: r.locationLat == null ? null : Number(r.locationLat),
+        locationLng: r.locationLng == null ? null : Number(r.locationLng),
+        isCreated: true,
+      }));
+
+    const presentationToPublish: PresentationContent = {
+      ...profilePresentation,
+      profileRings: createdProfileRings,
+    };
+
     const tempId = Date.now().toString();
     const newPublication: Publication = {
       id: tempId,
@@ -4379,7 +5653,7 @@ const FrontScreen = ({
         nationality: nationality,
         socialNetworks: linkedSocialNetworks.map(sn => ({ id: sn.network, link: sn.link })),
       },
-      presentation: profilePresentation,
+      presentation: presentationToPublish,
       reactions: {
         selected: [...selectedReactions],
         counts: { ...reactionCounts },
@@ -4401,7 +5675,7 @@ const FrontScreen = ({
             'Authorization': `Bearer ${authToken}`
           },
           body: JSON.stringify({
-            presentation: profilePresentation,
+            presentation: presentationToPublish,
             intimidades: intimidades,
             reactions: {
               selected: selectedReactions,
@@ -6553,6 +7827,20 @@ const FrontScreen = ({
         </TouchableWithoutFeedback>
       )}
 
+      {/* Profile ring color panel overlay */}
+      {showProfileRingColorPanel && (
+        <TouchableWithoutFeedback onPress={closeProfileRingColorPanel}>
+          <View style={styles.socialPanelOverlay} />
+        </TouchableWithoutFeedback>
+      )}
+
+      {/* Profile ring viewer panel overlay */}
+      {showProfileRingViewerPanel && (
+        <TouchableWithoutFeedback onPress={closeProfileRingViewerPanel}>
+          <View style={styles.socialPanelOverlay} />
+        </TouchableWithoutFeedback>
+      )}
+
       {/* Reaction Panel */}
       <Animated.View style={[styles.reactionPanel, { transform: [{ translateY: reactionPanelAnimation }] }]}>
         <View style={styles.reactionPanelHeader}>
@@ -6581,6 +7869,556 @@ const FrontScreen = ({
           ))}
         </ScrollView>
       </Animated.View>
+
+      {/* Profile ring color panel */}
+      {showProfileRingColorPanel && (
+        <Animated.View
+          style={[
+            styles.profileRingColorPanel,
+            isKeyboardVisible && keyboardHeight > 0 ? { bottom: keyboardHeight } : null,
+            { transform: [{ translateY: profileRingColorPanelAnimation }] },
+          ]}
+        >
+          <View style={styles.profileRingColorPanelHeader}>
+            <TouchableOpacity
+              onPress={createSelectedProfileRing}
+              activeOpacity={0.8}
+              disabled={!canCreateProfileRingMeta}
+              style={styles.profileRingApplyAction}
+            >
+              <MaterialIcons name="check" size={22} color="#FFFFFF" />
+              <Text style={styles.profileRingApplyActionText}>{t('common.create' as TranslationKey)}</Text>
+              {!canCreateProfileRingMeta && (
+                <View style={styles.profileRingApplyActionDisabledOverlay} pointerEvents="none" />
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={deleteSelectedProfileRing}
+              activeOpacity={0.8}
+              style={styles.profileRingDeleteAction}
+            >
+              <MaterialIcons name="delete" size={18} color="#FFFFFF" />
+              <Text style={styles.profileRingDeleteActionText}>{t('front.profileRingDelete' as TranslationKey)}</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            style={styles.profileRingPanelScroll}
+            contentContainerStyle={styles.profileRingPanelScrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.profileRingColorOptionsRow}>
+              {PROFILE_RING_COLOR_OPTIONS.map(opt => {
+                const selectedColor = String(profileRingColorDraft || '').toLowerCase();
+                const isSelected = selectedColor === opt.color.toLowerCase();
+                const innerSize = 34;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    activeOpacity={0.8}
+                    onPress={() => applyColorToSelectedRing(opt.color)}
+                    style={[
+                      styles.profileRingColorOptionOuter,
+                      isSelected && styles.profileRingColorOptionOuterSelected,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.profileRingColorOptionInner,
+                        { width: innerSize, height: innerSize, borderRadius: innerSize / 2, borderColor: opt.color },
+                      ]}
+                    />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View style={styles.profileRingMetaContainer}>
+              <Text style={styles.profileRingFieldLabel}>{t('front.profileRingNameLabel' as TranslationKey)}</Text>
+              <Text style={styles.profileRingFieldHelper}>{t('front.profileRingNameHelper' as TranslationKey)}</Text>
+              <TextInput
+                style={styles.profileRingTextInput}
+                value={profileRingNameDraft}
+                onChangeText={updateSelectedProfileRingName}
+                maxLength={38}
+                placeholderTextColor="rgba(255, 255, 255, 0.3)"
+                autoCapitalize="sentences"
+                autoCorrect
+              />
+
+              <Text style={styles.profileRingFieldLabel}>{t('front.profileRingDescriptionLabel' as TranslationKey)}</Text>
+              <TextInput
+                style={[styles.profileRingTextInput, styles.profileRingTextArea]}
+                value={profileRingDescriptionDraft}
+                onChangeText={updateSelectedProfileRingDescription}
+                maxLength={280}
+                placeholderTextColor="rgba(255, 255, 255, 0.3)"
+                autoCapitalize="sentences"
+                autoCorrect
+                multiline
+                textAlignVertical="top"
+              />
+
+              <View style={styles.profileRingLinkLocationContainer}>
+                <View style={styles.profileRingLinkLocationBlock}>
+                  <TouchableOpacity
+                    activeOpacity={0.75}
+                    onPress={toggleProfileRingLinkExpanded}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <View style={styles.profileRingLinkLocationRow}>
+                      <MaterialIcons name="link" size={18} color="#FFFFFF" />
+                      <Text style={styles.profileRingLinkLocationText}>{t('front.profileRingLinkLabel' as TranslationKey)}</Text>
+                      <View style={{ flex: 1 }} />
+                      <MaterialIcons
+                        name={isProfileRingLinkExpanded ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                        size={22}
+                        color="rgba(255, 255, 255, 0.8)"
+                      />
+                    </View>
+                  </TouchableOpacity>
+                  <Text style={styles.profileRingLinkLocationHelper}>{t('front.profileRingLinkHelper' as TranslationKey)}</Text>
+
+                  {!!(profileRingLinkNetworkDraft && profileRingLinkUrlDraft) && !isProfileRingLinkExpanded && (() => {
+                    const key = String(profileRingLinkNetworkDraft || '').trim();
+                    const url = String(profileRingLinkUrlDraft || '').trim();
+                    if (!key || !url) return null;
+                    const source = (SOCIAL_ICONS as any)[key];
+
+                    return (
+                      <View style={styles.profileRingLinkPreviewRow}>
+                        <TouchableOpacity
+                          activeOpacity={0.75}
+                          onPress={clearProfileRingLinkDraft}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Eliminar enlace"
+                          style={styles.profileRingPreviewRemoveBtn}
+                        >
+                          <MaterialIcons name="close" size={14} color="#FFFFFF" />
+                        </TouchableOpacity>
+                        {source ? (
+                          <TouchableOpacity
+                            activeOpacity={0.75}
+                            onPress={() => openExternalLink(url)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Image source={source} style={styles.profileRingLinkedIcon} />
+                          </TouchableOpacity>
+                        ) : null}
+                        <TouchableOpacity
+                          activeOpacity={0.75}
+                          onPress={() => openExternalLink(url)}
+                          style={{ flex: 1 }}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        >
+                          <Text style={styles.profileRingLinkPreviewText} numberOfLines={1}>
+                            {url}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })()}
+
+                  {isProfileRingLinkExpanded && (
+                    <View style={styles.profileRingLinkPickerContainer}>
+                      <View style={styles.socialIconsRow}>
+                        {Object.entries(SOCIAL_ICONS).map(([key, source]) => (
+                          <TouchableOpacity
+                            key={key}
+                            onPress={() => handleSelectProfileRingLinkNetwork(key)}
+                            activeOpacity={0.7}
+                            style={[
+                              styles.socialIconContainer,
+                              profileRingLinkNetworkDraft === key && styles.socialIconSelected,
+                            ]}
+                          >
+                            <Image source={source as any} style={[styles.socialIcon, styles.profileRingSocialIcon]} />
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+
+                      <View style={styles.profileRingLinkInputContainer}>
+                        <TextInput
+                          style={[
+                            styles.socialPanelInput,
+                            !profileRingLinkNetworkDraft && styles.socialPanelInputDisabled,
+                            profileRingLinkErrorDraft ? styles.socialPanelInputError : null,
+                            { marginTop: 0 },
+                          ]}
+                          placeholder={profileRingLinkNetworkDraft ? t('front.link' as TranslationKey) : t('front.selectSocialNetwork' as TranslationKey)}
+                          placeholderTextColor="rgba(255, 255, 255, 0.3)"
+                          value={profileRingLinkUrlDraft}
+                          onChangeText={handleProfileRingLinkUrlChange}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          keyboardType="url"
+                          editable={!!profileRingLinkNetworkDraft}
+                          selectTextOnFocus={!!profileRingLinkNetworkDraft}
+                        />
+                        {profileRingLinkNetworkDraft && profileRingLinkErrorDraft ? (
+                          <Text style={styles.socialPanelErrorText}>{profileRingLinkErrorDraft}</Text>
+                        ) : null}
+                      </View>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.linkButton,
+                          (!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft) && styles.linkButtonDisabled,
+                          styles.profileRingLinkApplyButton,
+                        ]}
+                        onPress={applyProfileRingLinkDraft}
+                        disabled={!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft}
+                        activeOpacity={0.7}
+                      >
+                        <Text
+                          style={[
+                            styles.linkButtonText,
+                            (!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft) && styles.linkButtonTextDisabled,
+                          ]}
+                        >
+                          {t('common.apply' as TranslationKey)}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+                <View style={styles.profileRingLinkLocationBlock}>
+                  <TouchableOpacity
+                    activeOpacity={0.75}
+                    onPress={openProfileRingLocationPicker}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <View style={styles.profileRingLinkLocationRow}>
+                      <MaterialIcons name="location-on" size={18} color="#FFFFFF" />
+                      <Text style={styles.profileRingLinkLocationText}>{t('front.profileRingLocationLabel' as TranslationKey)}</Text>
+                      <View style={{ flex: 1 }} />
+                      <MaterialIcons name="add" size={22} color="rgba(255, 255, 255, 0.8)" />
+                    </View>
+                  </TouchableOpacity>
+                  <Text style={styles.profileRingLinkLocationHelper}>{t('front.profileRingLocationHelper' as TranslationKey)}</Text>
+
+                  {!!(profileRingLocationLabelDraft) && (
+                    <View style={styles.profileRingLocationPreviewRow}>
+                      <TouchableOpacity
+                        activeOpacity={0.75}
+                        onPress={clearProfileRingLocationDraft}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Eliminar ubicación"
+                        style={styles.profileRingPreviewRemoveBtn}
+                      >
+                        <MaterialIcons name="close" size={14} color="#FFFFFF" />
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        activeOpacity={0.75}
+                        onPress={() => openExternalLink(profileRingLocationUrlDraft || 'https://www.google.com/maps')}
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      >
+                        <MaterialIcons name="place" size={16} color="rgba(255, 183, 77, 0.9)" />
+                        <Text style={styles.profileRingLocationPreviewText} numberOfLines={1}>
+                          {profileRingLocationLabelDraft}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              </View>
+            </View>
+          </ScrollView>
+        </Animated.View>
+      )}
+
+      {/* Profile ring viewer panel */}
+      {showProfileRingViewerPanel && viewingProfileRing && (
+        <Animated.View
+          style={[
+            styles.profileRingViewerPanel,
+            { borderTopColor: viewingProfileRing.color || '#FFB74D' },
+            { transform: [{ translateY: profileRingViewerPanelAnimation }] },
+          ]}
+        >
+          <View style={styles.profileRingViewerHeader}>
+            <View style={[styles.profileRingViewerColorDot, { borderColor: viewingProfileRing.color || '#FFFFFF' }]} />
+            <View style={{ flex: 1 }} />
+            {viewingProfileRingSource === 'profile' && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+                <TouchableOpacity
+                  onPress={handleEditViewingProfileRing}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel="Editar aro"
+                >
+                  <MaterialIcons name="edit" size={20} color="#FFFFFF" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={requestDeleteViewingProfileRing}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel="Eliminar aro"
+                >
+                  <MaterialIcons name="delete" size={22} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.profileRingViewerScrollContent}
+          >
+            <Text style={styles.profileRingViewerName}>
+              {viewingProfileRing.name}
+            </Text>
+            <Text style={styles.profileRingViewerDescription}>
+              {viewingProfileRing.description}
+            </Text>
+
+            {!!(viewingProfileRing.linkNetwork && viewingProfileRing.linkUrl) && (
+              <View style={styles.profileRingViewerMetaSection}>
+                <Text style={styles.profileRingViewerMetaLabel}>{t('front.profileRingLinkLabel' as TranslationKey)}</Text>
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={() => openExternalLink(viewingProfileRing.linkUrl)}
+                  style={styles.profileRingViewerMetaRow}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  {(() => {
+                    const key = String(viewingProfileRing.linkNetwork || '').trim();
+                    const source = (SOCIAL_ICONS as any)[key];
+                    if (!source) return null;
+                    return (
+                      <Image
+                        source={source}
+                        style={styles.profileRingViewerLinkLogo}
+                      />
+                    );
+                  })()}
+                  <Text style={styles.profileRingViewerMetaText} numberOfLines={2}>
+                    {viewingProfileRing.linkUrl}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {!!(viewingProfileRing.locationLabel) && (
+              <View style={styles.profileRingViewerMetaSection}>
+                <Text style={styles.profileRingViewerMetaLabel}>{t('front.profileRingLocationLabel' as TranslationKey)}</Text>
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={() => openExternalLink(viewingProfileRing.locationUrl || 'https://www.google.com/maps')}
+                  style={styles.profileRingViewerMetaRow}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <MaterialIcons name="place" size={18} color="#FFB74D" />
+                  <Text style={styles.profileRingViewerMetaText} numberOfLines={2}>
+                    {viewingProfileRing.locationLabel}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </ScrollView>
+          {viewingProfileRingSource === 'home' && (
+            <View style={styles.profileRingViewerAdContainer}>
+              <BannerAd
+                unitId={BANNER_AD_UNIT_ID}
+                size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
+                requestOptions={{ requestNonPersonalizedAdsOnly: true }}
+              />
+            </View>
+          )}
+        </Animated.View>
+      )}
+
+      {/* Confirm delete profile ring (styled modal) */}
+      <Modal
+        visible={showDeleteProfileRingModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={closeDeleteProfileRingModal}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          style={styles.modalOverlay}
+          onPress={closeDeleteProfileRingModal}
+        >
+          <TouchableWithoutFeedback>
+            <View style={[styles.deleteModalContainer, { width: '92%', borderWidth: 1, borderColor: 'rgba(255, 183, 77, 0.35)' }]}>
+              <Text style={styles.deleteModalTitle}>Eliminar aro</Text>
+              <Text style={[styles.deleteModalText, styles.deleteModalTextJustified]}>
+                ¿Seguro que quieres eliminar este aro y toda su información?
+              </Text>
+              <View style={styles.deleteModalButtons}>
+                <TouchableOpacity
+                  style={[styles.deleteModalButton, styles.deleteModalButtonCancel]}
+                  onPress={closeDeleteProfileRingModal}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.deleteModalButtonTextCancel}>Cancelar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.deleteModalButton, styles.deleteModalButtonConfirm]}
+                  onPress={confirmDeleteProfileRing}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.deleteModalButtonTextConfirm}>Eliminar</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableWithoutFeedback>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Profile ring location picker modal (Google Maps via react-native-maps) */}
+      <Modal
+        visible={showProfileRingLocationPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={closeProfileRingLocationPicker}
+      >
+        <View style={styles.profileRingLocationModalOverlay}>
+          <View style={styles.profileRingLocationModalCard}>
+            <View style={styles.profileRingLocationModalHeader}>
+              <Text style={styles.profileRingLocationModalTitle}>Selecciona una ubicación</Text>
+              <TouchableOpacity onPress={closeProfileRingLocationPicker} hitSlop={10}>
+                <MaterialIcons name="close" size={22} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.profileRingLocationMapContainer}>
+              {profileRingPickedLatLng && (
+                <MapView
+                  provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+                  ref={(r) => {
+                    profileRingLocationMapRef.current = r;
+                  }}
+                  style={StyleSheet.absoluteFill}
+                  initialRegion={{
+                    latitude: profileRingPickedLatLng.lat,
+                    longitude: profileRingPickedLatLng.lng,
+                    latitudeDelta: 0.01,
+                    longitudeDelta: 0.01,
+                  }}
+                  showsUserLocation
+                  showsMyLocationButton
+                  onRegionChangeComplete={(r) => {
+                    const lat = Number((r as any)?.latitude);
+                    const lng = Number((r as any)?.longitude);
+                    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                      setProfileRingPickedLatLng({ lat, lng });
+                      if (profileRingLocationAutoMoveRef.current) {
+                        profileRingLocationAutoMoveRef.current = false;
+                      } else {
+                        setProfileRingPickedLocationLabel(null);
+                      }
+                    }
+                  }}
+                />
+              )}
+
+              {/* Search overlay */}
+              <View style={styles.profileRingLocationSearchContainer} pointerEvents="box-none">
+                <View style={styles.profileRingLocationSearchBar}>
+                  <MaterialIcons name="search" size={18} color="rgba(255,255,255,0.75)" />
+                  <TextInput
+                    style={styles.profileRingLocationSearchInput}
+                    placeholder={isGooglePlacesSearchConfigured ? 'Buscar ubicación…' : 'Configura GOOGLE_MAPS_API_KEY para buscar…'}
+                    placeholderTextColor="rgba(255,255,255,0.35)"
+                    value={profileRingLocationSearchQuery}
+                    onChangeText={(v) => {
+                      setProfileRingLocationSearchQuery(v);
+                      setProfileRingPickedLocationLabel(null);
+                    }}
+                    editable={isGooglePlacesSearchConfigured}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="search"
+                  />
+                  {isProfileRingLocationSearching ? (
+                    <ActivityIndicator size="small" color="#FFB74D" />
+                  ) : profileRingLocationSearchQuery ? (
+                    <TouchableOpacity
+                      onPress={() => {
+                        setProfileRingLocationSearchQuery('');
+                        setProfileRingLocationPredictions([]);
+                        setProfileRingLocationSearchError('');
+                        Keyboard.dismiss();
+                      }}
+                      hitSlop={10}
+                    >
+                      <MaterialIcons name="close" size={18} color="rgba(255,255,255,0.8)" />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+
+                {!!profileRingLocationSearchError && (
+                  <View style={styles.profileRingLocationSearchErrorRow}>
+                    <Text style={styles.profileRingLocationSearchErrorText}>{profileRingLocationSearchError}</Text>
+                  </View>
+                )}
+
+                {profileRingLocationPredictions.length > 0 && (
+                  <View style={styles.profileRingLocationPredictionsCard}>
+                    <ScrollView keyboardShouldPersistTaps="handled">
+                      {profileRingLocationPredictions.map((p) => (
+                        <TouchableOpacity
+                          key={p.placeId}
+                          style={styles.profileRingLocationPredictionRow}
+                          activeOpacity={0.75}
+                          onPress={() => handleSelectProfileRingLocationPrediction(p.placeId, p.description)}
+                        >
+                          <MaterialIcons name="place" size={16} color="rgba(255,183,77,0.9)" />
+                          <Text style={styles.profileRingLocationPredictionText} numberOfLines={2}>
+                            {p.description}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+
+              {/* Center pin */}
+              <View pointerEvents="none" style={styles.profileRingLocationCenterPin}>
+                <MaterialIcons name="place" size={34} color="#FFB74D" />
+              </View>
+
+              {isProfileRingLocating && (
+                <View style={styles.profileRingLocationLocatingOverlay}>
+                  <ActivityIndicator color="#FFB74D" />
+                  <Text style={styles.profileRingLocationLocatingText}>Obteniendo ubicación…</Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.profileRingLocationModalButtonsRow}>
+              <TouchableOpacity
+                style={[styles.profileRingLocationModalButton, styles.profileRingLocationModalButtonSecondary]}
+                onPress={closeProfileRingLocationPicker}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.profileRingLocationModalButtonText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.profileRingLocationModalButton,
+                  (!profileRingPickedLatLng) && styles.profileRingLocationModalButtonDisabled,
+                ]}
+                onPress={applyProfileRingPickedLocation}
+                disabled={!profileRingPickedLatLng}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.profileRingLocationModalButtonTextPrimary}>Aplicar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Header superior derecho - Descubre (visible cuando Home está activo) */}
       {
@@ -6623,7 +8461,7 @@ const FrontScreen = ({
       {
         activeBottomTab === 'chat' && !selectedChannel && chatView !== 'groupChat' && (
           <View
-            style={[styles.topCenterContainer, { top: ANDROID_STATUS_BAR_HEIGHT + CHAT_TABS_TOP }]}
+            style={[styles.topCenterContainer, { top: ANDROID_SAFE_TOP + CHAT_TABS_TOP }]}
             onLayout={(e) => {
               const { height } = e.nativeEvent.layout;
               if (Number.isFinite(height) && height > 0 && height !== chatTopTabsHeight) {
@@ -6869,6 +8707,12 @@ const FrontScreen = ({
                     const isOverlayVisible = presentationOverlayVisible[pub.id] !== false;
                     const isTextExpanded = expandedProfileTexts[pub.id] || false;
 
+                    const ringsVisible = homeProfileRingsVisibleByPostId[String(pub.id)] === true;
+                    const presentationRings: ProfileRingPoint[] = Array.isArray(pub.presentation?.profileRings)
+                      ? (pub.presentation.profileRings as ProfileRingPoint[])
+                      : [];
+                    const hasPresentationRings = presentationRings.length > 0;
+
                     const trimmedTitle = pub.presentation.title?.trim() ?? '';
                     const trimmedText = pub.presentation.text?.trim() ?? '';
                     const hasTextOverflow = trimmedText.length > PROFILE_TEXT_PREVIEW_LIMIT;
@@ -6876,7 +8720,7 @@ const FrontScreen = ({
                       ? trimmedText
                       : trimmedText.slice(0, PROFILE_TEXT_PREVIEW_LIMIT);
 
-                    const isJoined = myChannels.some(ch => ch.publisher_email === pub.user.email);
+                    const isJoined = myChannels.some(ch => String(ch?.post_id ?? ch?.postId ?? ch?.id) === String(pub.id));
 
                     // Initialize animations if not present
                     if (!publicationAnimations.current[pub.id]) {
@@ -7108,13 +8952,60 @@ const FrontScreen = ({
                                         styles.carouselImageFrame,
                                         item.aspectRatio === '3:4' ? styles.carouselImageFramePortrait : styles.carouselImageFrameSquare,
                                         { width: '100%' }
-                                      ]}>
+                                      ]}
+                                        onLayout={(e) => {
+                                          const { width, height } = e.nativeEvent.layout;
+                                          setHomePresentationImageLayout(pub.id, index, width, height);
+                                        }}
+                                      >
                                         <Image
                                           source={{ uri: getServerResourceUrl(item.uri) }}
                                           style={styles.carouselImage}
                                           onLoadEnd={() => markHomePresentationImageLoaded(pub.id, index)}
                                           onError={() => markHomePresentationImageLoaded(pub.id, index)}
                                         />
+
+                                        {(() => {
+                                          if (!hasPresentationRings || !ringsVisible) return null;
+                                          const layout = homePresentationImageLayouts[String(pub.id)]?.[index];
+                                          if (!layout) return null;
+
+                                          const ringSize = 18;
+                                          const ringRadius = ringSize / 2;
+                                          const points = presentationRings.filter(p => Number(p?.imageIndex) === index);
+                                          if (points.length === 0) return null;
+
+                                          return points.map((p) => {
+                                            const x = Number(p?.x);
+                                            const y = Number(p?.y);
+                                            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+                                            const left = Math.max(0, Math.min(layout.width - ringSize, x * layout.width - ringRadius));
+                                            const top = Math.max(0, Math.min(layout.height - ringSize, y * layout.height - ringRadius));
+
+                                            return (
+                                                <Pressable
+                                                key={String(p.id)}
+                                                  onPress={() => {
+                                                    homeRingTapSuppressUntilRef.current[String(pub.id)] = Date.now() + 350;
+                                                    openHomeProfileRingViewerPanelFromRing(p as ProfileRingPoint);
+                                                  }}
+                                                  hitSlop={10}
+                                                style={{
+                                                  position: 'absolute',
+                                                  left,
+                                                  top,
+                                                  width: ringSize,
+                                                  height: ringSize,
+                                                  borderRadius: ringRadius,
+                                                  borderWidth: 3,
+                                                  borderColor: p.color || '#FFFFFF',
+                                                  backgroundColor: withHexAlpha(p.color || '#FFFFFF', 0.4),
+                                                }}
+                                              />
+                                            );
+                                          });
+                                        })()}
 
                                         {/* Double Tap Animation */}
                                         {pubDoubleTap.visible && (
@@ -7205,13 +9096,32 @@ const FrontScreen = ({
 
                             <View style={[styles.profileMetaContainer, { paddingBottom: 0 }]}>
                               <View style={styles.profileLikeRow}>
-                                <CountdownTimer
-                                  createdAt={pub.createdAt}
-                                  onExpire={() => {
-                                    // Eliminar localmente cuando expire
-                                    setPublications(prev => prev.filter(p => p.id !== pub.id));
-                                  }}
-                                />
+                                <View style={{ position: 'absolute', left: 0, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                  <TouchableOpacity
+                                    activeOpacity={0.7}
+                                    onPress={() => {
+                                      if (!hasPresentationRings) return;
+                                      toggleHomeProfileRingsVisible(String(pub.id));
+                                    }}
+                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                    style={{ paddingVertical: 2, paddingHorizontal: 2, opacity: hasPresentationRings ? 1 : 0.35 }}
+                                  >
+                                    <GradientIcon
+                                      name="panorama-fish-eye"
+                                      size={16}
+                                      colors={['#FFB74D', '#ffe45c']}
+                                    />
+                                  </TouchableOpacity>
+
+                                  <CountdownTimer
+                                    createdAt={pub.createdAt}
+                                    style={{ color: '#6e6e6eff', fontSize: 12 }}
+                                    onExpire={() => {
+                                      // Eliminar localmente cuando expire
+                                      setPublications(prev => prev.filter(p => p.id !== pub.id));
+                                    }}
+                                  />
+                                </View>
                                 <View style={styles.profileLikeGroup}>
                                   {pub.reactions.selected.map((emoji, index) => (
                                     <TouchableOpacity
@@ -7903,21 +9813,73 @@ const FrontScreen = ({
                                         : styles.carouselImageFrameSquare,
                                       { width: '100%' }
                                     ]}>
-                                    <TouchableWithoutFeedback>
-                                      <View style={{ width: '100%', height: '100%' }}>
-                                        <Image
-                                          source={{ uri: getServerResourceUrl(item.uri) }}
-                                          style={styles.carouselImage}
-                                          resizeMode="cover"
-                                          onLoadEnd={() => markProfilePresentationImageLoaded(index)}
-                                          onError={() => markProfilePresentationImageLoaded(index)}
-                                        />
-                                      </View>
-                                    </TouchableWithoutFeedback>
+                                    <Pressable
+                                      style={{ width: '100%', height: '100%' }}
+                                      onLayout={(e) => {
+                                        const { width, height } = e.nativeEvent.layout;
+                                        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+                                        setProfileCarouselImageLayouts(prev => {
+                                          const prevEntry = prev[index];
+                                          if (prevEntry && prevEntry.width === width && prevEntry.height === height) return prev;
+                                          return { ...prev, [index]: { width, height } };
+                                        });
+                                      }}
+                                      onPress={(e) => handleProfileCarouselImagePress(index, e)}
+                                    >
+                                      <Image
+                                        source={{ uri: getServerResourceUrl(item.uri) }}
+                                        style={styles.carouselImage}
+                                        resizeMode="cover"
+                                        onLoadEnd={() => markProfilePresentationImageLoaded(index)}
+                                        onError={() => markProfilePresentationImageLoaded(index)}
+                                      />
+                                      {(() => {
+                                        const layout = profileCarouselImageLayouts[index];
+                                        if (!layout) return null;
+
+                                        const ringSize = 18;
+                                        const ringRadius = ringSize / 2;
+                                        const points = profileRingPoints.filter(p => p.imageIndex === index);
+                                        if (points.length === 0) return null;
+
+                                        return points.map(p => {
+                                          const left = Math.max(0, Math.min(layout.width - ringSize, p.x * layout.width - ringRadius));
+                                          const top = Math.max(0, Math.min(layout.height - ringSize, p.y * layout.height - ringRadius));
+                                          return (
+                                            <Pressable
+                                              key={p.id}
+                                              onPress={() => handleProfileRingPress(p.id)}
+                                              hitSlop={10}
+                                              style={{
+                                                position: 'absolute',
+                                                left,
+                                                top,
+                                                width: ringSize,
+                                                height: ringSize,
+                                                borderRadius: ringRadius,
+                                                borderWidth: 3,
+                                                borderColor: p.color || '#FFFFFF',
+                                                backgroundColor: withHexAlpha(p.color || '#FFFFFF', 0.4),
+                                              }}
+                                            />
+                                          );
+                                        });
+                                      })()}
+                                    </Pressable>
                                   </View>
                                 </View>
                               )}
                             />
+
+                            {showProfileRingHint && (
+                              <View style={styles.profileRingHintOverlay} pointerEvents="none">
+                                <View style={styles.profileRingHintPill}>
+                                  <Text style={styles.profileRingHintText}>
+                                    {profileRingHintMessage}
+                                  </Text>
+                                </View>
+                              </View>
+                            )}
 
                             <View style={styles.profilePresentationOverlay} pointerEvents="box-none">
                               {isPresentationOverlayVisible && (
@@ -7967,17 +9929,31 @@ const FrontScreen = ({
 
                           <View style={[styles.profileMetaContainer, { paddingBottom: 0 }]}>
                             <View style={styles.profileLikeRow}>
-                              {isPublished && myPublication ? (
-                                <CountdownTimer
-                                  createdAt={myPublication.createdAt}
-                                  style={{ position: 'absolute', left: 0, color: '#6e6e6eff', fontSize: 12 }}
-                                  onExpire={() => {
-                                    void confirmDeletePublication('expire');
-                                  }}
-                                />
-                              ) : (
-                                <Text style={{ position: 'absolute', left: 0, color: '#6e6e6eff', fontSize: 12 }}>{t('front.time' as TranslationKey)}</Text>
-                              )}
+                              <View style={{ position: 'absolute', left: 0, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                <TouchableOpacity
+                                  activeOpacity={0.7}
+                                  onPress={handleProfileRingIconPress}
+                                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                  style={{ paddingVertical: 2, paddingHorizontal: 2 }}
+                                >
+                                  <GradientIcon
+                                    name="panorama-fish-eye"
+                                    size={16}
+                                    colors={['#FFB74D', '#ffe45c']}
+                                  />
+                                </TouchableOpacity>
+                                {isPublished && myPublication ? (
+                                  <CountdownTimer
+                                    createdAt={myPublication.createdAt}
+                                    style={{ color: '#6e6e6eff', fontSize: 12 }}
+                                    onExpire={() => {
+                                      void confirmDeletePublication('expire');
+                                    }}
+                                  />
+                                ) : (
+                                  <Text style={{ color: '#6e6e6eff', fontSize: 12 }}>{t('front.time' as TranslationKey)}</Text>
+                                )}
+                              </View>
                               <View style={styles.profileLikeGroup}>
                                 {!isPublished && (
                                   <TouchableOpacity
@@ -10232,7 +12208,7 @@ const FrontScreen = ({
 
                   {channelTab === 'Tu canal' ? (
                     (!userPublication && !selectedChannel) ? (
-                      <View style={[styles.scrollContainer, { paddingTop: 0, paddingBottom: 0, marginTop: 60, flex: 1 }]}>
+                      <View style={[styles.scrollContainer, { paddingTop: 0, paddingBottom: 0, marginTop: chatPanelsTopOffset, flex: 1 }]}>
                         <View style={[styles.chatContainer, { flex: 1, justifyContent: 'center' }]}>
                           <View style={styles.emptyStateContainer}>
                             <MaterialIcons name="forum" size={60} color="rgba(255, 255, 255, 0.3)" />
@@ -10385,9 +12361,10 @@ const FrontScreen = ({
                           };
 
                           return (
-                            <FlatList
+                            <View style={{ flex: 1, marginTop: chatPanelsTopOffset, overflow: 'hidden' }}>
+                              <FlatList
                               key={`channel-chat-${channelChatMountKey}-${String(selectedChannel?.post_id ?? selectedChannel?.postId ?? selectedChannel?.id ?? userPublication?.id ?? 'none')}`}
-                              style={[styles.scrollContainer, { paddingTop: 0, paddingBottom: 0, marginTop: 60, flex: 1 }]}
+                              style={[styles.scrollContainer, { paddingTop: 0, paddingBottom: 0, flex: 1 }]}
                               contentContainerStyle={{
                                 flexGrow: 1,
                                 justifyContent: 'flex-end',
@@ -10724,6 +12701,7 @@ const FrontScreen = ({
                             )
                           }}
                             />
+                            </View>
                           );
                         })()
                     )
@@ -10865,18 +12843,75 @@ const FrontScreen = ({
                                         {getCategoryLabel(channel.category)}
                                       </Text>
                                     </View>
-                                    <CountdownTimer
-                                      createdAt={channel.post_created_at}
-                                      style={{ color: '#AAA', fontSize: 12 }}
-                                      onExpire={() => {
-                                        setMyChannels(prev => prev.filter(c => String(
-                                          c.post_id ??
-                                          c.postId ??
-                                          c.id ??
-                                          `${c.publisher_email ?? 'unknown'}-${c.post_created_at ?? ''}`
-                                        ) !== channelKey));
-                                      }}
-                                    />
+                                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
+                                        <CountdownTimer
+                                          createdAt={channel.post_created_at}
+                                          style={{ color: '#AAA', fontSize: 12 }}
+                                          onExpire={() => {
+                                            setActiveJoinedChannelOptionsKey(prev => (prev === channelKey ? null : prev));
+                                            setMyChannels(prev => prev.filter(c => String(
+                                              c.post_id ??
+                                              c.postId ??
+                                              c.id ??
+                                              `${c.publisher_email ?? 'unknown'}-${c.post_created_at ?? ''}`
+                                            ) !== channelKey));
+                                          }}
+                                        />
+
+                                        <View style={{ position: 'relative', marginLeft: 6, zIndex: 120, elevation: 12 }}>
+                                          <TouchableOpacity
+                                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                            activeOpacity={0.8}
+                                            onPress={() => {
+                                              setActiveJoinedChannelOptionsKey(prev => prev === channelKey ? null : channelKey);
+                                            }}
+                                            style={{ paddingVertical: 2, paddingHorizontal: 2 }}
+                                            accessibilityRole="button"
+                                            accessibilityLabel="Opciones"
+                                          >
+                                            <MaterialIcons name="more-vert" size={18} color="rgba(255,255,255,0.75)" />
+                                          </TouchableOpacity>
+
+                                          {activeJoinedChannelOptionsKey === channelKey && (
+                                            <View
+                                              style={{
+                                                position: 'absolute',
+                                                top: -6,
+                                                right: 22,
+                                                backgroundColor: '#1E1E1E',
+                                                borderRadius: 10,
+                                                borderWidth: 1,
+                                                borderColor: 'rgba(255,255,255,0.12)',
+                                                overflow: 'hidden',
+                                                zIndex: 220,
+                                                elevation: 16,
+                                                minWidth: 150,
+                                              }}
+                                            >
+                                              <TouchableOpacity
+                                                style={{ paddingVertical: 10, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center' }}
+                                                onPress={() => leaveJoinedChannel(channel)}
+                                              >
+                                                <Text style={{ color: '#ffffffff', fontSize: 14 }}>Salir</Text>
+                                              </TouchableOpacity>
+
+                                              <TouchableOpacity
+                                                style={{ paddingVertical: 10, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center' }}
+                                                onPress={() => leaveAndBlockJoinedChannel(channel)}
+                                              >
+                                                <Text style={{ color: '#ffb74dff', fontSize: 14, fontWeight: '700' }}>Salir y bloquear</Text>
+                                              </TouchableOpacity>
+
+                                              <TouchableOpacity
+                                                style={{ paddingVertical: 10, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center' }}
+                                                onPress={() => reportJoinedChannel(channel)}
+                                              >
+                                                <Text style={{ color: '#ffffffff', fontSize: 14 }}>{t('common.report' as TranslationKey)}</Text>
+                                              </TouchableOpacity>
+                                            </View>
+                                          )}
+                                        </View>
+                                      </View>
                                   </View>
 
                                   <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6 }}>
@@ -13805,7 +15840,7 @@ const styles = StyleSheet.create({
   },
   topLeftContainer: {
     position: 'absolute',
-    top: ANDROID_STATUS_BAR_HEIGHT + 20,
+    top: ANDROID_SAFE_TOP + 20,
     left: 20,
     zIndex: 10,
     flexDirection: 'row',
@@ -13813,7 +15848,7 @@ const styles = StyleSheet.create({
   },
   topCenterContainer: {
     position: 'absolute',
-    top: ANDROID_STATUS_BAR_HEIGHT + 10,
+    top: ANDROID_SAFE_TOP + 10,
     left: 0,
     right: 0,
     zIndex: 1000,
@@ -13824,7 +15859,7 @@ const styles = StyleSheet.create({
   },
   topRightContainer: {
     position: 'absolute',
-    top: ANDROID_STATUS_BAR_HEIGHT + 20,
+    top: ANDROID_SAFE_TOP + 20,
     right: 20,
     zIndex: 10,
     alignItems: 'center',
@@ -14289,7 +16324,7 @@ const styles = StyleSheet.create({
   // Estilos para pantalla Profile
   profileScreenContainer: {
     flex: 1,
-    paddingTop: Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT + 68 : 68,
+    paddingTop: Platform.OS === 'android' ? ANDROID_SAFE_TOP + 68 : 68,
     paddingBottom: 68,
     paddingHorizontal: 2,
   },
@@ -14613,6 +16648,31 @@ const styles = StyleSheet.create({
     bottom: 0,
     padding: 20,
     justifyContent: 'flex-end',
+  },
+  profileRingHintOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  profileRingHintPill: {
+    maxWidth: 360,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.6)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  profileRingHintText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   profilePresentationOverlayContent: {
     backgroundColor: 'rgba(45, 27, 14, 0.54)',
@@ -15298,6 +17358,453 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     textAlignVertical: 'center',
     includeFontPadding: false,
+  },
+
+  profileRingColorPanel: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#000000',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#FFB74D',
+    zIndex: 1000,
+    paddingTop: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+    maxHeight: Math.round(SCREEN_HEIGHT * 0.62),
+  },
+  profileRingViewerPanel: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#000000',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderTopWidth: 2,
+    borderTopColor: '#FFB74D',
+    zIndex: 1000,
+    paddingTop: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+    maxHeight: Math.round(SCREEN_HEIGHT * 0.62),
+  },
+  profileRingViewerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    gap: 10,
+  },
+  profileRingViewerColorDot: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 3,
+    backgroundColor: 'transparent',
+  },
+  profileRingViewerHeaderTitle: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+    maxWidth: Math.round(SCREEN_WIDTH * 0.62),
+  },
+  profileRingViewerScrollContent: {
+    paddingBottom: 10,
+  },
+  profileRingViewerAdContainer: {
+    marginTop: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 52,
+  },
+  profileRingViewerName: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '900',
+    marginBottom: 10,
+    textAlign: 'justify',
+  },
+  profileRingViewerDescription: {
+    color: 'rgba(255, 255, 255, 0.86)',
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'justify',
+  },
+  profileRingViewerMetaSection: {
+    marginTop: 16,
+  },
+  profileRingViewerMetaLabel: {
+    color: 'rgba(255, 255, 255, 0.75)',
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  profileRingViewerMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
+    backgroundColor: '#000000',
+    borderRadius: 12,
+  },
+  profileRingViewerLinkLogo: {
+    width: 18,
+    height: 18,
+    resizeMode: 'contain',
+  },
+  profileRingViewerMetaText: {
+    flex: 1,
+    color: 'rgba(255, 255, 255, 0.86)',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  profileRingColorPanelHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  profileRingApplyAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 2,
+    position: 'relative',
+  },
+  profileRingApplyActionText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  profileRingApplyActionDisabledOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    borderRadius: 10,
+  },
+  profileRingDeleteAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 2,
+  },
+  profileRingDeleteActionText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  profileRingColorOptionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+  },
+  profileRingColorOptionOuter: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileRingColorOptionOuterSelected: {
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.95)',
+  },
+  profileRingColorOptionInner: {
+    borderWidth: 3,
+    backgroundColor: 'transparent',
+  },
+  profileRingPanelScroll: {
+    flexGrow: 0,
+  },
+  profileRingPanelScrollContent: {
+    paddingBottom: 8,
+  },
+  profileRingMetaContainer: {
+    marginTop: 16,
+    paddingHorizontal: 4,
+  },
+  profileRingFieldLabel: {
+    color: '#FFFFFF',
+    opacity: 0.9,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  profileRingFieldHelper: {
+    color: 'rgba(255, 255, 255, 0.55)',
+    fontSize: 10,
+    fontWeight: '400',
+    marginTop: -2,
+    marginBottom: 10,
+  },
+  profileRingTextInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0)',
+    borderRadius: 8,
+    padding: 12,
+    color: '#FFFFFF',
+    fontSize: 14,
+    borderWidth: 1,
+    borderColor: '#FFB74D',
+  },
+  profileRingTextArea: {
+    minHeight: 92,
+    maxHeight: 160,
+  },
+  profileRingLinkLocationContainer: {
+    marginTop: 14,
+  },
+  profileRingLinkLocationBlock: {
+    paddingVertical: 6,
+  },
+  profileRingLinkLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+  },
+  profileRingLinkLocationHelper: {
+    color: 'rgba(255, 255, 255, 0.55)',
+    fontSize: 12,
+    fontWeight: '400',
+    marginTop: -6,
+    marginLeft: 28,
+    lineHeight: 16,
+  },
+  profileRingLinkPreviewText: {
+    color: 'rgba(255, 255, 255, 0.72)',
+    fontSize: 12,
+    fontWeight: '500',
+    marginLeft: 10,
+  },
+  profileRingLinkPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    marginLeft: 28,
+    paddingRight: 6,
+    gap: 8,
+  },
+  profileRingPreviewRemoveBtn: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+  },
+  profileRingLinkedIcon: {
+    width: 22,
+    height: 22,
+    resizeMode: 'contain',
+  },
+  profileRingLocationPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    marginLeft: 28,
+    gap: 8,
+    paddingRight: 6,
+  },
+  profileRingLocationPreviewText: {
+    color: 'rgba(255, 255, 255, 0.72)',
+    fontSize: 12,
+    fontWeight: '500',
+    flex: 1,
+  },
+  profileRingLocationModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  profileRingLocationModalCard: {
+    width: '100%',
+    maxWidth: 520,
+    backgroundColor: '#000000',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.55)',
+    overflow: 'hidden',
+  },
+  profileRingLocationModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 183, 77, 0.22)',
+  },
+  profileRingLocationModalTitle: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  profileRingLocationMapContainer: {
+    width: '100%',
+    height: Math.round(SCREEN_HEIGHT * 0.45),
+    backgroundColor: '#111111',
+  },
+  profileRingLocationSearchContainer: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    top: 12,
+  },
+  profileRingLocationSearchBar: {
+    backgroundColor: 'rgba(0,0,0,0.78)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.28)',
+    paddingHorizontal: 12,
+    height: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  profileRingLocationSearchInput: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 13,
+    paddingVertical: 0,
+  },
+  profileRingLocationSearchErrorRow: {
+    marginTop: 8,
+    backgroundColor: 'rgba(216, 67, 21, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(216, 67, 21, 0.35)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  profileRingLocationSearchErrorText: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  profileRingLocationPredictionsCard: {
+    marginTop: 8,
+    backgroundColor: 'rgba(0,0,0,0.88)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.22)',
+    overflow: 'hidden',
+    maxHeight: 220,
+  },
+  profileRingLocationPredictionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  profileRingLocationPredictionText: {
+    flex: 1,
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 16,
+  },
+  profileRingLocationCenterPin: {
+    position: 'absolute',
+    left: '50%',
+    top: '50%',
+    transform: [{ translateX: -17 }, { translateY: -34 }],
+  },
+  profileRingLocationLocatingOverlay: {
+    position: 'absolute',
+    left: 12,
+    top: 12,
+    right: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  profileRingLocationLocatingText: {
+    color: '#FFFFFF',
+    opacity: 0.9,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  profileRingLocationModalButtonsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  profileRingLocationModalButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: '#FFB74D',
+    minWidth: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileRingLocationModalButtonSecondary: {
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.35)',
+  },
+  profileRingLocationModalButtonDisabled: {
+    backgroundColor: 'rgba(255, 183, 77, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.2)',
+  },
+  profileRingLocationModalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  profileRingLocationModalButtonTextPrimary: {
+    color: '#2D1B0E',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  profileRingLinkPickerContainer: {
+    marginTop: 12,
+    paddingTop: 8,
+    paddingBottom: 6,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 183, 77, 0.25)',
+  },
+  profileRingLinkInputContainer: {
+    width: '100%',
+    paddingHorizontal: 6,
+    marginTop: 4,
+  },
+  profileRingLinkApplyButton: {
+    alignSelf: 'center',
+    marginTop: 12,
+  },
+  profileRingSocialIcon: {
+    width: 28,
+    height: 28,
+    resizeMode: 'contain',
+  },
+  profileRingLinkLocationText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
 
   galleryPermissionOverlay: {

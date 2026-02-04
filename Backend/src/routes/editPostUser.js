@@ -145,4 +145,81 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
+// =========================================================
+// Profile rings (stored inside presentation.profileRings)
+// Only persists rings that are already "created" by the user.
+// =========================================================
+
+router.get('/profile-rings', authenticateToken, async (req, res) => {
+  const userEmail = req.user.email;
+
+  try {
+    const result = await pool.query(
+      `SELECT COALESCE(presentation -> 'profileRings', '[]'::jsonb) AS rings
+       FROM Edit_post_user
+       WHERE user_email = $1
+       LIMIT 1`,
+      [userEmail]
+    );
+
+    if ((result.rows?.length || 0) === 0) {
+      return res.json({ rings: [] });
+    }
+
+    return res.json({ rings: result.rows[0]?.rings ?? [] });
+  } catch (error) {
+    console.error('Error al obtener profile rings:', error);
+    return res.status(500).json({ error: 'Error al obtener profile rings' });
+  }
+});
+
+router.put('/profile-rings', authenticateToken, async (req, res) => {
+  const userEmail = req.user.email;
+  const raw = (req.body && req.body.rings) ?? [];
+
+  const rings = Array.isArray(raw) ? raw : [];
+  const createdRings = rings
+    .filter((r) => r && r.isCreated === true)
+    .slice(0, 5)
+    .map((r) => ({
+      id: String(r.id || ''),
+      imageIndex: Number.isFinite(Number(r.imageIndex)) ? Number(r.imageIndex) : 0,
+      x: Number.isFinite(Number(r.x)) ? Number(r.x) : 0.5,
+      y: Number.isFinite(Number(r.y)) ? Number(r.y) : 0.5,
+      color: String(r.color || '#FFFFFF'),
+      colorSelected: r.colorSelected === true,
+      name: String(r.name || ''),
+      description: String(r.description || ''),
+      linkNetwork: r.linkNetwork ? String(r.linkNetwork) : null,
+      linkUrl: String(r.linkUrl || ''),
+      locationLabel: String(r.locationLabel || ''),
+      locationUrl: String(r.locationUrl || ''),
+      locationPlaceId: r.locationPlaceId ? String(r.locationPlaceId) : null,
+      locationLat: r.locationLat === null || r.locationLat === undefined ? null : Number(r.locationLat),
+      locationLng: r.locationLng === null || r.locationLng === undefined ? null : Number(r.locationLng),
+      isCreated: true,
+    }))
+    .filter((r) => r.id);
+
+  try {
+    const ringsJson = JSON.stringify(createdRings);
+
+    const result = await pool.query(
+      `INSERT INTO Edit_post_user (user_email, presentation)
+       VALUES ($2, jsonb_build_object('profileRings', $1::jsonb))
+       ON CONFLICT (user_email) DO UPDATE
+       SET presentation = COALESCE(Edit_post_user.presentation, '{}'::jsonb)
+                        || jsonb_build_object('profileRings', $1::jsonb),
+           updated_at = CURRENT_TIMESTAMP
+       RETURNING COALESCE(presentation -> 'profileRings', '[]'::jsonb) AS rings`,
+      [ringsJson, userEmail]
+    );
+
+    return res.json({ ok: true, rings: result.rows?.[0]?.rings ?? [] });
+  } catch (error) {
+    console.error('Error al guardar profile rings:', error);
+    return res.status(500).json({ error: 'Error al guardar profile rings' });
+  }
+});
+
 module.exports = router;

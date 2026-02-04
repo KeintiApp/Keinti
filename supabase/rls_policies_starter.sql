@@ -230,7 +230,7 @@ create or replace function public.trg_set_rectification_review_fields()
 returns trigger
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog
 as $$
 begin
   if new.status is distinct from old.status and new.status in ('accepted', 'rejected') then
@@ -249,7 +249,7 @@ create or replace function public.trg_unlock_email_on_rectification_accept()
 returns trigger
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog
 set row_security = off
 as $$
 begin

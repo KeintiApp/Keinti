@@ -126,6 +126,34 @@ router.post('/enter', authenticateToken, async (req, res) => {
   }
 });
 
+// Salir de un canal (Desuscribirse)
+router.delete('/leave/:postId', authenticateToken, async (req, res) => {
+  const viewerEmail = req.user.email;
+  const { postId } = req.params;
+
+  const numericPostId = Number(postId);
+  if (!Number.isFinite(numericPostId)) {
+    return res.status(400).json({ error: 'postId inválido' });
+  }
+
+  try {
+    const result = await pool.query(
+      'DELETE FROM channel_subscriptions WHERE viewer_email = $1 AND post_id = $2',
+      [viewerEmail, numericPostId]
+    );
+
+    // pg returns rowCount for DELETE
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'No estabas suscrito a este canal' });
+    }
+
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Error al salir del canal:', error);
+    return res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
 // Obtener mis canales (Canales donde soy viewer)
 router.get('/my-channels', authenticateToken, async (req, res) => {
   const viewerEmail = req.user.email;

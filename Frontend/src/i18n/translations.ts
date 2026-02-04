@@ -20,6 +20,7 @@ export type TranslationKey =
   | 'common.block'
   | 'common.check'
   | 'common.apply'
+  | 'common.create'
 
   | 'auth.sessionRequiredTitle'
   | 'auth.signInToBlockUsers'
@@ -37,6 +38,8 @@ export type TranslationKey =
   | 'report.reason.spam'
   | 'report.reason.impersonation'
   | 'report.reason.illegalContent'
+  | 'report.reason.childSexualAbuse'
+  | 'report.reason.weaponsOrDrugsIncitement'
   | 'report.reason.inappropriateConduct'
   | 'report.reason.other'
 
@@ -150,6 +153,16 @@ export type TranslationKey =
   | 'front.loadingImages'
   | 'front.profileEmptyPrimaryMessage'
   | 'front.profileEmptySecondaryMessage'
+  | 'front.profileRingHintSelect'
+  | 'front.profileRingHintMaxRings'
+  | 'front.profileRingDelete'
+  | 'front.profileRingNameLabel'
+  | 'front.profileRingNameHelper'
+  | 'front.profileRingDescriptionLabel'
+  | 'front.profileRingLinkLabel'
+  | 'front.profileRingLinkHelper'
+  | 'front.profileRingLocationLabel'
+  | 'front.profileRingLocationHelper'
 
   | 'profile.deleteContentTitle'
   | 'profile.deleteContentBody'
@@ -289,6 +302,7 @@ export type TranslationKey =
   | 'accountCenter.deleteAccount'
   | 'accountCenter.deleteAccountConfirmTitle'
   | 'accountCenter.deleteAccountConfirmBody'
+  | 'accountCenter.accountDeletionPolicyLink'
 
   | 'personalData.title'
   | 'personalData.description'
@@ -303,6 +317,8 @@ export type TranslationKey =
   | 'securityControl.privacyPolicy'
   | 'securityControl.cookiesAdPolicy'
   | 'securityControl.termsOfUse'
+  | 'securityControl.childSafetyStandards'
+  | 'securityControl.accountDeletionPolicy'
   | 'securityControl.verifyYourKeinti'
 
   | 'accountAuth.description'
@@ -401,6 +417,7 @@ const es: Record<TranslationKey, string> = {
   'common.block': 'Bloquear',
   'common.check': 'Comprobar',
   'common.apply': 'Aplicar',
+  'common.create': 'Crear',
 
   'auth.sessionRequiredTitle': 'Sesión requerida',
   'auth.signInToBlockUsers': 'Inicia sesión para bloquear usuarios.',
@@ -418,6 +435,8 @@ const es: Record<TranslationKey, string> = {
   'report.reason.spam': 'Spam',
   'report.reason.impersonation': 'Suplantación de identidad',
   'report.reason.illegalContent': 'Contenido ilegal',
+  'report.reason.childSexualAbuse': 'Abuso/sexualización infantil',
+  'report.reason.weaponsOrDrugsIncitement': 'Incitación al uso de armas/drogas',
   'report.reason.inappropriateConduct': 'Conducta inapropiada',
   'report.reason.other': 'Otros',
 
@@ -529,6 +548,16 @@ const es: Record<TranslationKey, string> = {
 
   'front.profileEmptyPrimaryMessage': "Agrega 'Tu presentación' y al menos una 'Intimidad' para publicar tu perfil",
   'front.profileEmptySecondaryMessage': 'Al publicar tu perfil, otros usuarios podrán acceder a tu canal, donde podrás compartir contenido e interactuar con ellos',
+  'front.profileRingHintSelect': 'Selecciona una parte de una de las imágenes del carrusel',
+  'front.profileRingHintMaxRings': 'Máximo alcanzado: 5 aros',
+  'front.profileRingDelete': 'Eliminar aro',
+  'front.profileRingNameLabel': 'Nombre (máximo 38 caracteres)',
+  'front.profileRingNameHelper': 'Nombre del producto, empresa, usuario, canal, post, contenido, etc',
+  'front.profileRingDescriptionLabel': 'Descripción (máximo 280 caracteres)',
+  'front.profileRingLinkLabel': 'Enlace',
+  'front.profileRingLinkHelper': 'Añade un enlace a una red social para que los usuarios tengan acceso al producto, la empresa, el usuario, el canal, el contenido, etc.',
+  'front.profileRingLocationLabel': 'Ubicación',
+  'front.profileRingLocationHelper': 'Añade una ubicación',
 
   'profile.deleteContentTitle': 'Eliminar contenido',
   'profile.deleteContentBody': '¿Estás seguro de que quieres eliminar este contenido de tu perfil?',
@@ -681,6 +710,7 @@ Equipo Keinti`,
   'accountCenter.deleteAccount': 'Eliminar cuenta',
   'accountCenter.deleteAccountConfirmTitle': 'Eliminar cuenta',
   'accountCenter.deleteAccountConfirmBody': '¿Seguro que quieres eliminar tu cuenta? Esta acción es irreversible y eliminará tus datos del sistema.',
+  'accountCenter.accountDeletionPolicyLink': 'Ver política de eliminación de cuenta',
 
   'personalData.title': 'Datos personales',
   'personalData.description': 'Keinti usa esta información para verificar tu identidad y para mantener segura a la comunidad.',
@@ -695,6 +725,8 @@ Equipo Keinti`,
   'securityControl.privacyPolicy': 'Política de privacidad',
   'securityControl.cookiesAdPolicy': 'Política de Cookies y Publicidad',
   'securityControl.termsOfUse': 'Términos y condiciones de uso',
+  'securityControl.childSafetyStandards': 'Estándares de seguridad infantil',
+  'securityControl.accountDeletionPolicy': 'Política de eliminación de cuenta',
   'securityControl.verifyYourKeinti': 'Verifica tu Keinti',
 
   'accountAuth.description': 'Para autenticar tu cuenta debes completar 2 pasos: selfie de verificación y código de Google Authenticator. La revisión del selfie puede tardar hasta 24 horas.',
@@ -798,6 +830,7 @@ const en: Record<TranslationKey, string> = {
   'common.block': 'Block',
   'common.check': 'Check',
   'common.apply': 'Apply',
+  'common.create': 'Create',
 
   'auth.sessionRequiredTitle': 'Session required',
   'auth.signInToBlockUsers': 'Sign in to block users.',
@@ -815,6 +848,8 @@ const en: Record<TranslationKey, string> = {
   'report.reason.spam': 'Spam',
   'report.reason.impersonation': 'Impersonation',
   'report.reason.illegalContent': 'Illegal content',
+  'report.reason.childSexualAbuse': 'Child sexual abuse/exploitation',
+  'report.reason.weaponsOrDrugsIncitement': 'Incitement to use weapons/drugs',
   'report.reason.inappropriateConduct': 'Inappropriate conduct',
   'report.reason.other': 'Other',
 
@@ -942,6 +977,16 @@ const en: Record<TranslationKey, string> = {
 
   'front.profileEmptyPrimaryMessage': "Add 'Your presentation' and at least one 'Intimacy' to publish your profile",
   'front.profileEmptySecondaryMessage': 'By publishing your profile, other users will be able to access your channel, where you can share content and interact with them',
+  'front.profileRingHintSelect': 'Select a part of one of the carousel images',
+  'front.profileRingHintMaxRings': 'Max reached: 5 rings',
+  'front.profileRingDelete': 'Delete ring',
+  'front.profileRingNameLabel': 'Name (max 38 characters)',
+  'front.profileRingNameHelper': 'Product, company, user, channel, content, etc',
+  'front.profileRingDescriptionLabel': 'Description (max 280 characters)',
+  'front.profileRingLinkLabel': 'Link',
+  'front.profileRingLinkHelper': 'Add a social network link so users can access the product, company, user, channel, post, content, etc.',
+  'front.profileRingLocationLabel': 'Location',
+  'front.profileRingLocationHelper': 'Add a location',
 
   'profile.deleteContentTitle': 'Delete content',
   'profile.deleteContentBody': 'Are you sure you want to delete this content from your profile?',
@@ -1094,6 +1139,7 @@ Keinti Team`,
   'accountCenter.deleteAccount': 'Delete account',
   'accountCenter.deleteAccountConfirmTitle': 'Delete account',
   'accountCenter.deleteAccountConfirmBody': 'Are you sure you want to delete your account? This action is irreversible and will remove your data from the system.',
+  'accountCenter.accountDeletionPolicyLink': 'View account deletion policy',
 
   'personalData.title': 'Personal data',
   'personalData.description': 'Keinti uses this information to verify your identity and to keep the community safe.',
@@ -1108,6 +1154,8 @@ Keinti Team`,
   'securityControl.privacyPolicy': 'Privacy policy',
   'securityControl.cookiesAdPolicy': 'Cookies and advertising policy',
   'securityControl.termsOfUse': 'Terms of use',
+  'securityControl.childSafetyStandards': 'Child safety standards',
+  'securityControl.accountDeletionPolicy': 'Account deletion policy',
   'securityControl.verifyYourKeinti': 'Verify your Keinti',
 
   'accountAuth.description': 'To authenticate your account you must complete 2 steps: a verification selfie and a Google Authenticator code. Selfie review can take up to 24 hours.',

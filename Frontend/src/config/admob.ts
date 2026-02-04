@@ -21,6 +21,10 @@ export const REWARDED_AD_UNIT_ID = __DEV__
   ? TestIds.REWARDED
   : 'ca-app-pub-2435078373922090/5255020970';
 
+export const BANNER_AD_UNIT_ID = __DEV__
+  ? TestIds.BANNER
+  : 'REPLACE_WITH_YOUR_BANNER_AD_UNIT_ID';
+
 // Native Ads are the AdMob format intended for image/text creatives.
 // Use a real Native Ad unit id in production.
 export const NATIVE_AD_UNIT_ID = __DEV__ ? TestIds.NATIVE : 'REPLACE_WITH_YOUR_NATIVE_AD_UNIT_ID';

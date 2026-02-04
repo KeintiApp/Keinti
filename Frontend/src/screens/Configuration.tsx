@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, FlatList, GestureResponderEvent, Image, Linking, Modal, PermissionsAndroid, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, GestureResponderEvent, Image, Linking, Modal, PermissionsAndroid, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import ImageCropPicker from 'react-native-image-crop-picker';
@@ -299,7 +299,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
     return rawGender;
   };
 
-  const CONTACT_EMAIL = 'keintiapp@gmail.com';
+  const CONTACT_EMAIL = 'keintisoporte@gmail.com';
 
   const [galleryPermissionStatus, setGalleryPermissionStatus] = useState<GalleryPermissionStatus>('unknown');
   const [isCheckingDevicePermissions, setIsCheckingDevicePermissions] = useState(false);
@@ -348,6 +348,11 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
   const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const deleteAccountSheetAnim = useRef(new Animated.Value(0)).current;
+
+  const [showLogoutConfirmModal, setShowLogoutConfirmModal] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const logoutSheetAnim = useRef(new Animated.Value(0)).current;
 
   const [showRevokeGalleryPermissionModal, setShowRevokeGalleryPermissionModal] = useState(false);
   const [isRevokingGalleryPermission, setIsRevokingGalleryPermission] = useState(false);
@@ -989,11 +994,19 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
   const aboutKeintiParagraphs = useMemo(() => {
     const raw = String(t('aboutKeinti.body') || '');
-    return raw
+    const base = raw
       .split(/\n\s*\n/g)
       .map((p) => p.trim())
       .filter(Boolean);
-  }, [t]);
+
+    const creationDateIso = '2026-02-01';
+    const extra =
+      language === 'en'
+        ? ['CEO: Antonio David González Macías', 'Created in: Seville, Spain', `Creation date: ${creationDateIso}`]
+        : ['CEO: Antonio David González Macías', 'Creada en: Sevilla, España', 'Fecha de creación: 01/02/2026'];
+
+    return [...base, ...extra];
+  }, [t, language]);
 
   const privacyPolicyParagraphs = useMemo(() => {
     const rawEs =
@@ -1002,7 +1015,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       '1. Responsable del tratamiento\n\n' +
       'De conformidad con el Reglamento (UE) 2016/679 (RGPD) y la normativa de privacidad aplicable (incluida la normativa de Estados Unidos cuando corresponda), se informa a los usuarios de que el responsable del tratamiento de los datos personales en la aplicación Keinti es:\n\n' +
       'Responsable: Antonio David González Macías\n\n' +
-      'Correo electrónico de contacto: keintiapp@gmail.com\n\n' +
+      'Correo electrónico de contacto: keintisoporte@gmail.com\n\n' +
       '2. Alcance y requisitos de edad\n\n' +
       'Esta Política de Privacidad regula el tratamiento de datos personales de los usuarios de la aplicación móvil Keinti.\n\n' +
       'Keinti está destinada exclusivamente a personas mayores de 18 años. Si detectamos o tenemos indicios razonables de que una cuenta pertenece a una persona menor de edad, podremos suspenderla y eliminarla.\n\n' +
@@ -1079,14 +1092,16 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       '11. Derechos de los usuarios\n\n' +
       'Usuarios en la Unión Europea/EEE (y donde corresponda): acceso, rectificación, supresión, oposición, limitación, portabilidad y retirada del consentimiento.\n\n' +
       'Usuarios en Estados Unidos (y donde corresponda): derechos de acceso/conocimiento, eliminación y opciones relacionadas con publicidad personalizada conforme a la normativa aplicable (por ejemplo, CCPA/CPRA y otras leyes estatales).\n\n' +
-      'Las solicitudes pueden enviarse a keintiapp@gmail.com. También pueden existir opciones en la app (por ejemplo, eliminación de cuenta).\n\n' +
+      'Las solicitudes pueden enviarse a keintisoporte@gmail.com. También pueden existir opciones en la app (por ejemplo, eliminación de cuenta).\n\n' +
       '12. Seguridad\n\n' +
       'Aplicamos medidas técnicas y organizativas razonables para proteger los datos, incluyendo controles de acceso, medidas de seguridad en infraestructura y prácticas de minimización.\n\n' +
       'En “Autenticación de la cuenta”, el acceso a información de revisión (incluida la selfie) está restringido a personal/administración autorizado únicamente para validar el proceso.\n\n' +
       '13. Cambios en esta política\n\n' +
       'Podemos actualizar esta Política de Privacidad para reflejar cambios legales, técnicos o de producto. Si los cambios son relevantes, lo notificaremos a través de la aplicación.\n\n' +
       '14. Legislación aplicable\n\n' +
-      'Esta política se rige por el RGPD cuando aplique y por la normativa de privacidad aplicable en la jurisdicción del usuario (incluida normativa estatal de EE. UU. cuando corresponda).';
+      'Esta política se rige por el RGPD cuando aplique y por la normativa de privacidad aplicable en la jurisdicción del usuario (incluida normativa estatal de EE. UU. cuando corresponda).\n\n' +
+      '15. Seguridad infantil y denuncias\n\n' +
+      'Keinti mantiene una política de tolerancia cero frente a cualquier contenido relacionado con explotación o abuso sexual infantil (EASI/CSAE). Los usuarios pueden denunciar contenido o cuentas desde la app y/o contactar con soporte en keintisoporte@gmail.com.';
 
     const rawEn =
       'PRIVACY POLICY – KEINTI\n\n' +
@@ -1094,7 +1109,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       '1. Data controller\n\n' +
       'In accordance with Regulation (EU) 2016/679 (GDPR) and applicable privacy laws (including U.S. laws where applicable), users are informed that the controller of personal data processed in the Keinti app is:\n\n' +
       'Controller: Antonio David González Macías\n\n' +
-      'Contact email: keintiapp@gmail.com\n\n' +
+      'Contact email: keintisoporte@gmail.com\n\n' +
       '2. Scope and age requirement\n\n' +
       'This Privacy Policy governs the processing of personal data of users of the Keinti mobile app.\n\n' +
       'Keinti is intended exclusively for people over 18 years of age. If we detect or reasonably suspect an account belongs to a minor, we may suspend and delete it.\n\n' +
@@ -1171,14 +1186,16 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       '11. User rights\n\n' +
       'EU/EEA users (and where applicable): access, rectification, erasure, objection, restriction, portability and withdrawal of consent.\n\n' +
       'U.S. users (and where applicable): rights to know/access, delete and choices related to personalized advertising under applicable laws (e.g., CCPA/CPRA and other state laws).\n\n' +
-      'Requests can be sent to keintiapp@gmail.com. The app may also provide options (e.g., account deletion).\n\n' +
+      'Requests can be sent to keintisoporte@gmail.com. The app may also provide options (e.g., account deletion).\n\n' +
       '12. Security\n\n' +
       'We apply reasonable technical and organizational measures to protect data, including access controls, infrastructure security and data minimization practices.\n\n' +
       'Within “Account Authentication”, access to review information (including the selfie) is restricted to authorized staff/administration solely to validate the process.\n\n' +
       '13. Changes to this policy\n\n' +
       'We may update this Privacy Policy to reflect legal, technical or product changes. If changes are material, we will notify users through the app.\n\n' +
       '14. Applicable law\n\n' +
-      'This policy is governed by the GDPR where applicable and by the privacy laws applicable in the user’s jurisdiction (including U.S. state laws where applicable).';
+      'This policy is governed by the GDPR where applicable and by the privacy laws applicable in the user’s jurisdiction (including U.S. state laws where applicable).\n\n' +
+      '15. Child safety and reporting\n\n' +
+      'Keinti maintains a zero-tolerance policy for any content related to child sexual exploitation or abuse (CSEA/CSAM). Users can report content or accounts from the app and/or contact support at keintisoporte@gmail.com.';
 
     const raw = language === 'en' ? rawEn : rawEs;
 
@@ -1271,7 +1288,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       'Podemos actualizar esta Política de Cookies y Publicidad para reflejar cambios legales, técnicos o de negocio. Cuando el cambio sea relevante, lo comunicaremos a través de la aplicación y/o actualizando la fecha indicada al inicio.\n\n' +
       '10. Contacto\n\n' +
       'Para cualquier duda relacionada con esta política, puedes contactar en:\n\n' +
-      '📩 keintiapp@gmail.com';
+      'keintisoporte@gmail.com';
 
     const rawEn =
       'COOKIES AND ADVERTISING POLICY – KEINTI\n\n' +
@@ -1323,7 +1340,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       'We may update this Cookies and Advertising Policy to reflect legal, technical, or business changes. When changes are material, we will notify users through the app and/or by updating the date at the top.\n\n' +
       '10. Contact\n\n' +
       'For any questions related to this policy, you may contact:\n\n' +
-      '📩 keintiapp@gmail.com';
+      'keintisoporte@gmail.com';
 
     const raw = language === 'en' ? rawEn : rawEs;
 
@@ -1430,7 +1447,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       '13. Cambios en los Términos\n\n' +
       'Keinti podrá modificar estos Términos para reflejar cambios legales, técnicos o de producto. Si los cambios son relevantes, se informará al usuario a través de la App. El uso continuado de la App tras la entrada en vigor de los cambios implica la aceptación de los Términos actualizados.\n\n' +
       '14. Contacto\n\n' +
-      'Para consultas sobre estos Términos, el usuario puede contactar en: keintiapp@gmail.com';
+      'Para consultas sobre estos Términos, el usuario puede contactar en: keintisoporte@gmail.com';
 
     const rawEn =
       'TERMS AND CONDITIONS OF USE – KEINTI\n\n' +
@@ -1493,7 +1510,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       '13. Changes to the Terms\n\n' +
       'Keinti may modify these Terms to reflect legal, technical or product changes. If changes are material, users will be informed through the App. Continued use of the App after the effective date of changes constitutes acceptance of the updated Terms.\n\n' +
       '14. Contact\n\n' +
-      'For questions about these Terms, the user may contact: keintiapp@gmail.com';
+      'For questions about these Terms, the user may contact: keintisoporte@gmail.com';
 
     const raw = language === 'en' ? rawEn : rawEs;
 
@@ -1557,6 +1574,70 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
         })}
       </Text>
     );
+  };
+
+  const openLogoutConfirm = () => {
+    setIsLoggingOut(false);
+    setShowLogoutConfirmModal(true);
+    logoutSheetAnim.setValue(0);
+
+    if (authToken && myUsername.trim().length === 0) {
+      getMyPersonalData(authToken)
+        .then((data) => {
+          const next = String(data?.username || '').trim();
+          if (next) setMyUsername(next);
+        })
+        .catch(() => {});
+    }
+
+    requestAnimationFrame(() => {
+      Animated.timing(logoutSheetAnim, {
+        toValue: 1,
+        duration: 260,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    });
+  };
+
+  const closeLogoutConfirm = () => {
+    if (isLoggingOut) return;
+
+    Animated.timing(logoutSheetAnim, {
+      toValue: 0,
+      duration: 220,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) setShowLogoutConfirmModal(false);
+    });
+  };
+
+  const openDeleteAccountConfirm = () => {
+    setShowDeleteAccountModal(true);
+    deleteAccountSheetAnim.setValue(0);
+
+    requestAnimationFrame(() => {
+      Animated.timing(deleteAccountSheetAnim, {
+        toValue: 1,
+        duration: 260,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    });
+  };
+
+  const closeDeleteAccountConfirm = () => {
+    if (isDeletingAccount) return;
+
+    Animated.timing(deleteAccountSheetAnim, {
+      toValue: 0,
+      duration: 220,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) setShowDeleteAccountModal(false);
+    });
   };
 
   return (
@@ -1776,7 +1857,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               leftIcon="logout"
               showChevron={false}
               onPress={() => {
-                onLogout();
+                openLogoutConfirm();
               }}
             />
             <SettingRow
@@ -1789,7 +1870,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                   Alert.alert('Sesión requerida', 'Inicia sesión para eliminar tu cuenta.');
                   return;
                 }
-                setShowDeleteAccountModal(true);
+                openDeleteAccountConfirm();
               }}
             />
           </View>
@@ -2131,6 +2212,14 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
             <SimpleSettingRow
               title={t('securityControl.termsOfUse')}
               onPress={() => setScreen('termsOfUse')}
+            />
+            <SimpleSettingRow
+              title={t('securityControl.childSafetyStandards')}
+              onPress={() => openPolicyUrl('childSafetyStandards')}
+            />
+            <SimpleSettingRow
+              title={t('securityControl.accountDeletionPolicy')}
+              onPress={() => openPolicyUrl('accountDeletion')}
             />
             <SimpleSettingRow
               title={t('accountCenter.changePassword')}
@@ -3182,39 +3271,212 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       </Modal>
 
       <Modal
-        visible={showDeleteAccountModal}
+        visible={showLogoutConfirmModal}
         transparent
-        animationType="fade"
-        onRequestClose={() => {
-          if (isDeletingAccount) return;
-          setShowDeleteAccountModal(false);
-        }}
+        animationType="none"
+        statusBarTranslucent
+        onRequestClose={closeLogoutConfirm}
       >
-        <TouchableWithoutFeedback
-          onPress={() => {
-            if (isDeletingAccount) return;
-            setShowDeleteAccountModal(false);
-          }}
-        >
-          <View style={styles.deleteOverlay}>
-            <TouchableWithoutFeedback>
-              <View style={styles.deletePanel}>
-                <Text style={styles.deleteTitle}>{t('accountCenter.deleteAccountConfirmTitle')}</Text>
-                <Text style={styles.deleteBody}>{t('accountCenter.deleteAccountConfirmBody')}</Text>
+        <TouchableWithoutFeedback onPress={closeLogoutConfirm}>
+          <Animated.View
+            style={[
+              styles.logoutOverlay,
+              {
+                opacity: logoutSheetAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 0.62],
+                }),
+              },
+            ]}
+          />
+        </TouchableWithoutFeedback>
 
-                <View style={styles.deleteButtonsRow}>
+        <View style={styles.logoutSheetRoot} pointerEvents="box-none">
+          <Animated.View
+            style={[
+              styles.logoutSheet,
+              {
+                transform: [
+                  {
+                    translateY: logoutSheetAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [340, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <TouchableWithoutFeedback>
+              <View>
+                <View style={styles.logoutHandle} />
+
+                <View style={styles.logoutHeaderRow}>
+                  <View style={styles.logoutIconWrap}>
+                    <View style={styles.logoutIconGlow} />
+                    <MaterialIcons name="logout" size={22} color="#000000" />
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.logoutTitle}>
+                      {language === 'en' ? 'Log out?' : '¿Cerrar sesión?'}
+                    </Text>
+                    <Text style={styles.logoutSubtitle}>
+                      {language === 'en'
+                        ? 'You’ll need to sign in again on this device.'
+                        : 'Tendrás que iniciar sesión de nuevo en este dispositivo.'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.logoutInfoBox}>
+                  <Text style={styles.logoutInfoText}>
+                    {language === 'en'
+                      ? `Signed in as @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`
+                      : `Has iniciado sesión como @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`}
+                  </Text>
+                </View>
+
+                <View style={styles.logoutButtonsRow}>
                   <TouchableOpacity
-                    style={[styles.deleteButton, styles.deleteButtonSecondary]}
-                    activeOpacity={0.8}
-                    disabled={isDeletingAccount}
-                    onPress={() => setShowDeleteAccountModal(false)}
+                    activeOpacity={0.85}
+                    style={[styles.logoutButton, styles.logoutButtonSecondary]}
+                    disabled={isLoggingOut}
+                    onPress={closeLogoutConfirm}
                   >
-                    <Text style={styles.deleteButtonSecondaryText}>{t('common.cancel')}</Text>
+                    <Text style={styles.logoutButtonSecondaryText}>
+                      {language === 'en' ? 'Stay' : 'Mantener sesión'}
+                    </Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    style={[styles.deleteButton, styles.deleteButtonPrimary]}
-                    activeOpacity={0.8}
+                    activeOpacity={0.85}
+                    style={[styles.logoutButton, styles.logoutButtonPrimary, isLoggingOut && styles.logoutButtonDisabled]}
+                    disabled={isLoggingOut}
+                    onPress={() => {
+                      if (isLoggingOut) return;
+                      setIsLoggingOut(true);
+
+                      Animated.timing(logoutSheetAnim, {
+                        toValue: 0,
+                        duration: 160,
+                        easing: Easing.in(Easing.cubic),
+                        useNativeDriver: true,
+                      }).start(() => {
+                        setShowLogoutConfirmModal(false);
+                        onLogout();
+                      });
+                    }}
+                  >
+                    {isLoggingOut ? (
+                      <ActivityIndicator color="#000000" />
+                    ) : (
+                      <Text style={styles.logoutButtonPrimaryText}>
+                        {language === 'en' ? 'Log out' : 'Cerrar sesión'}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.logoutFootnote}>
+                  {language === 'en'
+                    ? 'Tip: If you’re on a shared device, logging out helps protect your account.'
+                    : 'Consejo: si estás en un dispositivo compartido, cerrar sesión protege tu cuenta.'}
+                </Text>
+              </View>
+            </TouchableWithoutFeedback>
+          </Animated.View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showDeleteAccountModal}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        onRequestClose={closeDeleteAccountConfirm}
+      >
+        <TouchableWithoutFeedback onPress={closeDeleteAccountConfirm}>
+          <Animated.View
+            style={[
+              styles.deleteAccountOverlay,
+              {
+                opacity: deleteAccountSheetAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 0.72],
+                }),
+              },
+            ]}
+          />
+        </TouchableWithoutFeedback>
+
+        <View style={styles.deleteAccountSheetRoot} pointerEvents="box-none">
+          <Animated.View
+            style={[
+              styles.deleteAccountSheet,
+              {
+                transform: [
+                  {
+                    translateY: deleteAccountSheetAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [420, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <TouchableWithoutFeedback>
+              <View>
+                <View style={styles.deleteAccountHandle} />
+
+                <View style={styles.deleteAccountHeaderRow}>
+                  <View style={styles.deleteAccountIconWrap}>
+                    <View style={styles.deleteAccountIconGlow} />
+                    <MaterialIcons name="delete-forever" size={22} color="#FFFFFF" />
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.deleteAccountTitle}>{t('accountCenter.deleteAccountConfirmTitle')}</Text>
+                    <Text style={styles.deleteAccountSubtitle}>{t('accountCenter.deleteAccountConfirmBody')}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.deleteAccountWarningBox}>
+                  <Text style={styles.deleteAccountWarningText}>
+                    {language === 'en'
+                      ? 'This action is irreversible. Your account and data will be permanently removed.'
+                      : 'Esta acción es irreversible. Tu cuenta y tus datos se eliminarán permanentemente.'}
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={() => openPolicyUrl('accountDeletion')}
+                  disabled={isDeletingAccount}
+                  style={{ marginTop: 12 }}
+                >
+                  <View style={styles.deleteAccountPolicyLinkRow}>
+                    <Text style={styles.deleteAccountPolicyLinkText}>
+                      {t('accountCenter.accountDeletionPolicyLink')}
+                    </Text>
+                    <MaterialIcons name="open-in-new" size={16} color="#FFFFFF" style={{ opacity: 0.9 }} />
+                  </View>
+                </TouchableOpacity>
+
+                <View style={styles.deleteAccountButtonsRow}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={[styles.deleteAccountButton, styles.deleteAccountButtonSecondary]}
+                    disabled={isDeletingAccount}
+                    onPress={closeDeleteAccountConfirm}
+                  >
+                    <Text style={styles.deleteAccountButtonSecondaryText}>{t('common.cancel')}</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={[styles.deleteAccountButton, styles.deleteAccountButtonDanger, isDeletingAccount && styles.deleteAccountButtonDisabled]}
                     disabled={isDeletingAccount}
                     onPress={async () => {
                       if (!authToken) return;
@@ -3223,8 +3485,15 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       setIsDeletingAccount(true);
                       try {
                         await deleteMyAccount(authToken);
-                        setShowDeleteAccountModal(false);
-                        onLogout();
+                        Animated.timing(deleteAccountSheetAnim, {
+                          toValue: 0,
+                          duration: 160,
+                          easing: Easing.in(Easing.cubic),
+                          useNativeDriver: true,
+                        }).start(() => {
+                          setShowDeleteAccountModal(false);
+                          onLogout();
+                        });
                       } catch (e: any) {
                         Alert.alert('Error', e?.message || 'No se pudo eliminar la cuenta');
                       } finally {
@@ -3235,14 +3504,22 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     {isDeletingAccount ? (
                       <ActivityIndicator color="#000000" />
                     ) : (
-                      <Text style={styles.deleteButtonPrimaryText}>{t('common.confirm')}</Text>
+                      <Text style={styles.deleteAccountButtonDangerText}>
+                        {language === 'en' ? 'Delete' : 'Eliminar'}
+                      </Text>
                     )}
                   </TouchableOpacity>
                 </View>
+
+                <Text style={styles.deleteAccountFootnote}>
+                  {language === 'en'
+                    ? 'If this was a mistake, cancel and review the policy first.'
+                    : 'Si esto fue un error, cancela y revisa la política primero.'}
+                </Text>
               </View>
             </TouchableWithoutFeedback>
-          </View>
-        </TouchableWithoutFeedback>
+          </Animated.View>
+        </View>
       </Modal>
 
       <Modal
@@ -3840,6 +4117,251 @@ const styles = StyleSheet.create({
     color: '#000000',
     fontSize: 14,
     fontWeight: '800',
+  },
+
+  logoutOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000000',
+  },
+  logoutSheetRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  logoutSheet: {
+    backgroundColor: '#000000',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderWidth: 1,
+    borderColor: '#1E1E1E',
+    padding: 16,
+    paddingBottom: 18,
+  },
+  logoutHandle: {
+    alignSelf: 'center',
+    width: 56,
+    height: 4,
+    borderRadius: 99,
+    backgroundColor: '#1E1E1E',
+    marginBottom: 14,
+  },
+  logoutHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  logoutIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFB74D',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  logoutIconGlow: {
+    position: 'absolute',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255, 183, 77, 0.35)',
+  },
+  logoutTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  logoutSubtitle: {
+    color: '#FFFFFF',
+    opacity: 0.7,
+    fontSize: 13,
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  logoutInfoBox: {
+    marginTop: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#1E1E1E',
+    backgroundColor: '#050505',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  logoutInfoText: {
+    color: '#FFFFFF',
+    opacity: 0.8,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  logoutButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  logoutButton: {
+    flex: 1,
+    height: 46,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoutButtonSecondary: {
+    borderWidth: 1,
+    borderColor: '#1E1E1E',
+    backgroundColor: '#000000',
+  },
+  logoutButtonSecondaryText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+    opacity: 0.9,
+  },
+  logoutButtonPrimary: {
+    backgroundColor: '#FFB74D',
+  },
+  logoutButtonPrimaryText: {
+    color: '#000000',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  logoutButtonDisabled: {
+    opacity: 0.75,
+  },
+  logoutFootnote: {
+    marginTop: 12,
+    color: '#FFFFFF',
+    opacity: 0.55,
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: 'center',
+  },
+
+  deleteAccountOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000000',
+  },
+  deleteAccountSheetRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  deleteAccountSheet: {
+    backgroundColor: '#000000',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderWidth: 1,
+    borderColor: '#1E1E1E',
+    padding: 16,
+    paddingBottom: 18,
+  },
+  deleteAccountHandle: {
+    alignSelf: 'center',
+    width: 56,
+    height: 4,
+    borderRadius: 99,
+    backgroundColor: '#1E1E1E',
+    marginBottom: 14,
+  },
+  deleteAccountHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  deleteAccountIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#fb6159ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  deleteAccountIconGlow: {
+    position: 'absolute',
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: 'rgba(251, 97, 89, 0.28)',
+  },
+  deleteAccountTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  deleteAccountSubtitle: {
+    color: '#FFFFFF',
+    opacity: 0.7,
+    fontSize: 13,
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  deleteAccountWarningBox: {
+    marginTop: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(251, 97, 89, 0.55)',
+    backgroundColor: 'rgba(251, 97, 89, 0.08)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  deleteAccountWarningText: {
+    color: '#FFFFFF',
+    opacity: 0.86,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  deleteAccountButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  deleteAccountButton: {
+    flex: 1,
+    height: 46,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteAccountButtonSecondary: {
+    borderWidth: 1,
+    borderColor: '#1E1E1E',
+    backgroundColor: '#000000',
+  },
+  deleteAccountButtonSecondaryText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+    opacity: 0.9,
+  },
+  deleteAccountButtonDanger: {
+    backgroundColor: '#fb6159ff',
+  },
+  deleteAccountButtonDangerText: {
+    color: '#000000',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  deleteAccountButtonDisabled: {
+    opacity: 0.75,
+  },
+  deleteAccountFootnote: {
+    marginTop: 12,
+    color: '#FFFFFF',
+    opacity: 0.55,
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: 'center',
+  },
+  deleteAccountPolicyLinkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  deleteAccountPolicyLinkText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    textAlign: 'center',
+    opacity: 0.9,
   },
   verifyContainer: {
     paddingHorizontal: 16,

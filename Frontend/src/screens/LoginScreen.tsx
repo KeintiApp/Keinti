@@ -26,6 +26,108 @@ import { SUPABASE_REDIRECT_URL, isSupabaseConfigured, supabase } from '../config
 
 type MarkedSegment = { text: string; kind: 'normal' | 'highlight' };
 
+type OAuthCallbackInfo = {
+  code?: string;
+  errorDescription?: string;
+  accessTokenFromHash?: string;
+  refreshTokenFromHash?: string;
+};
+
+const safeDecode = (value: unknown) => {
+  const raw = String(value ?? '');
+  if (!raw) return '';
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+};
+
+const extractOAuthCallbackInfo = (url: string): OAuthCallbackInfo => {
+  const raw = String(url || '').trim();
+  if (!raw) return {};
+
+  const [beforeHash, hashPartRaw] = raw.split('#');
+  // NOTE: The `parse` helper exists in `expo-linking`, not in React Native's `Linking`.
+  // We only need query params here, so we parse them manually.
+  const qp: Record<string, string> = {};
+  const queryIndex = String(beforeHash || '').indexOf('?');
+  const queryPart = queryIndex >= 0 ? String(beforeHash || '').slice(queryIndex + 1) : '';
+  if (queryPart) {
+    try {
+      const params = new URLSearchParams(queryPart);
+      params.forEach((value, key) => {
+        qp[String(key)] = String(value);
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  const codeFromQuery = qp?.code ? String(qp.code) : '';
+  const errorFromQuery = qp?.error_description ? String(qp.error_description) : '';
+
+  const hashPart = String(hashPartRaw || '').trim();
+  let accessTokenFromHash = '';
+  let refreshTokenFromHash = '';
+  let errorFromHash = '';
+  let codeFromHash = '';
+
+  if (hashPart) {
+    try {
+      const params = new URLSearchParams(hashPart);
+      accessTokenFromHash = params.get('access_token') || '';
+      refreshTokenFromHash = params.get('refresh_token') || '';
+      errorFromHash = params.get('error_description') || '';
+      codeFromHash = params.get('code') || '';
+    } catch {
+      // ignore
+    }
+  }
+
+  const code = codeFromQuery || codeFromHash || undefined;
+  const errorDescription = safeDecode(errorFromQuery || errorFromHash) || undefined;
+
+  return {
+    code,
+    errorDescription,
+    accessTokenFromHash: accessTokenFromHash || undefined,
+    refreshTokenFromHash: refreshTokenFromHash || undefined,
+  };
+};
+
+const waitForSupabaseOAuthCallback = async (timeoutMs = 120_000): Promise<string> => {
+  const matchesRedirect = (u: string) => {
+    const raw = String(u || '').trim();
+    if (!raw) return false;
+    return raw.startsWith(SUPABASE_REDIRECT_URL) || raw.startsWith(`${SUPABASE_REDIRECT_URL}/`);
+  };
+
+  // Handle cold-start callback.
+  const initialUrl = await Linking.getInitialURL().catch(() => null);
+  if (initialUrl && matchesRedirect(initialUrl)) {
+    return initialUrl;
+  }
+
+  return await new Promise<string>((resolve, reject) => {
+    const id = setTimeout(() => {
+      sub.remove();
+      reject(new Error('Tiempo de espera agotado. Vuelve a intentarlo.'));
+    }, Math.max(1000, timeoutMs));
+
+    const handler = ({ url }: { url: string }) => {
+      if (!matchesRedirect(url)) {
+        return;
+      }
+      clearTimeout(id);
+      sub.remove();
+      resolve(url);
+    };
+
+    const sub = Linking.addEventListener('url', handler);
+  });
+};
+
 const parseMarkedText = (raw: string): MarkedSegment[] => {
   const value = String(raw ?? '');
   if (!value) return [{ text: '', kind: 'normal' }];
@@ -394,37 +496,48 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
         throw new Error('No se pudo generar la URL de autenticación');
       }
 
+      // Android note:
+      // `react-native-inappbrowser-reborn` can be flaky/crashy on some devices/ROMs in release builds.
+      // We prefer a stable flow: open system browser and wait for the deep-link callback.
       let callbackUrl: string | null = null;
-      const available = await InAppBrowser.isAvailable().catch(() => false);
+      if (Platform.OS === 'ios') {
+        const available = await InAppBrowser.isAvailable().catch(() => false);
+        if (available) {
+          const result = await InAppBrowser.openAuth(authUrl, SUPABASE_REDIRECT_URL, {
+            showTitle: false,
+            enableUrlBarHiding: true,
+            enableDefaultShare: false,
+            ephemeralWebSession: true,
+          });
 
-      if (available) {
-        const result = await InAppBrowser.openAuth(authUrl, SUPABASE_REDIRECT_URL, {
-          showTitle: false,
-          enableUrlBarHiding: true,
-          enableDefaultShare: false,
-          ephemeralWebSession: true,
-        });
-
-        if ((result as any)?.type === 'success' && (result as any)?.url) {
-          callbackUrl = String((result as any).url);
-        } else if ((result as any)?.type === 'cancel') {
-          return;
+          if ((result as any)?.type === 'success' && (result as any)?.url) {
+            callbackUrl = String((result as any).url);
+          } else if ((result as any)?.type === 'cancel') {
+            return;
+          }
+        } else {
+          await Linking.openURL(authUrl);
+          callbackUrl = await waitForSupabaseOAuthCallback();
         }
       } else {
-        // Fallback: open system browser. The app must be configured to receive the deep link.
         await Linking.openURL(authUrl);
-        throw new Error('Completa el login en el navegador y vuelve a Keinti');
+        callbackUrl = await waitForSupabaseOAuthCallback();
       }
 
       if (!callbackUrl) {
         throw new Error('No se recibió callback de autenticación');
       }
 
-      // PKCE flow: extract `code` and exchange for session.
-      const code = new URL(callbackUrl).searchParams.get('code');
-      if (!code) {
-        const errorDescription = new URL(callbackUrl).searchParams.get('error_description');
-        throw new Error(errorDescription || 'OAuth cancelado o inválido');
+      const callbackInfo = extractOAuthCallbackInfo(callbackUrl);
+      if (callbackInfo.errorDescription) {
+        throw new Error(callbackInfo.errorDescription);
+      }
+
+      // PKCE flow: extract `code` and exchange for session (preferred).
+      // Fallback: implicit hash tokens (rare, but supported).
+      const code = callbackInfo.code;
+      if (!code && !(callbackInfo.accessTokenFromHash && callbackInfo.refreshTokenFromHash)) {
+        throw new Error('OAuth cancelado o inválido');
       }
 
       // IMPORTANT:
@@ -433,9 +546,20 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
       // Treat that failure as non-fatal and continue if we already have a valid session.
       let accessToken: string | null = null;
       try {
-        const { data: sessionData, error: exchangeError } = await supabaseClient.auth.exchangeCodeForSession(code);
-        if (!exchangeError) {
-          accessToken = sessionData?.session?.access_token || null;
+        if (code) {
+          const { data: sessionData, error: exchangeError } = await supabaseClient.auth.exchangeCodeForSession(code);
+          if (!exchangeError) {
+            accessToken = sessionData?.session?.access_token || null;
+          }
+        } else if (callbackInfo.accessTokenFromHash && callbackInfo.refreshTokenFromHash) {
+          const { error: sessionError } = await supabaseClient.auth.setSession({
+            access_token: callbackInfo.accessTokenFromHash,
+            refresh_token: callbackInfo.refreshTokenFromHash,
+          });
+          if (!sessionError) {
+            const session = (await supabaseClient.auth.getSession().catch(() => null))?.data?.session || null;
+            accessToken = session?.access_token || null;
+          }
         }
       } catch {
         // non-fatal; we'll try to read the current session below

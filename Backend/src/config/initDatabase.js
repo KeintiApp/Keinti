@@ -143,7 +143,11 @@ async function initDatabase() {
     await pool
       .query(`
         CREATE OR REPLACE FUNCTION trg_set_rectification_review_fields()
-        RETURNS TRIGGER AS $$
+        RETURNS TRIGGER
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path = pg_catalog
+        AS $$
         BEGIN
           IF NEW.status IS DISTINCT FROM OLD.status AND NEW.status IN ('accepted', 'rejected') THEN
             IF NEW.reviewed_at IS NULL THEN
@@ -155,7 +159,7 @@ async function initDatabase() {
           END IF;
           RETURN NEW;
         END;
-        $$ LANGUAGE plpgsql;
+        $$;
       `)
       .catch(() => {});
 
@@ -172,10 +176,15 @@ async function initDatabase() {
     await pool
       .query(`
         CREATE OR REPLACE FUNCTION trg_unlock_email_on_rectification_accept()
-        RETURNS TRIGGER AS $$
+        RETURNS TRIGGER
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path = pg_catalog
+        SET row_security = off
+        AS $$
         BEGIN
           IF NEW.status IS DISTINCT FROM OLD.status AND NEW.status = 'accepted' THEN
-            UPDATE email_verification_codes
+            UPDATE public.email_verification_codes
             SET locked_until = NULL,
                 verify_failed_attempts = 0,
                 send_count = 0,
@@ -186,7 +195,7 @@ async function initDatabase() {
           END IF;
           RETURN NEW;
         END;
-        $$ LANGUAGE plpgsql;
+        $$;
       `)
       .catch(() => {});
 
@@ -707,12 +716,40 @@ async function initDatabase() {
             'Spam',
             'Suplantación de identidad',
             'Contenido ilegal',
+            'Abuso/sexualización infantil',
+            'Incitación al uso de armas/drogas',
             'Conducta inapropiada',
             'Otros'
           )
         )
       );
     `);
+
+    // Ensure the reason CHECK constraint stays in sync even when the table already existed.
+    // (CREATE TABLE IF NOT EXISTS does not update existing constraints.)
+    await pool.query(
+      `ALTER TABLE user_reports DROP CONSTRAINT IF EXISTS user_reports_reason_check;`
+    ).catch(() => {});
+
+    await pool.query(`
+      ALTER TABLE user_reports
+      ADD CONSTRAINT user_reports_reason_check CHECK (
+        reason IN (
+          'Contenido sexual o desnudos',
+          'Acoso o bullying',
+          'Lenguaje ofensivo',
+          'Estafa o engaño',
+          'Violencia o amenazas',
+          'Spam',
+          'Suplantación de identidad',
+          'Contenido ilegal',
+          'Abuso/sexualización infantil',
+          'Incitación al uso de armas/drogas',
+          'Conducta inapropiada',
+          'Otros'
+        )
+      );
+    `).catch(() => {});
 
     await pool.query(
       `CREATE INDEX IF NOT EXISTS idx_user_reports_reported_reason_created_at ON user_reports (reported_email, reason, created_at DESC);`

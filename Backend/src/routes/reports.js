@@ -12,6 +12,8 @@ const REPORT_REASONS = [
   'Spam',
   'Suplantación de identidad',
   'Contenido ilegal',
+  'Abuso/sexualización infantil',
+  'Incitación al uso de armas/drogas',
   'Conducta inapropiada',
   'Otros',
 ];

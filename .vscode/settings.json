@@ -4,6 +4,9 @@
     "java.errors.incompleteClasspath.severity": "ignore",
     "java.import.gradle.enabled": false,
     "java.gradle.buildServer.enabled": "off",
+    "java.project.resourceFilters": [
+        "**/node_modules/**"
+    ],
     "java.import.exclusions": [
         "**/node_modules/**",
         "**/Frontend/android/**",
@@ -29,7 +32,8 @@
         "**/*.gradle.kts": "kotlin",
         "*.h": "objective-c",
         "*.m": "objective-c",
-        "*.mm": "objective-cpp"
+        "*.mm": "objective-cpp",
+        "**/node_modules/react-native-maps/android/src/main/java/com/facebook/react/uimanager/ViewManagerWithGeneratedInterface.java": "plaintext"
     },
     "C_Cpp.files.exclude": {
         "**/Frontend/ios/**": true
