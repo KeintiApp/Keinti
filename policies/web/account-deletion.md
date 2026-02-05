@@ -1,6 +1,6 @@
 # ELIMINACIÓN DE CUENTA – KEINTI
 
-Última actualización: 26/01/2026
+Última actualización: 05/02/2026
 
 ## 1. Cómo eliminar tu cuenta desde la app
 
@@ -58,7 +58,7 @@ https://legal.keintiapp.com/privacy-policy/
 
 # ACCOUNT DELETION – KEINTI
 
-Last updated: 01/26/2026
+Last updated: 02/05/2026
 
 ## 1. How to delete your account from the app
 

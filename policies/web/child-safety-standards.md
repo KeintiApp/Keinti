@@ -1,6 +1,6 @@
 # ESTÁNDARES DE SEGURIDAD INFANTIL (EASI) – KEINTI
 
-Última actualización: 31/01/2026
+Última actualización: 05/02/2026
 
 ## 1. Propósito
 
@@ -84,7 +84,7 @@ Contacto para asuntos de seguridad infantil y cumplimiento:
 
 # CHILD SAFETY STANDARDS (CSAE) – KEINTI
 
-Last updated: 2026-01-31
+Last updated: 2026-02-05
 
 ## 1. Purpose
 

@@ -1,6 +1,6 @@
 # POLÍTICA DE PRIVACIDAD – KEINTI
 
-Última actualización: 18/01/2026
+Última actualización: 05/02/2026
 
 ## 1. Responsable del tratamiento
 
@@ -59,6 +59,7 @@ Tratamos los datos personales para:
 - Verificar la mayoría de edad
 - Permitir la interacción social (home, canales, grupos, chat e hilos)
 - Almacenar, servir y mostrar contenido multimedia (por ejemplo, avatares, imágenes de grupos y media asociado a publicaciones y chats)
+- Mostrar mapas y ofrecer funcionalidades de ubicación y búsqueda de lugares cuando estén disponibles (por ejemplo, mediante Google Maps)
 - Aplicar moderación, prevenir abusos y hacer cumplir las normas
 - Mantener la seguridad del servicio y de las cuentas (incluida la “Autenticación de la cuenta” cuando el usuario la active)
 - Mostrar anuncios en la app mediante Google AdMob, cuando corresponda
@@ -124,6 +125,7 @@ Los datos personales pueden ser tratados por proveedores que prestan servicios a
 - Supabase (infraestructura, base de datos, autenticación y almacenamiento)
 - Google (inicio de sesión con Google OAuth, si el usuario lo elige)
 - Google (AdMob, para publicidad)
+- Google (Google Maps Platform / SDK de Maps) para mostrar mapas y, cuando aplique, búsquedas o detalles de lugares
 
 Keinti no vende datos personales a terceros.
 
@@ -157,7 +159,7 @@ Keinti mantiene una política de tolerancia cero frente a cualquier contenido re
 
 # PRIVACY POLICY – KEINTI
 
-Last updated: 01/18/2026
+Last updated: 02/05/2026
 
 ## 1. Data controller
 
@@ -216,6 +218,7 @@ We process personal data to:
 - Verify legal age
 - Enable social interaction (home, channels, groups, chat and threads)
 - Store, serve and display media content (e.g., avatars, group images and media linked to posts and chats)
+- Display maps and provide location/place search features where available (e.g., via Google Maps)
 - Moderate content, prevent abuse and enforce rules
 - Maintain service and account security (including “Account Authentication” when enabled by the user)
 - Display ads in the app via Google AdMob, where applicable
@@ -281,6 +284,7 @@ Personal data may be processed by service providers supporting Keinti, mainly:
 - Supabase (infrastructure, database, authentication and storage)
 - Google (Google OAuth sign-in, if the user chooses it)
 - Google (AdMob, advertising)
+- Google (Google Maps Platform / Maps SDK) to display maps and, where applicable, place search/details
 
 Keinti does not sell personal data to third parties.
 

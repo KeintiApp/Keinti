@@ -1,6 +1,6 @@
 # POLÍTICA DE COOKIES Y PUBLICIDAD – KEINTI
 
-Última actualización: 18/01/2026
+Última actualización: 05/02/2026
 
 ## 1. Introducción
 
@@ -91,7 +91,7 @@ keintisoporte@gmail.com
 
 # COOKIES AND ADVERTISING POLICY – KEINTI
 
-Last updated: 01/18/2026
+Last updated: 02/05/2026
 
 ## 1. Introduction
 

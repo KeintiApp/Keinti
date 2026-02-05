@@ -1,6 +1,6 @@
 # TÉRMINOS Y CONDICIONES DE USO – KEINTI
 
-Última actualización: 18/01/2026
+Última actualización: 05/02/2026
 
 ## 1. Aceptación de los Términos
 
@@ -85,7 +85,7 @@ El usuario declara que dispone de los derechos necesarios sobre el contenido que
 
 ## 10. Servicios de terceros, inicio de sesión con Google y publicidad
 
-La App puede integrar servicios de terceros (por ejemplo, Google para inicio de sesión OAuth y Google AdMob para publicidad). El uso de esos servicios puede estar sujeto a términos y políticas del tercero correspondiente.
+La App puede integrar servicios de terceros (por ejemplo, Google para inicio de sesión OAuth, Google AdMob para publicidad y Google Maps para mostrar mapas y/o funcionalidades de ubicación). El uso de esos servicios puede estar sujeto a términos y políticas del tercero correspondiente.
 
 Keinti puede mostrar anuncios dentro de la App. En función de la normativa aplicable, los anuncios podrán ser personalizados o no personalizados y podrán requerir el consentimiento previo del usuario. La información sobre datos y consentimiento se describe en la Política de Cookies y Publicidad y en la Política de Privacidad.
 
@@ -113,7 +113,7 @@ Para consultas sobre estos Términos, el usuario puede contactar en: keintisopor
 
 # TERMS AND CONDITIONS OF USE – KEINTI
 
-Last updated: 01/18/2026
+Last updated: 02/05/2026
 
 ## 1. Acceptance of the Terms
 
@@ -198,7 +198,7 @@ The user represents they have the necessary rights to the content they post (e.g
 
 ## 10. Third-party services, Google sign-in and advertising
 
-The App may integrate third-party services (e.g., Google for OAuth sign-in and Google AdMob for advertising). Use of those services may be subject to the third party’s terms and policies.
+The App may integrate third-party services (e.g., Google for OAuth sign-in, Google AdMob for advertising, and Google Maps to display maps and/or location features). Use of those services may be subject to the third party’s terms and policies.
 
 Keinti may display ads in the App. Depending on applicable regulations, ads may be personalized or non-personalized and may require the user’s prior consent. Data processing and consent management (where applicable) are described in the Cookies and Advertising Policy and the Privacy Policy.
 
