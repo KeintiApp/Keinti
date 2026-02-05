@@ -45,7 +45,6 @@ import { deleteDraftUploadedImageByUrl, getAccountAuthStatus, getMyDevicePermiss
 import { API_URL, getServerResourceUrl } from '../config/api';
 import { BANNER_AD_UNIT_ID, INTERSTITIAL_AD_UNIT_ID, REWARDED_AD_UNIT_ID } from '../config/admob';
 import { POST_TTL_MS } from '../config/postTtl';
-import { GOOGLE_MAPS_API_KEY } from '../config/googleMaps';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Language, TranslationKey } from '../i18n/translations';
 
@@ -3380,17 +3379,15 @@ const FrontScreen = ({
     );
   }, [profileRingLocationLabelDraft, profileRingLocationLatDraft, profileRingLocationLngDraft, profileRingLocationPlaceIdDraft, profileRingPickedLatLng, requestLocationPermissionIfNeeded]);
 
-  const isGooglePlacesSearchConfigured = useMemo(() => {
-    const key = String(GOOGLE_MAPS_API_KEY || '').trim();
-    if (!key) return false;
-    if (key.toUpperCase().includes('REPLACE_WITH')) return false;
-    if (key.toUpperCase().includes('YOUR_GOOGLE_MAPS_API_KEY')) return false;
-    return key.length >= 20;
-  }, []);
+  const isPlacesSearchEnabled = useMemo(() => {
+    // Places search is served by the backend (it holds the API key).
+    // We require an auth token because the backend route is protected.
+    return !!String(authToken || '').trim();
+  }, [authToken]);
 
   useEffect(() => {
     if (!showProfileRingLocationPicker) return;
-    if (!isGooglePlacesSearchConfigured) return;
+    if (!isPlacesSearchEnabled) return;
     const q = String(profileRingLocationSearchQuery || '').trim();
     if (q.length < 3) {
       setProfileRingLocationPredictions([]);
@@ -3403,32 +3400,38 @@ const FrontScreen = ({
       setIsProfileRingLocationSearching(true);
       setProfileRingLocationSearchError('');
       try {
-        const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(q)}&key=${encodeURIComponent(
-          GOOGLE_MAPS_API_KEY
-        )}&language=es`;
-        const resp = await fetch(url);
-        const data = await resp.json();
-
-        const status = String(data?.status || '');
-        if (status === 'OK') {
-          const preds = Array.isArray(data?.predictions) ? data.predictions : [];
-          const items = preds
-            .map((p: any) => ({
-              placeId: String(p?.place_id || ''),
-              description: String(p?.description || ''),
-            }))
-            .filter((p: any) => p.placeId && p.description)
-            .slice(0, 8);
-
-          if (isActive) setProfileRingLocationPredictions(items);
-        } else if (status === 'ZERO_RESULTS') {
-          if (isActive) setProfileRingLocationPredictions([]);
-        } else {
-          if (isActive) {
-            setProfileRingLocationPredictions([]);
-            setProfileRingLocationSearchError('No se pudo buscar la ubicación. Revisa tu API key de Google Places.');
+        const resp = await fetch(
+          `${API_URL}/api/places/autocomplete?q=${encodeURIComponent(q)}&language=es`,
+          {
+            headers: {
+              Authorization: `Bearer ${authToken}`,
+            },
           }
+        );
+        const data = await resp.json().catch(() => ({}));
+
+        if (!resp.ok) {
+          if (resp.status === 401 || resp.status === 403) {
+            if (isActive) setProfileRingLocationSearchError('Inicia sesión para buscar ubicaciones.');
+          } else if (resp.status === 503) {
+            if (isActive) setProfileRingLocationSearchError('Búsqueda de ubicación no configurada en el servidor.');
+          } else {
+            if (isActive) setProfileRingLocationSearchError('No se pudo buscar la ubicación.');
+          }
+          if (isActive) setProfileRingLocationPredictions([]);
+          return;
         }
+
+        const preds = Array.isArray((data as any)?.predictions) ? (data as any).predictions : [];
+        const items = preds
+          .map((p: any) => ({
+            placeId: String(p?.placeId || p?.place_id || ''),
+            description: String(p?.description || ''),
+          }))
+          .filter((p: any) => p.placeId && p.description)
+          .slice(0, 8);
+
+        if (isActive) setProfileRingLocationPredictions(items);
       } catch {
         if (isActive) {
           setProfileRingLocationPredictions([]);
@@ -3443,7 +3446,7 @@ const FrontScreen = ({
       isActive = false;
       clearTimeout(timeout);
     };
-  }, [profileRingLocationSearchQuery, showProfileRingLocationPicker, isGooglePlacesSearchConfigured]);
+  }, [profileRingLocationSearchQuery, showProfileRingLocationPicker, isPlacesSearchEnabled, authToken, API_URL]);
 
   const moveProfileRingLocationMapTo = useCallback((lat: number, lng: number) => {
     const region = {
@@ -3461,33 +3464,36 @@ const FrontScreen = ({
   }, []);
 
   const handleSelectProfileRingLocationPrediction = useCallback(async (placeId: string, description: string) => {
-    if (!isGooglePlacesSearchConfigured) return;
+    if (!isPlacesSearchEnabled) return;
     const safePlaceId = String(placeId || '').trim();
     if (!safePlaceId) return;
 
     setIsProfileRingLocationSearching(true);
     setProfileRingLocationSearchError('');
     try {
-      const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(
-        safePlaceId
-      )}&fields=geometry,name,formatted_address&key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}&language=es`;
-      const resp = await fetch(url);
-      const data = await resp.json();
-      const status = String(data?.status || '');
-      if (status !== 'OK') {
+      const resp = await fetch(
+        `${API_URL}/api/places/details?placeId=${encodeURIComponent(safePlaceId)}&language=es`,
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        }
+      );
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
         setProfileRingLocationSearchError('No se pudo obtener detalles del lugar.');
         return;
       }
 
-      const loc = data?.result?.geometry?.location;
-      const lat = Number(loc?.lat);
-      const lng = Number(loc?.lng);
+      const lat = Number((data as any)?.lat);
+      const lng = Number((data as any)?.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
         setProfileRingLocationSearchError('Ubicación inválida.');
         return;
       }
 
-      const label = String(data?.result?.formatted_address || data?.result?.name || description || '').trim();
+      const label = String((data as any)?.label || description || '').trim();
       setProfileRingPickedLocationLabel(label || null);
       setProfileRingPickedLocationPlaceId(safePlaceId);
       setProfileRingLocationSearchQuery(label || description);
@@ -3499,7 +3505,7 @@ const FrontScreen = ({
     } finally {
       setIsProfileRingLocationSearching(false);
     }
-  }, [isGooglePlacesSearchConfigured, moveProfileRingLocationMapTo]);
+  }, [isPlacesSearchEnabled, moveProfileRingLocationMapTo, authToken, API_URL]);
 
   const closeProfileRingLocationPicker = useCallback(() => {
     setShowProfileRingLocationPicker(false);
@@ -8327,14 +8333,14 @@ const FrontScreen = ({
                   <MaterialIcons name="search" size={18} color="rgba(255,255,255,0.75)" />
                   <TextInput
                     style={styles.profileRingLocationSearchInput}
-                    placeholder={isGooglePlacesSearchConfigured ? 'Buscar ubicación…' : 'Configura GOOGLE_MAPS_API_KEY para buscar…'}
+                    placeholder={isPlacesSearchEnabled ? 'Buscar ubicación…' : 'Inicia sesión para buscar…'}
                     placeholderTextColor="rgba(255,255,255,0.35)"
                     value={profileRingLocationSearchQuery}
                     onChangeText={(v) => {
                       setProfileRingLocationSearchQuery(v);
                       setProfileRingPickedLocationLabel(null);
                     }}
-                    editable={isGooglePlacesSearchConfigured}
+                    editable={isPlacesSearchEnabled}
                     autoCapitalize="none"
                     autoCorrect={false}
                     returnKeyType="search"

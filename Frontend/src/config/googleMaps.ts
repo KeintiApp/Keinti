@@ -1,11 +1,5 @@
-// Google Maps / Places Web API key
+// Deprecated: Places search is now proxied through the backend.
 //
-// Used for place search (autocomplete + place details) inside the in-app location picker.
-// IMPORTANT:
-// - Enable "Places API" (and optionally "Geocoding API") for this key.
-// - Restrict it appropriately for your app.
-//
-// Note: The native map tiles on Android are controlled by the Android manifest meta-data
-// (see android/app/src/main/res/values/google_maps_api.xml).
-
-export const GOOGLE_MAPS_API_KEY = 'AIzaSyDT6Sa3s0zsYqSi5Tukh4q7qhSTVGeBGuY';
+// Keeping this export (empty) avoids accidental re-introduction of keys into git.
+// If you need Places/Geocoding, configure `GOOGLE_PLACES_API_KEY` in `Backend/.env`.
+export const GOOGLE_MAPS_API_KEY = '';

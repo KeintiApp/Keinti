@@ -94,6 +94,24 @@ npx react-native run-android
 3. **Verificar conexión**: `adb devices`
 4. **Asegurar que el dispositivo esté en la misma red WiFi** que tu PC
 
+## 🗺️ Google Maps / Places (sin exponer claves)
+
+### Android (mapa nativo)
+La clave de **Google Maps SDK for Android** no debe commitearse. Configúrala en `Frontend/android/local.properties` (este archivo ya está en `.gitignore`):
+
+```properties
+GOOGLE_MAPS_API_KEY=TU_CLAVE
+```
+
+### Places (búsqueda de ubicaciones)
+La búsqueda (autocomplete + details) se hace ahora **vía backend** para no exponer la clave en la app.
+
+En `Backend/.env`:
+
+```env
+GOOGLE_PLACES_API_KEY=TU_CLAVE
+```
+
 ## 🔍 Solución de Problemas
 
 ### Backend no se conecta:

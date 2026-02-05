@@ -16,6 +16,7 @@ const groupRequestRoutes = require('./routes/groupRequests');
 const reportsRoutes = require('./routes/reports');
 const accountAuthRoutes = require('./routes/accountAuth');
 const adminAccountAuthRoutes = require('./routes/adminAccountAuth');
+const placesRoutes = require('./routes/places');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -45,6 +46,7 @@ app.use('/api/notifications', notificationsRoutes);
 app.use('/api/group-requests', groupRequestRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/account-auth', accountAuthRoutes);
+app.use('/api/places', placesRoutes);
 
 // Admin UI (selfie review)
 app.use('/admin/account-auth', adminAccountAuthRoutes);

@@ -28,6 +28,9 @@ if (-Not (Test-Path ".env")) {
     Write-Host "Archivo .env no encontrado" -ForegroundColor Yellow
     Write-Host "Creando .env con valores por defecto..." -ForegroundColor Yellow
 
+    # Generate a random JWT secret for local dev. Do not hardcode secrets in git.
+    $jwtSecret = [Guid]::NewGuid().ToString("N") + [Guid]::NewGuid().ToString("N")
+
     $envContent = @'
 PORT=3000
 
@@ -39,12 +42,14 @@ DB_USER=postgres
 DB_PASSWORD=postgres
 
 # JWT Secret
-JWT_SECRET=KeintiApp_secret_key_2024_super_secure
+JWT_SECRET=__JWT_SECRET__
 
 # Upload Paths
 UPLOAD_PATH=./uploads
 PROFILE_PHOTOS_PATH=./uploads/profile_photos
 '@
+
+    $envContent = $envContent.Replace('__JWT_SECRET__', $jwtSecret)
 
     $envContent | Out-File -FilePath ".env" -Encoding UTF8
     Write-Host ".env creado" -ForegroundColor Green

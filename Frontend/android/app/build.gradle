@@ -78,6 +78,21 @@ def keystoreProperties = new Properties()
 def keystorePropertiesFile = rootProject.file('keystore.properties')
 def isReleaseBuild = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }
 
+// Secrets should not live in git. Read Maps key from local.properties or environment variables.
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader ->
+        localProperties.load(reader)
+    }
+}
+
+def googleMapsApiKey = (
+    localProperties.getProperty('GOOGLE_MAPS_API_KEY')
+        ?: System.getenv('GOOGLE_MAPS_API_KEY')
+        ?: 'YOUR_GOOGLE_MAPS_API_KEY'
+).toString().trim()
+
 if (isReleaseBuild && !keystorePropertiesFile.exists()) {
     throw new GradleException("Missing android/keystore.properties. Create it from android/keystore.properties.example before building a release.")
 }
@@ -102,6 +117,9 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 9
         versionName "1.1.0"
+
+        // Used by AndroidManifest.xml meta-data: com.google.android.geo.API_KEY
+        manifestPlaceholders = [googleMapsApiKey: googleMapsApiKey]
     }
     signingConfigs {
         debug {
