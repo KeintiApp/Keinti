@@ -211,8 +211,8 @@ const GradientText = ({
       <Svg width={layout.width} height={layout.height}>
         <Defs>
           <LinearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor="#FF9800" stopOpacity="1" />
-            <Stop offset="1" stopColor="#FFEB3B" stopOpacity="1" />
+            <Stop offset="0" stopColor="#ffffff" stopOpacity="1" />
+            <Stop offset="1" stopColor="#ffa115" stopOpacity="1" />
           </LinearGradient>
         </Defs>
         <Rect x="0" y="0" width={layout.width} height={layout.height} fill={`url(#${gradientId})`} />
