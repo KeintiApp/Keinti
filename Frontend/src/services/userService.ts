@@ -522,6 +522,49 @@ export const cancelEmailVerificationCode = async (email: string) => {
   return data;
 };
 
+export interface SignupAttemptsStatus {
+  attemptsUsed: number;
+  maxAttempts: number;
+  locked: boolean;
+  lockedUntil: string | null;
+}
+
+/**
+ * Called when the 5-minute confirmation timer expires without the user
+ * clicking the confirmation link. Records the failed attempt on the backend,
+ * deletes the unconfirmed Supabase Auth user, and returns updated attempt info.
+ */
+export const cancelExpiredSignup = async (email: string): Promise<SignupAttemptsStatus & { ok: boolean }> => {
+  const response = await fetch(`${API_URL}/api/auth/signup/cancel-expired`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: String(email || '').trim() }),
+  });
+
+  const data = (await response.json().catch(() => ({}))) as ApiErrorShape & SignupAttemptsStatus & { ok?: boolean };
+  if (!response.ok) {
+    throw new ApiError(data?.error || 'No se pudo cancelar el registro expirado', response.status, data);
+  }
+  return data as SignupAttemptsStatus & { ok: boolean };
+};
+
+/**
+ * Check whether an email is locked due to too many failed signup attempts.
+ */
+export const getSignupAttemptsStatus = async (email: string): Promise<SignupAttemptsStatus> => {
+  const encoded = encodeURIComponent(String(email || '').trim());
+  const response = await fetch(`${API_URL}/api/auth/signup/attempts-status?email=${encoded}`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  const data = (await response.json().catch(() => ({}))) as ApiErrorShape & SignupAttemptsStatus;
+  if (!response.ok) {
+    throw new ApiError(data?.error || 'No se pudo verificar el estado de intentos', response.status, data);
+  }
+  return data;
+};
+
 export const submitEmailRectification = async (params: { email: string; message: string }) => {
   const response = await fetch(`${API_URL}/api/auth/email/rectification`, {
     method: 'POST',

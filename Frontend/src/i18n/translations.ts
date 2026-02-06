@@ -126,6 +126,10 @@ export type TranslationKey =
   | 'register.emailAlreadyInUse'
   | 'register.emailSendFailed'
   | 'register.missingProfileData'
+  | 'register.signupExpiredNotice'
+  | 'register.signupExpiredTitle'
+  | 'register.emailLocked24h'
+  | 'register.attemptsRemaining'
 
   | 'validation.invalidDateFormat'
   | 'validation.invalidDate'
@@ -520,6 +524,10 @@ const es: Record<TranslationKey, string> = {
   'register.emailAlreadyInUse': 'Este correo electrónico ya está en uso por otro usuario registrado en Keinti. Prueba con otro diferente.',
   'register.emailSendFailed': 'No hemos podido enviar el código al correo electrónico "{email}". Verifica que el correo electrónico sea válido.',
   'register.missingProfileData': 'Faltan datos del registro. Vuelve atrás y completa usuario, fecha, género y nacionalidad.',
+  'register.signupExpiredNotice': 'El tiempo de verificación ha expirado. Tus datos de registro han sido eliminados. Puedes volver a intentarlo.',
+  'register.signupExpiredTitle': 'Tiempo expirado',
+  'register.emailLocked24h': 'Has agotado los {max} intentos de registro con este correo. No podrás volver a usarlo durante 24 horas.',
+  'register.attemptsRemaining': 'Intentos restantes: {remaining} de {max}',
 
   'validation.invalidDateFormat': 'Formato de fecha inválido',
   'validation.invalidDate': 'Fecha inválida',
@@ -949,6 +957,10 @@ const en: Record<TranslationKey, string> = {
   'register.emailAlreadyInUse': 'This email is already in use by another Keinti user. Please try a different one.',
   'register.emailSendFailed': 'We could not send the code to the email "{email}". Please verify the email address is valid.',
   'register.missingProfileData': 'Missing signup data. Go back and complete username, birth date, gender and nationality.',
+  'register.signupExpiredNotice': 'Verification time expired. Your registration data has been cleared. You can try again.',
+  'register.signupExpiredTitle': 'Time expired',
+  'register.emailLocked24h': 'You have used all {max} signup attempts with this email. You cannot use it again for 24 hours.',
+  'register.attemptsRemaining': 'Remaining attempts: {remaining} of {max}',
 
   'validation.invalidDateFormat': 'Invalid date format',
   'validation.invalidDate': 'Invalid date',

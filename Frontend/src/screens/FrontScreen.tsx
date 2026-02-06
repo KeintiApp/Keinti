@@ -52,6 +52,7 @@ import Svg, { Defs, LinearGradient, Stop, Rect, Circle, Path, Text as SvgText } 
 
 const BLOCKED_JOINED_GROUP_IDS_KEY = 'keinti.blocked_joined_group_ids';
 const PROFILE_YOUR_PROFILE_HINT_SEEN_KEY = 'keinti.hints.profile_your_profile_seen';
+const HOME_INTIMIDADES_UNLOCKS_STORAGE_KEY_PREFIX = 'keinti.home_intimidades_unlocks.';
 const HOME_LOADER_MIN_MS = 1000;
 const HOME_INTERSTITIAL_MIN_VIEWS = 8;
 const HOME_INTERSTITIAL_MAX_VIEWS = 10;
@@ -214,6 +215,39 @@ const getAsyncStorageSafe = (): any | null => {
     // If the native module isn't linked/built yet, importing AsyncStorage can throw.
     return null;
   }
+};
+
+const makeHomeIntimidadesUnlockSig = (pubId: string | number, createdAt: unknown) => {
+  const id = String(pubId ?? '').trim();
+  if (!id) return '';
+
+  const toDate = (value: unknown): Date | null => {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return null;
+    return d;
+  };
+
+  const raw = String(createdAt ?? '').trim();
+
+  const dt = toDate(createdAt);
+  if (dt) {
+    return `${id}:${dt.toISOString()}`;
+  }
+
+  // Reinforcement:
+  // - Always persist something stable even if the device can't parse the date.
+  // - Still resets correctly when the post is republished (new id and/or new createdAt string).
+  return raw ? `${id}:${raw}` : id;
+};
+
+const makeHomeIntimidadesUnlockStorageKey = (email?: string | null) => {
+  const emailKey = normalizeEmailKey(email);
+  const safe = emailKey || 'anon';
+  // Hash to keep key short and consistent.
+  return `${HOME_INTIMIDADES_UNLOCKS_STORAGE_KEY_PREFIX}${hashString(safe)}`;
 };
 
 
@@ -1020,6 +1054,7 @@ const FrontScreen = ({
   const pendingChannelImageUnlockKeyRef = useRef<string | null>(null);
   const [isRewardedLoaded, setIsRewardedLoaded] = useState(false);
   const [showRewardedLoading, setShowRewardedLoading] = useState(false);
+  const [pendingHomeIntimidadesUnlockPubId, setPendingHomeIntimidadesUnlockPubId] = useState<string | null>(null);
 
   const revealIntimidadesForPub = (pubId: string) => {
     setIntimidadesVisible(prev => ({ ...prev, [pubId]: true }));
@@ -1089,6 +1124,7 @@ const FrontScreen = ({
 
       if (earned && pubId) {
         revealIntimidadesForPub(pubId);
+        setPendingHomeIntimidadesUnlockPubId(String(pubId));
       }
 
       if (earned && unlockKey) {
@@ -4185,18 +4221,6 @@ const FrontScreen = ({
 
   const enteredOwnChannelChatRef = useRef(false);
 
-  const homeSwipeTutorialContainerRef = useRef<View | null>(null);
-  const homeSwipeTutorialBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
-  const homeSwipeTutorialTouchStartRef = useRef<{ x: number; y: number; ts: number } | null>(null);
-
-  const measureHomeSwipeTutorialBounds = () => {
-    const node = homeSwipeTutorialContainerRef.current;
-    if (!node) return;
-    node.measureInWindow((x, y, width, height) => {
-      homeSwipeTutorialBoundsRef.current = { x, y, width, height };
-    });
-  };
-
   const togglePublicationOptions = (pubId: string | number) => {
     setActivePublicationOptionsId(prev => (prev === pubId ? null : pubId));
   };
@@ -5314,9 +5338,120 @@ const FrontScreen = ({
 
   const [activeIntimidadIndices, setActiveIntimidadIndices] = useState<Record<string, number>>({});
   const [intimidadesVisible, setIntimidadesVisible] = useState<Record<string, boolean>>({});
+  const [homeIntimidadesUnlockSigs, setHomeIntimidadesUnlockSigs] = useState<Record<string, 1>>({});
+  const homeIntimidadesSigByPubIdRef = useRef<Record<string, string>>({});
   const [activePresentationIndices, setActivePresentationIndices] = useState<Record<string, number>>({});
   const [presentationOverlayVisible, setPresentationOverlayVisible] = useState<Record<string, boolean>>({});
   const [expandedProfileTexts, setExpandedProfileTexts] = useState<Record<string, boolean>>({});
+
+  // Load persisted unlocks for the current user (so the Keitin panel stays open after restart).
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const AsyncStorage = getAsyncStorageSafe();
+      if (!AsyncStorage) {
+        if (!cancelled) setHomeIntimidadesUnlockSigs({});
+        return;
+      }
+
+      try {
+        const key = makeHomeIntimidadesUnlockStorageKey(userEmail);
+        const raw = await AsyncStorage.getItem(key);
+        if (cancelled) return;
+
+        const parsed = raw ? JSON.parse(raw) : {};
+        if (parsed && typeof parsed === 'object') {
+          setHomeIntimidadesUnlockSigs(parsed as Record<string, 1>);
+        } else {
+          setHomeIntimidadesUnlockSigs({});
+        }
+      } catch {
+        if (!cancelled) setHomeIntimidadesUnlockSigs({});
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userEmail]);
+
+  // When a rewarded ad is earned for a publication, persist its unlock signature.
+  useEffect(() => {
+    if (!pendingHomeIntimidadesUnlockPubId) return;
+
+    const pubIdStr = String(pendingHomeIntimidadesUnlockPubId || '').trim();
+    if (!pubIdStr) {
+      setPendingHomeIntimidadesUnlockPubId(null);
+      return;
+    }
+
+    const pub = publications.find(p => String(p?.id) === pubIdStr);
+    const sig = pub ? makeHomeIntimidadesUnlockSig(pub.id, pub.createdAt) : '';
+    if (!sig) {
+      setPendingHomeIntimidadesUnlockPubId(null);
+      return;
+    }
+
+    setHomeIntimidadesUnlockSigs(prev => {
+      if (prev[sig] === 1) return prev;
+      const next = { ...prev, [sig]: 1 as const };
+
+      const AsyncStorage = getAsyncStorageSafe();
+      if (AsyncStorage) {
+        const key = makeHomeIntimidadesUnlockStorageKey(userEmail);
+        AsyncStorage.setItem(key, JSON.stringify(next)).catch(() => { });
+      }
+
+      return next;
+    });
+
+    setPendingHomeIntimidadesUnlockPubId(null);
+  }, [pendingHomeIntimidadesUnlockPubId, publications, userEmail]);
+
+  // Sync persisted unlocks into runtime visibility state.
+  // Also reset visibility if the same publication id is republished with a new createdAt.
+  useEffect(() => {
+    if (!publications.length) return;
+
+    const presentIds = new Set(publications.map(p => String(p?.id ?? '')));
+    const sigById = homeIntimidadesSigByPubIdRef.current;
+    Object.keys(sigById).forEach((id) => {
+      if (!presentIds.has(id)) delete sigById[id];
+    });
+
+    setIntimidadesVisible(prev => {
+      let changed = false;
+      const next = { ...prev };
+
+      for (const pub of publications) {
+        const id = String(pub?.id ?? '').trim();
+        if (!id) continue;
+
+        const sig = makeHomeIntimidadesUnlockSig(pub.id, pub.createdAt);
+        const prevSig = sigById[id];
+
+        if (sig) {
+          if (prevSig && prevSig !== sig) {
+            // Republished (or changed) -> reset to locked.
+            if (next[id]) {
+              next[id] = false;
+              changed = true;
+            }
+          }
+          sigById[id] = sig;
+        }
+
+        const unlocked = !!sig && homeIntimidadesUnlockSigs[sig] === 1;
+        if (unlocked && !next[id]) {
+          next[id] = true;
+          changed = true;
+        }
+      }
+
+      return changed ? next : prev;
+    });
+  }, [publications, homeIntimidadesUnlockSigs]);
 
   // Home: show/hide profile rings overlay per publication (default: hidden)
   const [homeProfileRingsVisibleByPostId, setHomeProfileRingsVisibleByPostId] = useState<Record<string, boolean>>({});
@@ -8743,47 +8878,13 @@ const FrontScreen = ({
                         key={pub.id}
                         style={{ marginBottom: 0, transform: [{ translateX: publicationSwipeX }] }}
                         {...publicationSwipePanResponder.panHandlers}
-                        onTouchStart={(evt) => {
-                          if (!shouldShowHomeSwipeTutorial) return;
-                          const { pageX, pageY } = evt.nativeEvent;
-                          homeSwipeTutorialTouchStartRef.current = { x: pageX, y: pageY, ts: Date.now() };
-                        }}
-                        onTouchEnd={(evt) => {
-                          if (!shouldShowHomeSwipeTutorial) return;
-                          const start = homeSwipeTutorialTouchStartRef.current;
-                          homeSwipeTutorialTouchStartRef.current = null;
-                          if (!start) return;
-
-                          const { pageX, pageY } = evt.nativeEvent;
-                          const dx = Math.abs(pageX - start.x);
-                          const dy = Math.abs(pageY - start.y);
-                          const dt = Date.now() - start.ts;
-
-                          // Treat as a tap (not a swipe/drag).
-                          if (dx > 6 || dy > 6 || dt > 450) return;
-
-                          const bounds = homeSwipeTutorialBoundsRef.current;
-                          if (!bounds) {
-                            // If bounds are not ready yet, try measuring once and bail.
-                            measureHomeSwipeTutorialBounds();
-                            return;
-                          }
-
-                          const withinX = pageX >= bounds.x && pageX <= bounds.x + bounds.width;
-                          const withinY = pageY >= bounds.y && pageY <= bounds.y + bounds.height;
-                          if (withinX && withinY) {
-                            markHomeSwipeTutorialSeen();
-                          }
-                        }}
                       >
                         {shouldShowHomeSwipeTutorial && (
-                          <View
-                            ref={(node) => {
-                              homeSwipeTutorialContainerRef.current = node;
-                            }}
+                          <Pressable
                             style={styles.homeSwipeTutorialContainer}
-                            pointerEvents="none"
-                            onLayout={measureHomeSwipeTutorialBounds}
+                            onPress={markHomeSwipeTutorialSeen}
+                            disabled={hasSeenHomeSwipeTutorial !== false}
+                            accessibilityRole="button"
                           >
                             <Animated.View
                               style={{
@@ -8806,7 +8907,7 @@ const FrontScreen = ({
                             >
                               <MaterialIcons name="keyboard-arrow-right" size={26} color="#FFB74D" />
                             </Animated.View>
-                          </View>
+                          </Pressable>
                         )}
                         <View style={styles.presentationHeaderContainer}>
                           <View style={styles.presentationUserInfo}>

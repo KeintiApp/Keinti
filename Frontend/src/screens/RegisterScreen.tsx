@@ -26,6 +26,8 @@ import {
   checkEmailRegistered,
   checkUsernameRegistered,
   completeSupabaseProfile,
+  cancelExpiredSignup,
+  getSignupAttemptsStatus,
 } from '../services/userService';
 import { useI18n } from '../i18n/I18nProvider';
 import { SUPABASE_REDIRECT_URL, isSupabaseConfigured, supabase } from '../config/supabase';
@@ -97,7 +99,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   const { t } = useI18n();
   const USERNAME_MAX_LENGTH = 22; // Incluye el '@'
   const RECTIFICATION_MAX_LENGTH = 220;
-  const EMAIL_CODE_MAX_SENDS = 2;
+  const EMAIL_CODE_MAX_SENDS = 5;
   const [step, setStep] = useState(1); // Paso 1: email, Paso 2: usuario y fecha, Paso 3: género y nacionalidad, Paso 4: contraseñas, Paso 5: código email
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
@@ -135,7 +137,16 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   const [verifyCodeInlineError, setVerifyCodeInlineError] = useState('');
   const [verifyCodeRemainingAttempts, setVerifyCodeRemainingAttempts] = useState<number | null>(null);
 
+  // Absolute timestamp (ms) when the verification timer should reach 0.
+  // Using both state (for effect deps) and ref (for instant access in closures).
+  const [verificationDeadline, setVerificationDeadline] = useState(0);
+  const verificationDeadlineRef = useRef(0);
+
+  // Inline notice shown after a timer expiry resets the form.
+  const [signupExpiredNotice, setSignupExpiredNotice] = useState('');
+
   const deepLinkHandledRef = useRef(false);
+  const expiryHandledRef = useRef(false);
 
   const pendingKeyForEmail = (e: string) => `keinti:pendingSignup:${String(e || '').trim().toLowerCase()}`;
 
@@ -624,8 +635,19 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
     checkInitial();
 
     // If the user confirms via browser and comes back manually, detect the session.
+    // Also recalculate the countdown timer instantly to account for time spent
+    // in the background (the setInterval may have been frozen by the OS).
     const appStateSub = AppState.addEventListener('change', async (state) => {
       if (state === 'active') {
+        // Instant timer recalculation using the ref (always fresh value).
+        if (verificationDeadlineRef.current > 0) {
+          const remaining = Math.max(
+            0,
+            Math.ceil((verificationDeadlineRef.current - Date.now()) / 1000)
+          );
+          setVerificationSecondsLeft(remaining);
+        }
+
         await maybeFinalizeFromExistingSession();
       }
     });
@@ -672,45 +694,107 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
     setUsernameAlreadyInUse(false);
     setShowSuccessMessage(false);
     setRequestCodeInlineError('');
+    setVerificationDeadline(0);
+    verificationDeadlineRef.current = 0;
+    expiryHandledRef.current = false;
+  };
+
+  /** Set both deadline state + ref and the seconds counter. */
+  const startVerificationTimer = (seconds: number) => {
+    const deadline = Date.now() + seconds * 1000;
+    verificationDeadlineRef.current = deadline;
+    setVerificationDeadline(deadline);
+    setVerificationSecondsLeft(seconds);
+    expiryHandledRef.current = false;
   };
 
   const markEmailLocked = () => {
     setIsEmailLocked(true);
     setVerificationSecondsLeft(0);
+    setVerificationDeadline(0);
+    verificationDeadlineRef.current = 0;
   };
 
+  // ------- Deadline-based countdown timer -------
+  // Uses the absolute deadline so that time spent in the background is
+  // correctly accounted for: each tick recalculates from Date.now().
   useEffect(() => {
-    if (step !== 5) {
-      return;
-    }
-    if (verificationSecondsLeft <= 0) {
+    if (step !== 5 || verificationDeadline <= 0) {
       return;
     }
 
-    const id = setInterval(() => {
-      setVerificationSecondsLeft(prev => (prev <= 1 ? 0 : prev - 1));
-    }, 1000);
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((verificationDeadlineRef.current - Date.now()) / 1000));
+      setVerificationSecondsLeft(remaining);
+    };
+
+    tick(); // immediate first tick
+    const id = setInterval(tick, 1000);
 
     return () => clearInterval(id);
-  }, [step, verificationSecondsLeft]);
+  }, [step, verificationDeadline]);
 
-  // Si el usuario deja caducar el código 2 veces (2 envíos), mostrar bloqueo + rectificación.
+  // ------- Timer-expiry handler -------
+  // When the countdown reaches 0 on step 5 (and registration hasn't already
+  // completed), call the backend to record the failed attempt, delete the
+  // unconfirmed Supabase user, and reset the form back to step 1.
   useEffect(() => {
-    if (step !== 5) {
-      return;
-    }
-    if (isEmailLocked) {
-      return;
-    }
-    if (verificationSecondsLeft !== 0) {
-      return;
-    }
-    if (verificationSendCount < EMAIL_CODE_MAX_SENDS) {
-      return;
-    }
+    if (step !== 5) return;
+    if (verificationSecondsLeft > 0) return;
+    if (verificationDeadline <= 0) return; // timer was never started
+    if (isEmailLocked) return;
+    if (showSuccessMessage) return; // registration already succeeded
+    if (deepLinkHandledRef.current) return; // callback already processed
+    if (expiryHandledRef.current) return; // already handling this expiry
 
-    markEmailLocked();
-  }, [step, verificationSecondsLeft, verificationSendCount, isEmailLocked]);
+    expiryHandledRef.current = true;
+
+    const handleExpiry = async () => {
+      const currentEmail = String(email || '').trim().toLowerCase();
+      if (!currentEmail) {
+        resetToEmailStep();
+        return;
+      }
+
+      try {
+        const result = await cancelExpiredSignup(currentEmail);
+
+        if (result.locked) {
+          // Maximum attempts reached → show 24 h lock with rectification option.
+          markEmailLocked();
+          setRequestCodeInlineError(
+            t('register.emailLocked24h')
+              .replace('{max}', String(result.maxAttempts))
+          );
+          return;
+        }
+
+        // Not yet locked → reset form and show notice on step 1.
+        const remaining = Math.max(0, result.maxAttempts - result.attemptsUsed);
+        const notice =
+          t('register.signupExpiredNotice') +
+          '\n' +
+          t('register.attemptsRemaining')
+            .replace('{remaining}', String(remaining))
+            .replace('{max}', String(result.maxAttempts));
+
+        // Clear pending signup from AsyncStorage.
+        await clearPendingSignup();
+
+        resetToEmailStep();
+        setSignupExpiredNotice(notice);
+      } catch (err) {
+        console.error('Error handling signup expiry:', err);
+        // Fallback: still reset the form even if the backend call failed.
+        await clearPendingSignup().catch(() => {});
+        resetToEmailStep();
+        setSignupExpiredNotice(t('register.signupExpiredNotice'));
+      }
+    };
+
+    handleExpiry();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, verificationSecondsLeft, verificationDeadline, isEmailLocked, showSuccessMessage]);
 
   // Filtrar países según la búsqueda
   const filteredCountries = COUNTRIES.filter(country =>
@@ -778,9 +862,24 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
     setIsSubmitting(true);
     setRequestCodeInlineError('');
+    setSignupExpiredNotice('');
 
     try {
+      // Check whether this email is locked due to too many failed attempts.
+      try {
+        const status = await getSignupAttemptsStatus(String(email || '').trim());
+        if (status.locked) {
+          setRequestCodeInlineError(
+            t('register.emailLocked24h').replace('{max}', String(status.maxAttempts))
+          );
+          return;
+        }
+      } catch {
+        // Non-blocking: if the check fails we still allow the signup attempt.
+      }
+
       deepLinkHandledRef.current = false;
+      expiryHandledRef.current = false;
       await persistPendingSignup();
       setIsEmailLocked(false);
       setRectificationText('');
@@ -805,7 +904,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
       }
 
       // Supabase email OTP suele caducar alrededor de 5 minutos.
-      setVerificationSecondsLeft(300);
+      startVerificationTimer(300);
       setVerificationSendCount((prev) => prev + 1);
       setEmailVerificationCode('');
       setStep(5);
@@ -901,6 +1000,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
     try {
       deepLinkHandledRef.current = false;
+      expiryHandledRef.current = false;
       await persistPendingSignup();
 
       const { error } = await supabase.auth.resend({
@@ -920,7 +1020,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
         throw new Error(error.message || 'No se pudo reenviar el email');
       }
 
-      setVerificationSecondsLeft(300);
+      startVerificationTimer(300);
       setVerificationSendCount((prev) => prev + 1);
       setEmailVerificationCode('');
     } catch (error: any) {
@@ -1013,6 +1113,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
                         setEmail(String(v || ''));
                         setEmailAlreadyInUse(false);
                         setRequestCodeInlineError('');
+                        setSignupExpiredNotice('');
                       }}
                       keyboardType="email-address"
                       autoCapitalize="none"
@@ -1021,6 +1122,16 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
                     {emailAlreadyInUse && (
                       <Text style={styles.errorText}>{t('register.emailAlreadyInUse')}</Text>
+                    )}
+
+                    {signupExpiredNotice !== '' && (
+                      <Text style={[styles.errorText, { color: '#FFB74D', marginTop: 10 }]}>
+                        {signupExpiredNotice}
+                      </Text>
+                    )}
+
+                    {requestCodeInlineError !== '' && (
+                      <Text style={styles.errorText}>{requestCodeInlineError}</Text>
                     )}
                   </View>
                 </>

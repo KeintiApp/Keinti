@@ -681,6 +681,157 @@ router.post('/email/cancel', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Signup-attempt tracking (Supabase Auth flow).
+// When the 5-minute confirmation timer expires without the user clicking the
+// link, the mobile app calls this endpoint to:
+//   1. Record a failed signup attempt for the email.
+//   2. Delete the unconfirmed Supabase Auth user so the next signUp() call
+//      creates a fresh one.
+//   3. Return how many attempts have been used and whether the email is now
+//      locked (>= SIGNUP_MAX_ATTEMPTS → 24 h lock).
+// ---------------------------------------------------------------------------
+const SIGNUP_MAX_ATTEMPTS = Math.max(1, Number(process.env.SIGNUP_MAX_ATTEMPTS || 5));
+const SIGNUP_LOCK_HOURS = Math.max(1, Number(process.env.SIGNUP_LOCK_HOURS || 24));
+
+router.post('/signup/cancel-expired', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+
+  if (!isValidEmailFormat(email)) {
+    return res.status(400).json({ error: 'Email inválido', code: 'INVALID_EMAIL' });
+  }
+
+  try {
+    const now = new Date();
+
+    // Read current attempt state.
+    const current = await pool.query(
+      `SELECT send_count, locked_until
+       FROM email_verification_codes
+       WHERE email = $1`,
+      [email]
+    );
+
+    const row = current.rows[0] || null;
+    const lockedUntil = row?.locked_until ? new Date(row.locked_until) : null;
+
+    // If already locked and lock hasn't expired, reject.
+    if (lockedUntil && lockedUntil.getTime() > Date.now()) {
+      return res.status(423).json({
+        error: 'Email bloqueado temporalmente',
+        code: 'EMAIL_LOCKED',
+        lockedUntil: lockedUntil.toISOString(),
+        attemptsUsed: Number(row?.send_count || 0),
+        maxAttempts: SIGNUP_MAX_ATTEMPTS,
+      });
+    }
+
+    // If a previous lock has expired, reset the counter.
+    const prevCount =
+      lockedUntil && lockedUntil.getTime() <= Date.now()
+        ? 0
+        : Number(row?.send_count || 0);
+
+    const nextCount = prevCount + 1;
+    const shouldLock = nextCount >= SIGNUP_MAX_ATTEMPTS;
+    const newLockedUntil = shouldLock
+      ? new Date(Date.now() + SIGNUP_LOCK_HOURS * 60 * 60 * 1000)
+      : null;
+
+    // Upsert attempt counter.
+    await pool.query(
+      `INSERT INTO email_verification_codes
+         (email, code_hash, expires_at, send_count, verify_failed_attempts,
+          locked_until, verified, verified_at, created_at, updated_at)
+       VALUES ($1, '', $2, $3, 0, $4, FALSE, NULL, $2, $2)
+       ON CONFLICT (email)
+       DO UPDATE SET
+         send_count   = $3,
+         locked_until = $4,
+         verified     = FALSE,
+         verified_at  = NULL,
+         updated_at   = $2`,
+      [email, now, nextCount, newLockedUntil]
+    );
+
+    // Delete the unconfirmed Supabase Auth user so a future signUp() is clean.
+    if (isSupabaseConfigured() && isSupabaseAuthConfigured()) {
+      try {
+        const supabaseUserId = await findSupabaseUserIdByEmail(email);
+        if (supabaseUserId) {
+          const admin = getSupabaseAdminClient();
+          const { data: userData } = await admin.auth.admin.getUserById(supabaseUserId);
+          // Only delete if the user never confirmed their email.
+          if (userData?.user && !userData.user.email_confirmed_at) {
+            await admin.auth.admin.deleteUser(supabaseUserId);
+          }
+        }
+      } catch (err) {
+        // Non-fatal: the next signUp() may still work (Supabase resends to
+        // existing unconfirmed users).
+        console.error('Error deleting unconfirmed Supabase user:', err);
+      }
+    }
+
+    return res.json({
+      ok: true,
+      attemptsUsed: nextCount,
+      maxAttempts: SIGNUP_MAX_ATTEMPTS,
+      locked: shouldLock,
+      lockedUntil: newLockedUntil ? newLockedUntil.toISOString() : null,
+    });
+  } catch (error) {
+    console.error('Error cancelling expired signup:', error);
+    return res.status(500).json({
+      error: 'Error al cancelar el registro expirado',
+      code: 'CANCEL_EXPIRED_FAILED',
+    });
+  }
+});
+
+// Check signup-attempt status for an email (used before signUp to verify the
+// email isn't locked after too many failed attempts).
+router.get('/signup/attempts-status', async (req, res) => {
+  const email = normalizeEmail(req.query?.email);
+
+  if (!isValidEmailFormat(email)) {
+    return res.status(400).json({ error: 'Email inválido', code: 'INVALID_EMAIL' });
+  }
+
+  try {
+    const current = await pool.query(
+      `SELECT send_count, locked_until
+       FROM email_verification_codes
+       WHERE email = $1`,
+      [email]
+    );
+
+    const row = current.rows[0] || null;
+    const lockedUntil = row?.locked_until ? new Date(row.locked_until) : null;
+    const isLocked = Boolean(lockedUntil && lockedUntil.getTime() > Date.now());
+
+    // If a previous lock expired, the counter is effectively reset.
+    const count = isLocked
+      ? Number(row?.send_count || 0)
+      : lockedUntil && lockedUntil.getTime() <= Date.now()
+        ? 0
+        : Number(row?.send_count || 0);
+
+    return res.json({
+      attemptsUsed: count,
+      maxAttempts: SIGNUP_MAX_ATTEMPTS,
+      locked: isLocked,
+      lockedUntil: isLocked ? lockedUntil.toISOString() : null,
+    });
+  } catch (error) {
+    console.error('Error checking signup attempts status:', error);
+    return res.status(500).json({
+      error: 'Error al verificar el estado de intentos',
+      code: 'CHECK_ATTEMPTS_FAILED',
+    });
+  }
+});
+
 // Enviar rectificación/reclamación si el email está bloqueado temporalmente en el registro.
 router.post('/email/rectification', async (req, res) => {
   const email = normalizeEmail(req.body?.email);

@@ -177,6 +177,12 @@ const GradientText = ({
   const [layout, setLayout] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const gradientId = 'gradientTextFill';
 
+  useEffect(() => {
+    // When the text changes (e.g. language switch), we must re-measure.
+    // Otherwise the MaskedView keeps the previous width/height and clips the new text.
+    setLayout({ width: 0, height: 0 });
+  }, [children]);
+
   const onLayout = (e: any) => {
     const w = Math.ceil(e?.nativeEvent?.layout?.width || 0);
     const h = Math.ceil(e?.nativeEvent?.layout?.height || 0);
@@ -484,6 +490,11 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           redirectTo: SUPABASE_REDIRECT_URL,
           // Some environments need these scopes explicitly; safe to keep.
           scopes: 'email profile',
+          // Force the account chooser UI (similar to Spotify UX) instead of silently reusing
+          // the last signed-in Google session.
+          queryParams: {
+            prompt: 'select_account',
+          },
         },
       } as any);
 
@@ -496,30 +507,39 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
         throw new Error('No se pudo generar la URL de autenticación');
       }
 
-      // Android note:
-      // `react-native-inappbrowser-reborn` can be flaky/crashy on some devices/ROMs in release builds.
-      // We prefer a stable flow: open system browser and wait for the deep-link callback.
       let callbackUrl: string | null = null;
-      if (Platform.OS === 'ios') {
-        const available = await InAppBrowser.isAvailable().catch(() => false);
-        if (available) {
+      const available = await InAppBrowser.isAvailable().catch(() => false);
+
+      // Prefer Custom Tabs / SFSafariViewController when available.
+      // Fallback to external browser + deep-link callback.
+      if (available) {
+        try {
           const result = await InAppBrowser.openAuth(authUrl, SUPABASE_REDIRECT_URL, {
             showTitle: false,
             enableUrlBarHiding: true,
             enableDefaultShare: false,
+            // iOS-only, ignored elsewhere
             ephemeralWebSession: true,
-          });
+          } as any);
 
           if ((result as any)?.type === 'success' && (result as any)?.url) {
             callbackUrl = String((result as any).url);
           } else if ((result as any)?.type === 'cancel') {
             return;
           }
-        } else {
-          await Linking.openURL(authUrl);
-          callbackUrl = await waitForSupabaseOAuthCallback();
+        } catch {
+          // Ignore and fallback to Linking-based flow.
         }
-      } else {
+      }
+
+      if (!callbackUrl) {
+        const canOpen = await Linking.canOpenURL(authUrl).catch(() => true);
+        if (!canOpen) {
+          throw new Error(language === 'es'
+            ? 'No se pudo abrir el navegador para iniciar sesión con Google.'
+            : 'Could not open a browser to sign in with Google.');
+        }
+
         await Linking.openURL(authUrl);
         callbackUrl = await waitForSupabaseOAuthCallback();
       }
