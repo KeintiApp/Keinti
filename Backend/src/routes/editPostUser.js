@@ -92,13 +92,22 @@ router.post('/', authenticateToken, async (req, res) => {
     ]);
 
     if (prevRow) {
+      // Preserve profileRings that are managed by the dedicated PUT /profile-rings route.
+      // The frontend POST does not include profileRings in the presentation payload,
+      // so we must merge them back to avoid wiping them on every draft save.
+      const existingProfileRings = prevRow.presentation?.profileRings;
+      const mergedPresentation = { ...nextPresentation };
+      if (existingProfileRings !== undefined && !('profileRings' in nextPresentation)) {
+        mergedPresentation.profileRings = existingProfileRings;
+      }
+
       // Actualizar
       const updateResult = await pool.query(
         `UPDATE Edit_post_user 
          SET presentation = $1, intimidades = $2, reactions = $3, updated_at = CURRENT_TIMESTAMP
          WHERE user_email = $4
          RETURNING *`,
-        [JSON.stringify(nextPresentation), JSON.stringify(nextIntimidades), JSON.stringify(nextReactions), userEmail]
+        [JSON.stringify(mergedPresentation), JSON.stringify(nextIntimidades), JSON.stringify(nextReactions), userEmail]
       );
 
       // Best-effort cleanup of orphaned draft uploads.
@@ -130,10 +139,15 @@ router.post('/', authenticateToken, async (req, res) => {
 
       res.json(updateResult.rows[0]);
     } else {
-      // Insertar
+      // Insertar (no previous row, so no profileRings to preserve)
       const insertResult = await pool.query(
         `INSERT INTO Edit_post_user (user_email, presentation, intimidades, reactions)
          VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_email) DO UPDATE
+         SET presentation = COALESCE(Edit_post_user.presentation, '{}'::jsonb) || $2::jsonb,
+             intimidades = $3,
+             reactions = $4,
+             updated_at = CURRENT_TIMESTAMP
          RETURNING *`,
         [userEmail, JSON.stringify(nextPresentation), JSON.stringify(nextIntimidades), JSON.stringify(nextReactions)]
       );

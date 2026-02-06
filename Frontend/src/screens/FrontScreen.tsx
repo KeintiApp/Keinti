@@ -27,7 +27,7 @@ import {
 } from 'react-native';
 import type { ImageSourcePropType, ViewToken } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE, type PoiClickEvent } from 'react-native-maps';
 import Geolocation from '@react-native-community/geolocation';
 import {
   AdEventType,
@@ -7286,6 +7286,8 @@ const FrontScreen = ({
       title: presentationTitle.trim(),
       text: presentationText.trim(),
       category: selectedCategory,
+      // Preserve profile rings so the POST /api/edit-profile payload doesn't lose them.
+      ...(profilePresentation?.profileRings ? { profileRings: profilePresentation.profileRings } : {}),
     };
 
     setProfilePresentation(payload);
@@ -8457,6 +8459,21 @@ const FrontScreen = ({
                       } else {
                         setProfileRingPickedLocationLabel(null);
                       }
+                    }
+                  }}
+                  onPoiClick={(e: PoiClickEvent) => {
+                    const { coordinate, name, placeId } = e.nativeEvent;
+                    if (coordinate && Number.isFinite(coordinate.latitude) && Number.isFinite(coordinate.longitude)) {
+                      setProfileRingPickedLocationLabel(name || null);
+                      setProfileRingPickedLocationPlaceId(placeId || null);
+                      setProfileRingLocationSearchQuery(name || '');
+                      moveProfileRingLocationMapTo(coordinate.latitude, coordinate.longitude);
+                    }
+                  }}
+                  onPress={(e) => {
+                    const { latitude, longitude } = e.nativeEvent.coordinate;
+                    if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+                      moveProfileRingLocationMapTo(latitude, longitude);
                     }
                   }}
                 />
