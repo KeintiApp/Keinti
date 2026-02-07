@@ -526,8 +526,62 @@ export interface SignupAttemptsStatus {
   attemptsUsed: number;
   maxAttempts: number;
   locked: boolean;
+  lockedPermanent?: boolean;
   lockedUntil: string | null;
 }
+
+export type SignupEmailStatusType =
+  | 'available'
+  | 'registered'
+  | 'pending_confirmation'
+  | 'expired_unconfirmed'
+  | 'locked_temp'
+  | 'locked_permanent';
+
+export interface SignupEmailStatus {
+  status: SignupEmailStatusType;
+  attemptsUsed?: number;
+  maxAttempts?: number;
+  lockedUntil?: string | null;
+  timerSecondsLeft?: number;
+}
+
+/**
+ * Comprehensive check of the signup status for an email.
+ * Returns one of: available, registered, pending_confirmation,
+ * expired_unconfirmed, locked_temp, locked_permanent.
+ */
+export const checkSignupEmailStatus = async (email: string): Promise<SignupEmailStatus> => {
+  const encoded = encodeURIComponent(String(email || '').trim());
+  const response = await fetch(`${API_URL}/api/auth/signup/check-email-status?email=${encoded}`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  const data = (await response.json().catch(() => ({}))) as ApiErrorShape & SignupEmailStatus;
+  if (!response.ok) {
+    throw new ApiError(data?.error || 'No se pudo comprobar el estado del email', response.status, data);
+  }
+  return data;
+};
+
+/**
+ * Record that a signup attempt has started (called right after signUp()).
+ * Stores the timer expiry so check-email-status knows the timer is active.
+ */
+export const recordSignupAttempt = async (email: string): Promise<{ ok: boolean; expiresAt: string }> => {
+  const response = await fetch(`${API_URL}/api/auth/signup/record-attempt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: String(email || '').trim() }),
+  });
+
+  const data = (await response.json().catch(() => ({}))) as ApiErrorShape & { ok?: boolean; expiresAt?: string };
+  if (!response.ok) {
+    throw new ApiError(data?.error || 'No se pudo registrar el intento', response.status, data);
+  }
+  return data as { ok: boolean; expiresAt: string };
+};
 
 /**
  * Called when the 5-minute confirmation timer expires without the user

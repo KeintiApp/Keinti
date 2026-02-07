@@ -23,11 +23,12 @@ import Svg, { Defs, LinearGradient, Stop, Rect, Circle } from 'react-native-svg'
 import { COUNTRIES } from '../constants/countries';
 import {
   submitEmailRectification,
-  checkEmailRegistered,
   checkUsernameRegistered,
   completeSupabaseProfile,
   cancelExpiredSignup,
   getSignupAttemptsStatus,
+  checkSignupEmailStatus,
+  recordSignupAttempt,
 } from '../services/userService';
 import { useI18n } from '../i18n/I18nProvider';
 import { SUPABASE_REDIRECT_URL, isSupabaseConfigured, supabase } from '../config/supabase';
@@ -277,6 +278,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
     const day = parseInt(match[1], 10);
     const month = parseInt(match[2], 10);
     const year = parseInt(match[3], 10);
+    if (year < 1900) return null;
     if (month < 1 || month > 12 || day < 1 || day > 31) return null;
     const date = new Date(year, month - 1, day);
     if (
@@ -338,6 +340,10 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
     const month = parseInt(match[2], 10);
     const year = parseInt(match[3], 10);
 
+    if (year < 1900) {
+      return false;
+    }
+
     // Verificar que la fecha sea válida
     if (month < 1 || month > 12 || day < 1 || day > 31) {
       return false;
@@ -376,6 +382,10 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
     const day = parseInt(match[1], 10);
     const month = parseInt(match[2], 10);
     const year = parseInt(match[3], 10);
+
+    if (year < 1900) {
+      return t('validation.invalidDate');
+    }
 
     if (month < 1 || month > 12 || day < 1 || day > 31) {
       return t('validation.invalidDate');
@@ -760,12 +770,18 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
         const result = await cancelExpiredSignup(currentEmail);
 
         if (result.locked) {
-          // Maximum attempts reached → show 24 h lock with rectification option.
-          markEmailLocked();
-          setRequestCodeInlineError(
-            t('register.emailLocked24h')
-              .replace('{max}', String(result.maxAttempts))
-          );
+          if (result.lockedPermanent) {
+            // Permanent lock → show permanent block message.
+            markEmailLocked();
+            setRequestCodeInlineError(t('register.emailLockedPermanent'));
+          } else {
+            // Temporary lock → show 48 h lock with rectification option.
+            markEmailLocked();
+            setRequestCodeInlineError(
+              t('register.emailLockedTemp')
+                .replace('{max}', String(result.maxAttempts))
+            );
+          }
           return;
         }
 
@@ -804,6 +820,8 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   const handleNext = async () => {
     if (step === 1) {
       setEmailAlreadyInUse(false);
+      setRequestCodeInlineError('');
+      setSignupExpiredNotice('');
 
       if (!isValidEmail(email)) {
         return;
@@ -815,14 +833,51 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
       setIsCheckingEmail(true);
       try {
-        const result = await checkEmailRegistered(email);
-        if (result.registered) {
-          setEmailAlreadyInUse(true);
-          return;
-        }
+        const status = await checkSignupEmailStatus(email);
 
-        console.log('Email:', email);
-        setStep(2); // Pasar al siguiente paso
+        switch (status.status) {
+          case 'registered':
+            setEmailAlreadyInUse(true);
+            return;
+
+          case 'pending_confirmation':
+            setRequestCodeInlineError(t('register.pendingConfirmation'));
+            return;
+
+          case 'locked_temp':
+            setRequestCodeInlineError(
+              t('register.emailLockedTemp').replace('{max}', String(status.maxAttempts || EMAIL_CODE_MAX_SENDS))
+            );
+            return;
+
+          case 'locked_permanent':
+            setRequestCodeInlineError(t('register.emailLockedPermanent'));
+            return;
+
+          case 'expired_unconfirmed': {
+            // Backend already cleaned up the old Supabase user.
+            const remaining = Math.max(0, (status.maxAttempts || EMAIL_CODE_MAX_SENDS) - (status.attemptsUsed || 0));
+            if (remaining > 0) {
+              setSignupExpiredNotice(
+                t('register.signupExpiredNotice') +
+                '\n' +
+                t('register.attemptsRemaining')
+                  .replace('{remaining}', String(remaining))
+                  .replace('{max}', String(status.maxAttempts || EMAIL_CODE_MAX_SENDS))
+              );
+            }
+            // Allow proceeding to step 2.
+            console.log('Email:', email);
+            setStep(2);
+            return;
+          }
+
+          case 'available':
+          default:
+            console.log('Email:', email);
+            setStep(2);
+            return;
+        }
       } catch (error: any) {
         console.error('Error comprobando email:', error);
         const message = error instanceof Error ? error.message : t('register.unableToComplete');
@@ -869,9 +924,13 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
       try {
         const status = await getSignupAttemptsStatus(String(email || '').trim());
         if (status.locked) {
-          setRequestCodeInlineError(
-            t('register.emailLocked24h').replace('{max}', String(status.maxAttempts))
-          );
+          if (status.lockedPermanent) {
+            setRequestCodeInlineError(t('register.emailLockedPermanent'));
+          } else {
+            setRequestCodeInlineError(
+              t('register.emailLockedTemp').replace('{max}', String(status.maxAttempts))
+            );
+          }
           return;
         }
       } catch {
@@ -901,6 +960,14 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
           return;
         }
         throw new Error(error.message || 'No se pudo enviar el email de confirmación');
+      }
+
+      // Record the attempt in the backend so check-email-status knows
+      // the timer is active if the user re-opens the registration screen.
+      try {
+        await recordSignupAttempt(String(email || '').trim());
+      } catch {
+        // Non-blocking: timer tracking is best-effort.
       }
 
       // Supabase email OTP suele caducar alrededor de 5 minutos.
@@ -1189,6 +1256,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
                           value={parseBirthDateToDate(birthDate) || getDefaultBirthDate()}
                           mode="date"
                           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                          minimumDate={new Date(1900, 0, 1)}
                           maximumDate={getDefaultBirthDate()}
                           onChange={handleBirthDatePicked}
                         />

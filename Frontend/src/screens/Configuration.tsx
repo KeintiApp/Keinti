@@ -1362,6 +1362,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       'Beneficios por conseguir Keinti verificado:\n\n' +
       '• Genera ingresos por cada uno de los usuarios que accedan a los chats de “Tu canal”.\n\n' +
       '• Obtén la insignia dorada.\n\n' +
+      '• Generas ingresos por cada 1.000 visualizaciones de las tarjetas de los aros.\n\n' +
       '• Obtén otros privilegios futuros ofrecidos por Keinti.';
 
     const rawEn =
@@ -1375,6 +1376,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       'Benefits of becoming Keinti Verified:\n\n' +
       '• Generate income for each user who accesses “Your channel” chats.\n\n' +
       '• Get the golden badge.\n\n' +
+      '• Generate income for every 1,000 views of ring cards.\n\n' +
       '• Get other future privileges offered by Keinti.';
 
     const raw = language === 'en' ? rawEn : rawEs;

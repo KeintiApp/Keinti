@@ -130,6 +130,9 @@ export type TranslationKey =
   | 'register.signupExpiredTitle'
   | 'register.emailLocked24h'
   | 'register.attemptsRemaining'
+  | 'register.pendingConfirmation'
+  | 'register.emailLockedTemp'
+  | 'register.emailLockedPermanent'
 
   | 'validation.invalidDateFormat'
   | 'validation.invalidDate'
@@ -526,8 +529,11 @@ const es: Record<TranslationKey, string> = {
   'register.missingProfileData': 'Faltan datos del registro. Vuelve atrás y completa usuario, fecha, género y nacionalidad.',
   'register.signupExpiredNotice': 'El tiempo de verificación ha expirado. Tus datos de registro han sido eliminados. Puedes volver a intentarlo.',
   'register.signupExpiredTitle': 'Tiempo expirado',
-  'register.emailLocked24h': 'Has agotado los {max} intentos de registro con este correo. No podrás volver a usarlo durante 24 horas.',
+  'register.emailLocked24h': 'Has agotado los {max} intentos de registro con este correo. No podrás volver a usarlo durante 48 horas.',
   'register.attemptsRemaining': 'Intentos restantes: {remaining} de {max}',
+  'register.pendingConfirmation': 'Confirma tu email antes de que finalice el tiempo, aún está activo.',
+  'register.emailLockedTemp': 'Has agotado los {max} intentos de registro con este correo. No podrás volver a usarlo durante 48 horas.',
+  'register.emailLockedPermanent': 'Tu correo electrónico ha sido bloqueado permanentemente por exceder el límite de intentos de registro. Contacta con keintisoporte@gmail.com para solicitar el desbloqueo.',
 
   'validation.invalidDateFormat': 'Formato de fecha inválido',
   'validation.invalidDate': 'Fecha inválida',
@@ -959,8 +965,11 @@ const en: Record<TranslationKey, string> = {
   'register.missingProfileData': 'Missing signup data. Go back and complete username, birth date, gender and nationality.',
   'register.signupExpiredNotice': 'Verification time expired. Your registration data has been cleared. You can try again.',
   'register.signupExpiredTitle': 'Time expired',
-  'register.emailLocked24h': 'You have used all {max} signup attempts with this email. You cannot use it again for 24 hours.',
+  'register.emailLocked24h': 'You have used all {max} signup attempts with this email. You cannot use it again for 48 hours.',
   'register.attemptsRemaining': 'Remaining attempts: {remaining} of {max}',
+  'register.pendingConfirmation': 'Confirm your email before the timer runs out — it is still active.',
+  'register.emailLockedTemp': 'You have used all {max} signup attempts with this email. You cannot use it again for 48 hours.',
+  'register.emailLockedPermanent': 'Your email has been permanently blocked due to exceeding the signup attempt limit. Contact keintisoporte@gmail.com to request unblocking.',
 
   'validation.invalidDateFormat': 'Invalid date format',
   'validation.invalidDate': 'Invalid date',
