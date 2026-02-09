@@ -510,6 +510,10 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
       let callbackUrl: string | null = null;
       const available = await InAppBrowser.isAvailable().catch(() => false);
 
+      // Close any lingering browser session from a previous attempt.
+      try { InAppBrowser.closeAuth(); } catch { /* ignore */ }
+      try { InAppBrowser.close(); } catch { /* ignore */ }
+
       // Prefer Custom Tabs / SFSafariViewController when available.
       // Fallback to external browser + deep-link callback.
       if (available) {
@@ -518,7 +522,12 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
             showTitle: false,
             enableUrlBarHiding: true,
             enableDefaultShare: false,
-            // iOS-only, ignored elsewhere
+            // Android: force the Custom Tab to close when it detects the
+            // redirect scheme, preventing the user from being "kicked out".
+            forceCloseOnRedirection: true,
+            showInRecents: false,
+            animated: true,
+            // iOS-only, ignored on Android
             ephemeralWebSession: true,
           } as any);
 
@@ -527,12 +536,14 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           } else if ((result as any)?.type === 'cancel') {
             return;
           }
-        } catch {
-          // Ignore and fallback to Linking-based flow.
+        } catch (iabError) {
+          // Log so we can diagnose in release via Logcat.
+          console.warn('[GoogleLogin] InAppBrowser.openAuth failed, falling back to Linking:', iabError);
         }
       }
 
       if (!callbackUrl) {
+        // Fallback: open in external browser + wait for deep-link callback.
         const canOpen = await Linking.canOpenURL(authUrl).catch(() => true);
         if (!canOpen) {
           throw new Error(language === 'es'

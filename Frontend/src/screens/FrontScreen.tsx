@@ -29,7 +29,7 @@ import type { ImageSourcePropType, ViewToken } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import MapView, { PROVIDER_GOOGLE, type PoiClickEvent } from 'react-native-maps';
 import Geolocation from '@react-native-community/geolocation';
-import {
+import mobileAds, {
   AdEventType,
   BannerAd,
   BannerAdSize,
@@ -54,8 +54,8 @@ const BLOCKED_JOINED_GROUP_IDS_KEY = 'keinti.blocked_joined_group_ids';
 const PROFILE_YOUR_PROFILE_HINT_SEEN_KEY = 'keinti.hints.profile_your_profile_seen';
 const HOME_INTIMIDADES_UNLOCKS_STORAGE_KEY_PREFIX = 'keinti.home_intimidades_unlocks.';
 const HOME_LOADER_MIN_MS = 1000;
-const HOME_INTERSTITIAL_MIN_VIEWS = 8;
-const HOME_INTERSTITIAL_MAX_VIEWS = 10;
+const HOME_INTERSTITIAL_MIN_VIEWS = 16;
+const HOME_INTERSTITIAL_MAX_VIEWS = 18;
 
 // In-memory fallback so the tutorial can still appear once even if
 // the backend ui-hints endpoint is temporarily unavailable.
@@ -1019,7 +1019,26 @@ const FrontScreen = ({
 }: FrontScreenProps) => {
   const { t, language } = useI18n();
 
+  const [adsInitialized, setAdsInitialized] = useState(false);
+  const [homeProfileRingBannerReady, setHomeProfileRingBannerReady] = useState(false);
+
   const [keintiVerified, setKeintiVerified] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await mobileAds().initialize();
+      } catch {
+        // ignore
+      }
+      if (!cancelled) setAdsInitialized(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1050,10 +1069,10 @@ const FrontScreen = ({
   const rewardedAdRef = useRef<ReturnType<typeof RewardedAd.createForAdRequest> | null>(null);
   const rewardedShowRequestedRef = useRef(false);
   const rewardedEarnedRef = useRef(false);
+  const rewardedShowTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingIntimidadesPubIdRef = useRef<string | null>(null);
   const pendingChannelImageUnlockKeyRef = useRef<string | null>(null);
   const [isRewardedLoaded, setIsRewardedLoaded] = useState(false);
-  const [showRewardedLoading, setShowRewardedLoading] = useState(false);
   const [pendingHomeIntimidadesUnlockPubId, setPendingHomeIntimidadesUnlockPubId] = useState<string | null>(null);
 
   const revealIntimidadesForPub = (pubId: string) => {
@@ -1077,7 +1096,10 @@ const FrontScreen = ({
     rewardedEarnedRef.current = false;
     pendingIntimidadesPubIdRef.current = null;
     pendingChannelImageUnlockKeyRef.current = null;
-    setShowRewardedLoading(false);
+    if (rewardedShowTimeoutRef.current) {
+      clearTimeout(rewardedShowTimeoutRef.current);
+      rewardedShowTimeoutRef.current = null;
+    }
   };
 
   useEffect(() => {
@@ -1089,9 +1111,13 @@ const FrontScreen = ({
     const unsubscribeLoaded = rewarded.addAdEventListener(RewardedAdEventType.LOADED, () => {
       setIsRewardedLoaded(true);
 
+      if (rewardedShowTimeoutRef.current) {
+        clearTimeout(rewardedShowTimeoutRef.current);
+        rewardedShowTimeoutRef.current = null;
+      }
+
       if (rewardedShowRequestedRef.current) {
         rewardedShowRequestedRef.current = false;
-        setShowRewardedLoading(false);
         try {
           rewarded.show();
         } catch (e) {
@@ -1147,16 +1173,26 @@ const FrontScreen = ({
       }
     });
 
-    // Initial preload.
-    rewarded.load();
-
     return () => {
+      if (rewardedShowTimeoutRef.current) {
+        clearTimeout(rewardedShowTimeoutRef.current);
+        rewardedShowTimeoutRef.current = null;
+      }
       unsubscribeLoaded();
       unsubscribeEarned();
       unsubscribeClosed();
       unsubscribeError();
     };
   }, []);
+
+  // Preload the first rewarded ad only after the SDK has fully initialized.
+  useEffect(() => {
+    if (!adsInitialized) return;
+    const rewarded = rewardedAdRef.current;
+    if (rewarded && !isRewardedLoaded) {
+      rewarded.load();
+    }
+  }, [adsInitialized]);
 
   const showRewardedToRevealIntimidades = (pubId: string) => {
     const rewarded = rewardedAdRef.current;
@@ -1181,7 +1217,21 @@ const FrontScreen = ({
     }
 
     rewardedShowRequestedRef.current = true;
-    setShowRewardedLoading(true);
+
+    // Safety: avoid getting stuck if the SDK never resolves LOADED/ERROR.
+    if (rewardedShowTimeoutRef.current) clearTimeout(rewardedShowTimeoutRef.current);
+    rewardedShowTimeoutRef.current = setTimeout(() => {
+      const stillWaiting = rewardedShowRequestedRef.current;
+      if (!stillWaiting) return;
+      const pendingPubId = pendingIntimidadesPubIdRef.current;
+      resetRewardedGateState();
+      setIsRewardedLoaded(false);
+      rewarded.load();
+
+      // Don't block the user if the ad can't be shown right now.
+      if (pendingPubId) revealIntimidadesForPub(pendingPubId);
+    }, 7000);
+
     rewarded.load();
   };
 
@@ -1211,7 +1261,21 @@ const FrontScreen = ({
     }
 
     rewardedShowRequestedRef.current = true;
-    setShowRewardedLoading(true);
+
+    if (rewardedShowTimeoutRef.current) clearTimeout(rewardedShowTimeoutRef.current);
+    rewardedShowTimeoutRef.current = setTimeout(() => {
+      const stillWaiting = rewardedShowRequestedRef.current;
+      if (!stillWaiting) return;
+      const pendingKey = pendingChannelImageUnlockKeyRef.current;
+      resetRewardedGateState();
+      setIsRewardedLoaded(false);
+      rewarded.load();
+
+      if (pendingKey) {
+        Alert.alert('Anuncio no disponible', 'No se pudo mostrar el anuncio en este momento.');
+      }
+    }, 7000);
+
     rewarded.load();
   };
 
@@ -7733,25 +7797,6 @@ const FrontScreen = ({
         barStyle="light-content"
       />
 
-      <Modal
-        visible={showRewardedLoading}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          // Let the user back out while the ad is still loading.
-          resetRewardedGateState();
-        }}
-      >
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', padding: 18 }}>
-          <View style={{ width: '100%', maxWidth: 420, backgroundColor: '#000000', borderRadius: 16, borderWidth: 1, borderColor: '#FFB74D', padding: 16 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-              <ActivityIndicator color="#FFB74D" />
-              <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '700' }}>Cargando anuncio…</Text>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
       {actionToast && (
         <Animated.View
           pointerEvents="none"
@@ -8366,12 +8411,22 @@ const FrontScreen = ({
               </View>
             )}
           </ScrollView>
-          {viewingProfileRingSource === 'home' && (
-            <View style={styles.profileRingViewerAdContainer}>
+          {viewingProfileRingSource === 'home' && adsInitialized && (
+            <View style={[styles.profileRingViewerAdContainer, !homeProfileRingBannerReady && { minHeight: 0, marginTop: 0 }]}>
               <BannerAd
+                key={`ring-banner-${viewingProfileRingId || 'none'}`}
                 unitId={BANNER_AD_UNIT_ID}
                 size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
                 requestOptions={{ requestNonPersonalizedAdsOnly: true }}
+                onAdLoaded={() => setHomeProfileRingBannerReady(true)}
+                onAdFailedToLoad={(error) => {
+                  setHomeProfileRingBannerReady(false);
+                  console.warn('[AdMob] Home profile ring banner failed to load', {
+                    unitId: BANNER_AD_UNIT_ID,
+                    isDev: typeof __DEV__ !== 'undefined' ? __DEV__ : undefined,
+                    error,
+                  });
+                }}
               />
             </View>
           )}

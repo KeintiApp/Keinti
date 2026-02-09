@@ -32,6 +32,11 @@ import {
 } from '../services/userService';
 import { useI18n } from '../i18n/I18nProvider';
 import { SUPABASE_REDIRECT_URL, isSupabaseConfigured, supabase } from '../config/supabase';
+import {
+  COOKIES_ADVERTISING_POLICY_MD,
+  PRIVACY_POLICY_MD,
+  TERMS_OF_USE_MD,
+} from '../legal/policies';
 
 interface RegisterScreenProps {
   onBack: (options?: { noticeMessage?: string }) => void;
@@ -120,6 +125,8 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
   const [showBirthDatePicker, setShowBirthDatePicker] = useState(false);
 
+  const [activePolicy, setActivePolicy] = useState<'privacy' | 'cookiesAds' | 'terms' | null>(null);
+
   const [emailAlreadyInUse, setEmailAlreadyInUse] = useState(false);
   const [usernameAlreadyInUse, setUsernameAlreadyInUse] = useState(false);
 
@@ -200,6 +207,21 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
   const isUiBlocked =
     isSubmitting || isVerifyingCode || isCheckingEmail || isCheckingUsername || isSendingRectification;
+
+  const getActivePolicyMd = () => {
+    if (activePolicy === 'privacy') return PRIVACY_POLICY_MD;
+    if (activePolicy === 'cookiesAds') return COOKIES_ADVERTISING_POLICY_MD;
+    if (activePolicy === 'terms') return TERMS_OF_USE_MD;
+    return '';
+  };
+
+  const formatPolicyText = (md: string) => {
+    return String(md || '')
+      .replace(/\r\n/g, '\n')
+      .split('\n')
+      .map((line) => line.replace(/^\s{0,3}#{1,6}\s+/, ''))
+      .join('\n');
+  };
 
   const getLocalizedGender = (rawGender: string) => {
     const normalized = String(rawGender || '').trim().toLowerCase();
@@ -1141,6 +1163,24 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
     _onBack();
   };
 
+  if (activePolicy) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar backgroundColor="#000000" barStyle="light-content" />
+
+        <View style={[styles.policyHeader, { paddingTop: androidTopInset }]}>
+          <TouchableOpacity style={styles.policyBackButton} onPress={() => setActivePolicy(null)} activeOpacity={0.7}>
+            <Icon name="arrow-back-ios" size={22} color="#ffffffff" />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView style={styles.policyScroll} contentContainerStyle={styles.policyContent}>
+          <Text style={styles.policyText}>{formatPolicyText(getActivePolicyMd())}</Text>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar backgroundColor="#000000" barStyle="light-content" />
@@ -1539,7 +1579,26 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
                 <View style={styles.privacyTextContainer}>
                   <Text style={styles.privacyText}>
                     {t('register.privacyPrefix')}
-                    <Text style={styles.privacyTextHighlight}>{t('register.privacyPolicies')}</Text>
+                    <Text
+                      style={styles.privacyTextHighlight}
+                      onPress={() => setActivePolicy('privacy')}
+                      suppressHighlighting>
+                      {t('register.privacyPolicyLink')}
+                    </Text>
+                    {t('register.privacySeparator1')}
+                    <Text
+                      style={styles.privacyTextHighlight}
+                      onPress={() => setActivePolicy('cookiesAds')}
+                      suppressHighlighting>
+                      {t('register.cookiesAdsPolicyLink')}
+                    </Text>
+                    {t('register.privacySeparator2')}
+                    <Text
+                      style={styles.privacyTextHighlight}
+                      onPress={() => setActivePolicy('terms')}
+                      suppressHighlighting>
+                      {t('register.termsConditionsLink')}
+                    </Text>
                     {t('register.privacySuffix')}
                   </Text>
                 </View>
@@ -1573,6 +1632,27 @@ const styles = StyleSheet.create({
     left: 16,
     zIndex: 10,
     padding: 8,
+  },
+  policyBackButton: {
+    padding: 8,
+  },
+  policyHeader: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    justifyContent: 'flex-end',
+  },
+  policyScroll: {
+    flex: 1,
+  },
+  policyContent: {
+    paddingTop: 8,
+    paddingBottom: 40,
+    paddingHorizontal: 18,
+  },
+  policyText: {
+    color: '#ffffffff',
+    fontSize: 14,
+    lineHeight: 20,
   },
   blockingOverlay: {
     position: 'absolute',

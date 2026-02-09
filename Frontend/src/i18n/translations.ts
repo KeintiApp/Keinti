@@ -90,6 +90,11 @@ export type TranslationKey =
   | 'register.successMessage'
   | 'register.privacyPrefix'
   | 'register.privacyPolicies'
+  | 'register.privacyPolicyLink'
+  | 'register.cookiesAdsPolicyLink'
+  | 'register.termsConditionsLink'
+  | 'register.privacySeparator1'
+  | 'register.privacySeparator2'
   | 'register.privacySuffix'
   | 'register.errorTitle'
   | 'register.unableToComplete'
@@ -491,6 +496,11 @@ const es: Record<TranslationKey, string> = {
   'register.successMessage': 'Bienvenido, ya eres usuario de Keinti.',
   'register.privacyPrefix': 'Una vez te registres, quedarán aceptadas las ',
   'register.privacyPolicies': 'políticas de privacidad, las políticas de cookies y publicidad, y los términos y condiciones de uso',
+  'register.privacyPolicyLink': 'políticas de privacidad',
+  'register.cookiesAdsPolicyLink': 'políticas de cookies y publicidad',
+  'register.termsConditionsLink': 'términos y condiciones de uso',
+  'register.privacySeparator1': ', las ',
+  'register.privacySeparator2': ', y los ',
   'register.privacySuffix': ' de nuestra aplicación Keinti. Para mayor seguridad, léelas antes de registrarte.',
   'register.errorTitle': 'Error al registrarse',
   'register.unableToComplete': 'No se pudo completar el registro.',
@@ -927,6 +937,11 @@ const en: Record<TranslationKey, string> = {
   'register.successMessage': 'Welcome! You are now a Keinti user.',
   'register.privacyPrefix': 'By signing up, you accept the ',
   'register.privacyPolicies': 'privacy policy, cookies and ads policy, and the terms and conditions of use',
+  'register.privacyPolicyLink': 'privacy policy',
+  'register.cookiesAdsPolicyLink': 'cookies and ads policy',
+  'register.termsConditionsLink': 'the terms and conditions of use',
+  'register.privacySeparator1': ', ',
+  'register.privacySeparator2': ', and ',
   'register.privacySuffix': ' of our Keinti app. For your safety, read them before signing up.',
   'register.errorTitle': 'Sign up error',
   'register.unableToComplete': 'Unable to complete sign up.',
