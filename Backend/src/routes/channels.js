@@ -406,17 +406,72 @@ router.get('/messages/:postId', authenticateToken, async (req, res) => {
       return res.status(status).json({ error: e?.message || 'No autorizado', code: e?.code });
     }
 
+    // El publicador ve todos los mensajes (incluidos los ocultos, con su flag).
+    // Los demás usuarios solo ven los mensajes no ocultos.
+    const isPublisher = requesterEmail === publisherEmail;
+
     const result = await pool.query(
       `SELECT cm.*, u.username 
        FROM channel_messages cm
        JOIN users u ON cm.sender_email = u.email
-       WHERE cm.post_id = $1 
+       WHERE cm.post_id = $1
+         ${isPublisher ? '' : 'AND cm.hidden = FALSE'}
        ORDER BY cm.id ASC`,
       [numericPostId]
     );
     res.json(result.rows);
   } catch (error) {
     console.error('Error al obtener mensajes:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Alternar visibilidad de un mensaje del canal (solo el anfitrión)
+router.patch('/messages/:messageId/visibility', authenticateToken, async (req, res) => {
+  const { messageId } = req.params;
+  const requesterEmail = req.user.email;
+
+  const numericMessageId = Number(messageId);
+  if (!Number.isFinite(numericMessageId)) {
+    return res.status(400).json({ error: 'messageId inválido' });
+  }
+
+  try {
+    // Obtener el mensaje y verificar que el solicitante es el anfitrión del canal
+    const msgResult = await pool.query(
+      `SELECT cm.id, cm.post_id, cm.hidden
+       FROM channel_messages cm
+       WHERE cm.id = $1
+       LIMIT 1`,
+      [numericMessageId]
+    );
+
+    if (msgResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Mensaje no encontrado' });
+    }
+
+    const message = msgResult.rows[0];
+    const publisherEmail = await getActivePostPublisherEmail(message.post_id);
+
+    if (!publisherEmail) {
+      return res.status(410).json({ error: 'Publicación no encontrada o expirada' });
+    }
+
+    if (requesterEmail !== publisherEmail) {
+      return res.status(403).json({ error: 'Solo el anfitrión puede ocultar o mostrar mensajes' });
+    }
+
+    // Alternar: si estaba oculto lo hacemos visible, y viceversa
+    const newHidden = !message.hidden;
+
+    await pool.query(
+      'UPDATE channel_messages SET hidden = $1 WHERE id = $2',
+      [newHidden, numericMessageId]
+    );
+
+    res.json({ ok: true, messageId: numericMessageId, hidden: newHidden });
+  } catch (error) {
+    console.error('Error al alternar visibilidad del mensaje:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });

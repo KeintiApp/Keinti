@@ -232,6 +232,8 @@ export type TranslationKey =
   | 'chat.requestAccepted'
   | 'chat.requestBlocked'
   | 'chat.members'
+  | 'chat.messageHidden'
+  | 'chat.messageVisible'
 
   | 'chat.lockedYourGroupsMessage'
   | 'chat.lockedJoinedGroupsMessage'
@@ -639,6 +641,8 @@ const es: Record<TranslationKey, string> = {
   'chat.requestAccepted': 'Aceptada',
   'chat.requestBlocked': 'Bloqueado',
   'chat.members': 'Miembros',
+  'chat.messageHidden': 'Mensaje oculto',
+  'chat.messageVisible': 'Mensaje visible',
 
   'chat.lockedYourGroupsMessage': 'Autentica tu cuenta para poder crear tus grupos',
   'chat.lockedJoinedGroupsMessage': 'Para conectarte a los chats de los grupos a los que te has unido, autentica tu cuenta',
@@ -1080,6 +1084,8 @@ const en: Record<TranslationKey, string> = {
   'chat.requestAccepted': 'Accepted',
   'chat.requestBlocked': 'Blocked',
   'chat.members': 'Members',
+  'chat.messageHidden': 'Message hidden',
+  'chat.messageVisible': 'Message visible',
 
   'chat.lockedYourGroupsMessage': 'Authenticate your account to create your groups',
   'chat.lockedJoinedGroupsMessage': 'To connect to the chats of the groups you have joined, authenticate your account',

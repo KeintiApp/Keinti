@@ -1935,10 +1935,53 @@ const FrontScreen = ({
     const ownerEmailForThisChat = selectedChannel ? (selectedChannel as any)?.publisher_email : userEmail;
 
     if (isViewerMode) {
+      // ── Viewer mode: thread messages the same way the host sees them ──
+      const lastMessageKeyByUsername: Record<string, string> = {};
+      const activeThreadKeyByUsername: Record<string, string> = {};
+
       chatMessages.forEach((msg: any, rawIndex: number) => {
+        const isOwnerMessage = String(msg?.sender_email ?? '') === String(ownerEmailForThisChat ?? '');
+        const messageText = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
+
+        // Link viewer messages as continuation of the active thread (if creator already replied).
+        if (!isOwnerMessage) {
+          const senderHandle = normalizeChannelMessageUsername(msg);
+          const activeKey = senderHandle ? activeThreadKeyByUsername[senderHandle] : '';
+          if (activeKey) {
+            if (!repliesByMessageKey[activeKey]) repliesByMessageKey[activeKey] = [];
+            repliesByMessageKey[activeKey].push({ id: msg?.id, created_at: msg?.created_at, content: messageText, author: 'viewer' });
+            return;
+          }
+        }
+
+        // Creator replies are detected by leading @mention.
+        if (isOwnerMessage && messageText.startsWith('@')) {
+          const firstSpaceIndex = messageText.indexOf(' ');
+          if (firstSpaceIndex > 0) {
+            const targetUsername = messageText.substring(0, firstSpaceIndex);
+            const content = messageText.substring(firstSpaceIndex + 1);
+            const targetMessageKey = activeThreadKeyByUsername[targetUsername] || lastMessageKeyByUsername[targetUsername];
+            if (targetMessageKey) {
+              if (!repliesByMessageKey[targetMessageKey]) repliesByMessageKey[targetMessageKey] = [];
+              repliesByMessageKey[targetMessageKey].push({ id: msg?.id, created_at: msg?.created_at, content, author: 'publisher' });
+              activeThreadKeyByUsername[targetUsername] = targetMessageKey;
+              return;
+            }
+          }
+        }
+
         const key = String(msg?.id ?? `idx-${rawIndex}`);
-        processedMessages.push((typeof msg === 'string') ? msg : { ...msg, __key: key });
+        const decorated = (typeof msg === 'string') ? msg : { ...msg, __key: key };
+        processedMessages.push(decorated);
+
+        if (!isOwnerMessage) {
+          const senderHandle = normalizeChannelMessageUsername(msg);
+          if (senderHandle) {
+            lastMessageKeyByUsername[senderHandle] = key;
+          }
+        }
       });
+
       processedMessages.sort((a: any, b: any) => {
         const ta = getChannelMessageSortKey(a?.created_at, a?.id);
         const tb = getChannelMessageSortKey(b?.created_at, b?.id);
@@ -2361,6 +2404,33 @@ const FrontScreen = ({
   };
 
   const selectedGroupIdRef = useRef<string | null>(null);
+
+  // ── Alternar visibilidad de un mensaje (solo anfitrión) ──
+  const toggleMessageVisibility = async (messageId: number | string) => {
+    if (!authToken) return;
+    try {
+      const response = await fetch(`${API_URL}/api/channels/messages/${messageId}/visibility`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+        },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        // Actualizar el estado local del mensaje
+        setChatMessages(prev =>
+          prev.map((msg: any) =>
+            String(msg?.id) === String(messageId)
+              ? { ...msg, hidden: data.hidden }
+              : msg
+          )
+        );
+      }
+    } catch (error) {
+      console.error('Error toggling message visibility:', error);
+    }
+  };
+
   const groupChatLoadingGroupIdRef = useRef<string | null>(null);
   const groupChatFetchSeqRef = useRef(0);
 
@@ -12693,6 +12763,22 @@ const FrontScreen = ({
                                             </TouchableOpacity>
                                           )
                                         )}
+                                        {/* Icono de visibilidad (ojo) — solo visible para el anfitrión en su propio canal */}
+                                        {!selectedChannel && userEmail && channelOwnerEmail && userEmail === channelOwnerEmail && !isOwnerMessage && msg?.id && (
+                                          <>
+                                            <View style={{ flex: 1, minWidth: 12 }} />
+                                            <TouchableOpacity
+                                              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                              onPress={() => toggleMessageVisibility(msg.id)}
+                                            >
+                                              <MaterialIcons
+                                                name={(msg as any)?.hidden ? 'visibility-off' : 'visibility'}
+                                                size={16}
+                                                color={(msg as any)?.hidden ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.85)'}
+                                              />
+                                            </TouchableOpacity>
+                                          </>
+                                        )}
                                       </View>
                                     )}
 
@@ -12749,6 +12835,7 @@ const FrontScreen = ({
                                       </View>
                                     )}
 
+                                    <View style={(msg as any)?.hidden ? { opacity: 0.35 } : undefined}>
                                     {renderChannelRichContentWithGate(
                                       messageText,
                                       (mention) => toggleMentionForMessage(index, mention, true),
@@ -12757,8 +12844,9 @@ const FrontScreen = ({
                                         onPressLockedImage: () => openChannelImageUnlockAd(ownerImageUnlockKey),
                                       } : undefined
                                     )}
+                                    </View>
                                     {myReplies.length > 0 && (
-                                      <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)', paddingTop: 10 }}>
+                                      <View style={[{ marginTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)', paddingTop: 10 }, (msg as any)?.hidden ? { opacity: 0.35 } : undefined]}>
                                         {myReplies.map((reply, rIdx) => {
                                           const publisherUsername = selectedChannel ? selectedChannel.username : (userPublication ? userPublication.user.username : 'Publicador');
                                           const displayPublisherName = publisherUsername.startsWith('@') ? publisherUsername : `@${publisherUsername}`;
@@ -12850,32 +12938,41 @@ const FrontScreen = ({
                                       }
                                     }}
                                     style={{ alignSelf: 'flex-end', marginTop: 4 }}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                                   >
-                                    {replyingToMessageIndex === index ? (
-                                      <Svg height="16" width="70">
-                                        <Defs>
-                                          <LinearGradient id="gradText" x1="0" y1="0" x2="1" y2="0">
-                                            <Stop offset="0" stopColor="#ff9900" stopOpacity="1" />
-                                            <Stop offset="1" stopColor="#ffe45c" stopOpacity="1" />
-                                          </LinearGradient>
-                                        </Defs>
-                                        <SvgText
-                                          fill="url(#gradText)"
-                                          stroke="none"
-                                          fontSize="12"
-                                          fontWeight="bold"
-                                          x="70"
-                                          y="12"
-                                          textAnchor="end"
-                                        >
-                                          {t('chat.reply' as TranslationKey)}
-                                        </SvgText>
-                                      </Svg>
-                                    ) : (
-                                      <Text style={{ color: '#FFFFFF', fontWeight: 'bold', fontSize: 12 }}>{t('chat.reply' as TranslationKey)}</Text>
-                                    )}
+                                    <MaterialIcons
+                                      name="reply"
+                                      size={20}
+                                      color={replyingToMessageIndex === index ? '#FFB74D' : 'rgba(255,255,255,0.7)'}
+                                      style={{ transform: [{ scaleX: -1 }] }}
+                                    />
                                   </TouchableOpacity>
                                 )}
+                                {/* Botón Responder para el viewer en un canal unido — solo activo si la última respuesta del hilo es del publisher */}
+                                {isMe && !!selectedChannel && (() => {
+                                  const lastReply = myReplies.length > 0 ? myReplies[myReplies.length - 1] : null;
+                                  const canReply = !!lastReply && lastReply.author === 'publisher';
+                                  if (!canReply) return null;
+                                  return (
+                                    <TouchableOpacity
+                                      onPress={() => {
+                                        // No se necesita replyingToUsername; el mensaje del viewer
+                                        // se encadenará automáticamente al hilo activo.
+                                        // Solo aseguramos que el input se desbloquea visualmente.
+                                        setReplyingToMessageIndex(replyingToMessageIndex === index ? null : index);
+                                      }}
+                                      style={{ alignSelf: 'flex-start', marginTop: 4 }}
+                                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                    >
+                                      <MaterialIcons
+                                        name="reply"
+                                        size={20}
+                                        color={replyingToMessageIndex === index ? '#FFB74D' : 'rgba(255,255,255,0.7)'}
+                                        style={{ transform: [{ scaleX: -1 }] }}
+                                      />
+                                    </TouchableOpacity>
+                                  );
+                                })()}
                               </View>
                             )
                           }}

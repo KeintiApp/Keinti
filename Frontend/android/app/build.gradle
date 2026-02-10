@@ -115,7 +115,7 @@ android {
         applicationId "com.keintiapp.keinti"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 14
+        versionCode 15
         versionName "1.1.5"
 
         // Used by AndroidManifest.xml meta-data: com.google.android.geo.API_KEY
