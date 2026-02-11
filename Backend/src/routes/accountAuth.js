@@ -234,15 +234,9 @@ router.post('/keinti/verify', authenticateToken, async (req, res) => {
     const [intimidadesRes, profilePublishesRes, joinsRes, groupsRes, activeMembersRes] = await Promise.all([
       pool.query(
         `SELECT COUNT(*)::int AS total
-         FROM post_intimidades_opens io
-         JOIN Post_users p ON p.id = io.post_id
-         WHERE io.creator_email = $1
-           AND io.created_at >= date_trunc('month', NOW())
-           AND (
-             p.deleted_at IS NULL
-             OR p.deleted_at >= p.created_at + ($2 * INTERVAL '1 minute')
-           )`,
-        [email, POST_TTL_MINUTES]
+         FROM post_intimidades_opens
+         WHERE creator_email = $1`,
+        [email]
       ),
       pool.query(
         `SELECT COUNT(*)::int AS total
@@ -257,15 +251,9 @@ router.post('/keinti/verify', authenticateToken, async (req, res) => {
       ),
       pool.query(
         `SELECT COUNT(*)::int AS total
-         FROM channel_subscriptions cs
-         JOIN Post_users p ON p.id = cs.post_id
-         WHERE cs.publisher_email = $1
-           AND cs.created_at >= date_trunc('month', NOW())
-           AND (
-             p.deleted_at IS NULL
-             OR p.deleted_at >= p.created_at + ($2 * INTERVAL '1 minute')
-           )`,
-        [email, POST_TTL_MINUTES]
+         FROM channel_subscriptions
+         WHERE publisher_email = $1`,
+        [email]
       ),
       pool.query('SELECT COUNT(*)::int AS total FROM user_groups WHERE owner_email = $1', [email]),
       pool.query(

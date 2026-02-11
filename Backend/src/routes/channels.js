@@ -223,7 +223,8 @@ router.get('/interactions', authenticateToken, async (req, res) => {
   }
 });
 
-// Progreso mensual: cuántos usuarios se han unido a mis chats (suscripciones) este mes.
+// Progreso acumulativo: cuántos usuarios se han unido a mis chats (suscripciones) en total.
+// Cuenta TODAS las suscripciones históricas (sin filtro mensual ni dependencia del post).
 router.get('/me/joins-progress', authenticateToken, async (req, res) => {
   const publisherEmail = req.user?.email;
   if (!publisherEmail) return res.status(401).json({ error: 'No autorizado' });
@@ -231,15 +232,9 @@ router.get('/me/joins-progress', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT COUNT(*)::int AS total
-       FROM channel_subscriptions cs
-       JOIN Post_users p ON p.id = cs.post_id
-       WHERE cs.publisher_email = $1
-         AND cs.created_at >= date_trunc('month', NOW())
-         AND (
-           p.deleted_at IS NULL
-           OR p.deleted_at >= p.created_at + ($2 * INTERVAL '1 minute')
-         )`,
-      [publisherEmail, POST_TTL_MINUTES]
+       FROM channel_subscriptions
+       WHERE publisher_email = $1`,
+      [publisherEmail]
     );
 
     const total = result.rows?.[0]?.total ?? 0;

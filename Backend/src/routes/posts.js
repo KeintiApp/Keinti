@@ -327,7 +327,8 @@ router.post('/:postId/intimidades/open', authenticateToken, async (req, res) => 
   }
 });
 
-// Progreso mensual de aperturas de "intimidades" para el usuario autenticado (creador).
+// Progreso acumulativo de aperturas de "intimidades" para el usuario autenticado (creador).
+// Cuenta TODAS las aperturas históricas (sin filtro mensual ni dependencia del post).
 router.get('/me/intimidades/opens-progress', authenticateToken, async (req, res) => {
   const email = req.user?.email;
   if (!email) return res.status(401).json({ error: 'No autorizado' });
@@ -335,15 +336,9 @@ router.get('/me/intimidades/opens-progress', authenticateToken, async (req, res)
   try {
     const result = await pool.query(
       `SELECT COUNT(*)::int AS total
-       FROM post_intimidades_opens io
-       JOIN Post_users p ON p.id = io.post_id
-       WHERE io.creator_email = $1
-         AND io.created_at >= date_trunc('month', NOW())
-         AND (
-           p.deleted_at IS NULL
-           OR p.deleted_at >= p.created_at + ($2 * INTERVAL '1 minute')
-         )`,
-      [email, POST_TTL_MINUTES]
+       FROM post_intimidades_opens
+       WHERE creator_email = $1`,
+      [email]
     );
 
     const total = result.rows?.[0]?.total ?? 0;
@@ -437,11 +432,11 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     // Eliminar media asociado a la publicación (incluye imágenes compartidas en canales ligados al post).
     // Esto borra punteros (y legacy BYTEA) en la BD y agenda borrado en Storage.
     // También borra datos del canal (suscripciones y mensajes) porque el canal vive solo mientras el post está activo.
-    await pool.query('DELETE FROM post_intimidades_opens WHERE post_id = $1', [postId]).catch(() => {});
+    // NOTA: post_intimidades_opens y channel_subscriptions NO se eliminan.
+    // Se conservan para el progreso de verificación ("Verifica tu Keinti").
     await pool.query('DELETE FROM post_reactions WHERE post_id = $1', [postId]).catch(() => {});
     await pool.query('DELETE FROM post_poll_votes WHERE post_id = $1', [postId]).catch(() => {});
     await pool.query('DELETE FROM channel_messages WHERE post_id = $1', [postId]).catch(() => {});
-    await pool.query('DELETE FROM channel_subscriptions WHERE post_id = $1', [postId]).catch(() => {});
 
     const mediaRows = await pool.query(
       'DELETE FROM uploaded_images WHERE post_id = $1 RETURNING storage_bucket, storage_path',

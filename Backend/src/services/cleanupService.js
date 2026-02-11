@@ -51,16 +51,35 @@ async function deleteChannelDataByPostIds(postIds) {
       .catch(() => null);
     deletedMessages += delMsgs?.rowCount || 0;
 
-    const delSubs = await pool
-      .query('DELETE FROM channel_subscriptions WHERE post_id = ANY($1::int[])', [batch])
-      .catch(() => null);
-    deletedSubscriptions += delSubs?.rowCount || 0;
+    // NOTA: Las suscripciones (channel_subscriptions) ya NO se eliminan aquí.
+    // Se conservan para el progreso de verificación ("Verifica tu Keinti").
   }
 
-  if (deletedMessages > 0 || deletedSubscriptions > 0) {
+  if (deletedMessages > 0) {
     console.log(
-      `🧹 Se limpiaron canales de posts expirados/borrados: ${deletedSubscriptions} suscripciones, ${deletedMessages} mensajes.`
+      `🧹 Se limpiaron canales de posts expirados/borrados: ${deletedMessages} mensajes.`
     );
+  }
+}
+
+// Versión simplificada: solo elimina mensajes (no suscripciones ni aperturas de intimidades).
+async function deleteChannelMessagesByPostIds(postIds) {
+  const ids = Array.isArray(postIds) ? postIds.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
+  if (ids.length === 0) return;
+
+  const batchSize = 500;
+  let deletedMessages = 0;
+
+  for (let i = 0; i < ids.length; i += batchSize) {
+    const batch = ids.slice(i, i + batchSize);
+    const delMsgs = await pool
+      .query('DELETE FROM channel_messages WHERE post_id = ANY($1::int[])', [batch])
+      .catch(() => null);
+    deletedMessages += delMsgs?.rowCount || 0;
+  }
+
+  if (deletedMessages > 0) {
+    console.log(`🧹 Se limpiaron ${deletedMessages} mensajes de canales expirados/borrados.`);
   }
 }
 
@@ -178,8 +197,11 @@ const cleanupExpiredPostRequests = async () => {
     if (postIds.length > 0) {
       await deleteUploadedImagesByPostIds(postIds);
       await deletePostEngagementByPostIds(postIds);
-      await deleteIntimidadesOpensByPostIds(postIds);
-      await deleteChannelDataByPostIds(postIds);
+      // NOTA: NO eliminar post_intimidades_opens ni channel_subscriptions.
+      // Estos datos se conservan para el progreso de verificación ("Verifica tu Keinti").
+      // Solo eliminamos channel_messages (pueden ser grandes) pero las suscripciones
+      // y aperturas de intimidades se mantienen como historial acumulativo.
+      await deleteChannelMessagesByPostIds(postIds);
     }
 
     // 3) Conservar bloqueos: desvincular post_id de solicitudes 'blocked'
