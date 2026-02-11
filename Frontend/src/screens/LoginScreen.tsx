@@ -165,62 +165,6 @@ const parseMarkedText = (raw: string): MarkedSegment[] => {
   return segments;
 };
 
-const GradientText = ({
-  children,
-  style,
-  fallbackColor = '#FFB74D',
-}: {
-  children: string;
-  style?: any;
-  fallbackColor?: string;
-}) => {
-  const [layout, setLayout] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
-  const gradientId = 'gradientTextFill';
-
-  useEffect(() => {
-    // When the text changes (e.g. language switch), we must re-measure.
-    // Otherwise the MaskedView keeps the previous width/height and clips the new text.
-    setLayout({ width: 0, height: 0 });
-  }, [children]);
-
-  const onLayout = (e: any) => {
-    const w = Math.ceil(e?.nativeEvent?.layout?.width || 0);
-    const h = Math.ceil(e?.nativeEvent?.layout?.height || 0);
-    if (!w || !h) return;
-    if (layout.width === w && layout.height === h) return;
-    setLayout({ width: w, height: h });
-  };
-
-  if (!layout.width || !layout.height) {
-    return (
-      <Text onLayout={onLayout} style={[style, { color: fallbackColor }]}>
-        {children}
-      </Text>
-    );
-  }
-
-  return (
-    <MaskedView
-      style={{ width: layout.width, height: layout.height }}
-      maskElement={
-        <View style={{ backgroundColor: 'transparent' }}>
-          <Text style={style}>{children}</Text>
-        </View>
-      }
-    >
-      <Svg width={layout.width} height={layout.height}>
-        <Defs>
-          <LinearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor="#ffffff" stopOpacity="1" />
-            <Stop offset="1" stopColor="#ffa115" stopOpacity="1" />
-          </LinearGradient>
-        </Defs>
-        <Rect x="0" y="0" width={layout.width} height={layout.height} fill={`url(#${gradientId})`} />
-      </Svg>
-    </MaskedView>
-  );
-};
-
 const GradientGoogleIcon = ({ size = 18 }: { size?: number }) => {
   const gradientId = 'googleIconGradient';
   return (
@@ -743,9 +687,9 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
               <View style={styles.forgotPasswordRow}>
                 {forgotPasswordSegments.map((seg, idx) =>
                   seg.kind === 'highlight' ? (
-                    <GradientText key={`forgot:${idx}`} style={styles.forgotPasswordTextHighlight}>
+                    <Text key={`forgot:${idx}`} style={[styles.forgotPasswordText, styles.forgotPasswordTextHighlight]}>
                       {seg.text}
-                    </GradientText>
+                    </Text>
                   ) : (
                     <Text key={`forgot:${idx}`} style={[styles.forgotPasswordText, styles.forgotPasswordTextMuted]}>
                       {seg.text}
@@ -807,7 +751,7 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
             <View style={styles.signupContainer}>
               <Text style={styles.signupText}>{t('login.noAccount')}</Text>
               <TouchableOpacity onPress={onNavigateToRegister} disabled={screenDisabled}>
-                <GradientText style={styles.signupLink}>{t('login.signUp')}</GradientText>
+                <Text style={styles.signupLink}>{t('login.signUp')}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -957,8 +901,10 @@ const styles = StyleSheet.create({
     color: '#ffffffff',
   },
   forgotPasswordTextHighlight: {
+    color: '#ffffffff',
     fontWeight: 'bold',
     fontSize: 14,
+    opacity: 1,
   },
   loginButton: {
     backgroundColor: '#000000ff',
@@ -1083,8 +1029,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   signupLink: {
+    color: '#ffffffff',
     fontSize: 14,
     fontWeight: 'bold',
+    opacity: 1,
   },
 });
 

@@ -5,7 +5,7 @@
     "java.import.gradle.enabled": false,
     "java.gradle.buildServer.enabled": "off",
     "java.project.resourceFilters": [
-        "**/node_modules/**"
+        "node_modules"
     ],
     "java.import.exclusions": [
         "**/node_modules/**",

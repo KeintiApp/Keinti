@@ -713,7 +713,7 @@ const CATEGORY_LABELS_EN: Record<string, string> = {
   'Cultura': 'Culture',
 };
 
-const REACTION_EMOJIS = [
+const REACTION_EMOJIS = Array.from(new Set([
   '👍', '❤️', '😂', '😮', '😢', '😡', '👏', '🔥', '🎉', '💯',
   '😍', '🤔', '😱', '🥳', '😎', '🙌', '👀', '🤝', '🙏', '💪',
   '✨', '🌟', '💫', '💥', '💢', '💤', '👋', '👌', '✌️', '🤞',
@@ -724,8 +724,36 @@ const REACTION_EMOJIS = [
   '💘', '💝', '💖', '💗', '💓', '💞', '💕', '💟', '❣️', '💔',
   '🧡', '💛', '💚', '💙', '💜', '🤎', '🖤', '🤍', '💣', '🦠',
   '💐', '🌸', '💮', '🏵️', '🌹', '🥀', '🌺', '🌻', '🌼', '🌷',
-  '🚀', '🌈', '🍕', '🍺', '⚽'
-];
+  '🚀', '🌈', '🍕', '🍺', '⚽',
+
+  // Extra emojis requested
+  '🐶', '👑', '😅', '😉', '🫠', '🤤', '🫡', '😤', '🤯', '🥵', '🥶', '🤑', '😇', '🤥',
+  '🦵🏼', '🦿', '🦶🏼', '👂🏼', '👃🏼', '🫶🏼', '✊🏼', '🙅🏼‍♂️', '🎅🏼', '🥷🏼', '👼🏼',
+  '🍓', '🍑', '🍊', '🥝', '🥬', '🥞', '🍰', '🍻', '🍷',
+  '🧭', '🛸', '🗿', '🗽',
+  '⚾', '🏀', '🏐', '🏈', '🎾', '🏸', '🥋', '🏁', '🏴', '🥊',
+  '💎', '💻', '⌨️', '📱', '🪫', '🔋', '💡', '🕯️', '🧽',
+  '👠', '👞', '☂️', '🌂', '📎', '🖇️', '✒️',
+  '📈', '📉', '🔐', '🔓', '🛡️', '⚔️', '📜', '🔮', '🪬', '🛎️', '🗓️', '🔍',
+  '🧪', '🩺', '🔭', '🧬', '🔬', '📡', '🛰️',
+  '⛔', '🆘', '🆚', '☢️', '☣️', '⚠️', '🔱', '⚜️', '💲', '✅', '❎',
+  '🏳️‍🌈', '🏳️‍⚧️',
+
+  // Nationality / country flags (broad coverage)
+  '🇪🇸', '🇲🇽', '🇦🇷', '🇨🇴', '🇵🇪', '🇨🇱', '🇻🇪', '🇪🇨', '🇧🇴', '🇵🇾', '🇺🇾',
+  '🇨🇷', '🇵🇦', '🇬🇹', '🇸🇻', '🇭🇳', '🇳🇮', '🇩🇴', '🇵🇷', '🇨🇺',
+  '🇺🇸', '🇨🇦', '🇧🇷', '🇵🇹',
+  '🇫🇷', '🇩🇪', '🇮🇹', '🇬🇧', '🇮🇪', '🇳🇱', '🇧🇪', '🇨🇭', '🇦🇹',
+  '🇸🇪', '🇳🇴', '🇩🇰', '🇫🇮', '🇵🇱', '🇨🇿', '🇸🇰', '🇭🇺', '🇬🇷', '🇹🇷',
+  '🇷🇴', '🇧🇬', '🇺🇦', '🇷🇺', '🇷🇸', '🇭🇷', '🇸🇮', '🇧🇦', '🇲🇪', '🇲🇰', '🇦🇱',
+  '🇱🇹', '🇱🇻', '🇪🇪', '🇮🇸',
+  '🇮🇱',
+  '🇲🇦', '🇩🇿', '🇹🇳', '🇪🇬', '🇿🇦', '🇳🇬', '🇰🇪', '🇬🇭', '🇸🇳', '🇪🇹', '🇹🇿', '🇺🇬',
+  '🇸🇦', '🇦🇪', '🇶🇦', '🇰🇼', '🇴🇲', '🇯🇴', '🇱🇧', '🇮🇷', '🇮🇶',
+  '🇮🇳', '🇵🇰', '🇧🇩', '🇱🇰', '🇳🇵',
+  '🇨🇳', '🇯🇵', '🇰🇷', '🇹🇼', '🇭🇰', '🇸🇬', '🇲🇾', '🇹🇭', '🇻🇳', '🇮🇩', '🇵🇭',
+  '🇦🇺', '🇳🇿',
+]));
 
 type ProfileRingPoint = {
   id: string;
@@ -6580,7 +6608,13 @@ const FrontScreen = ({
       onlyfans: /^https?:\/\/(www\.)?onlyfans\.com\/.+/i,
       pinterest: /^https?:\/\/(www\.)?(pinterest\.(com|es)|pin\.it)\/.+/i,
       telegram: /^(https?:\/\/)?(t\.me|telegram\.me)\/.+/i,
-      tiktok: /^https?:\/\/(www\.)?tiktok\.com\/@.+/i,
+      // Accept common TikTok URL shapes:
+      // - https://www.tiktok.com/@user
+      // - https://www.tiktok.com/@user/video/123
+      // - https://tiktok.com/t/...
+      // - https://vm.tiktok.com/...
+      // - https://vt.tiktok.com/...
+      tiktok: /^(https?:\/\/)?((www|m|vm|vt)\.)?tiktok\.com\/.+/i,
       twitter: /^https?:\/\/(www\.)?(twitter|x)\.com\/.+/i,
       youtube: /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\/.+/i,
       discord: /^https?:\/\/(www\.)?(discord\.(com|gg)|discordapp\.com)\/.+/i,
@@ -14687,6 +14721,7 @@ const FrontScreen = ({
       {activeBottomTab !== 'notifications' && !isKeyboardVisible && (
         <View
           style={[styles.bottomNavBar, { justifyContent: 'space-evenly' }]}
+          pointerEvents={(activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)) ? 'none' : 'auto'}
           onLayout={(e) => {
             const h = e?.nativeEvent?.layout?.height;
             if (typeof h === 'number' && h > 0) {
@@ -14696,12 +14731,13 @@ const FrontScreen = ({
         >
             {/* Chat (Left) */}
             <TouchableOpacity
-              style={styles.bottomNavItem}
+              style={[styles.bottomNavItem, (activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)) && { opacity: 0.3 }]}
               onPress={() => {
                 setActiveBottomTab('chat');
                 setProfileView('profile');
               }}
-              activeOpacity={0.7}>
+              activeOpacity={0.7}
+              disabled={activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)}>
               {activeBottomTab === 'chat' ? (
                 <View style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}>
                     <Svg width={40} height={40} style={{ position: 'absolute' }}>
@@ -14725,12 +14761,13 @@ const FrontScreen = ({
 
             {/* Home (Center) */}
             <TouchableOpacity
-              style={styles.bottomNavItem}
+              style={[styles.bottomNavItem, (activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)) && { opacity: 0.3 }]}
               onPress={() => {
                 setActiveBottomTab('home');
                 setProfileView('profile');
               }}
-              activeOpacity={0.7}>
+              activeOpacity={0.7}
+              disabled={activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)}>
               {activeBottomTab === 'home' ? (
                 <View style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}>
                     <Svg width={40} height={40} style={{ position: 'absolute' }}>
@@ -14754,12 +14791,13 @@ const FrontScreen = ({
 
             {/* Profile (Right) */}
             <TouchableOpacity
-              style={styles.bottomNavItem}
+              style={[styles.bottomNavItem, (activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)) && { opacity: 0.3 }]}
               onPress={() => {
                 setActiveBottomTab('profile');
                 setProfileView('profile');
               }}
-              activeOpacity={0.7}>
+              activeOpacity={0.7}
+              disabled={activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)}>
               {activeBottomTab === 'profile' ? (
                 <View style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}>
                     <Svg width={40} height={40} style={{ position: 'absolute' }}>
