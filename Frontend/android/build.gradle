@@ -18,6 +18,8 @@ buildscript {
         classpath("com.android.tools.build:gradle:8.1.1")
         // Kotlin Gradle Plugin - keep in sync with rootProject.ext.kotlinVersion
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:${kotlinVersion}")
+        // Google Services Gradle Plugin (Firebase)
+        classpath("com.google.gms:google-services:4.4.2")
     }
 }
 
@@ -31,6 +33,11 @@ subprojects {
             if (details.requested.group == "com.google.android.gms" && details.requested.name == "play-services-ads") {
                 // Workaround: pick a version that doesn't require Kotlin 2.1 metadata.
                 details.useVersion("23.2.0")
+            }
+
+            if (details.requested.group == "com.google.android.gms" && details.requested.name.startsWith("play-services-measurement")) {
+                // Workaround: keep measurement libs on versions compatible with Kotlin 1.9 metadata.
+                details.useVersion("22.0.2")
             }
 
             // `react-native-inappbrowser-reborn` can resolve an alpha androidx.browser version

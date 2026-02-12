@@ -42,6 +42,7 @@ import ImageCropPicker from 'react-native-image-crop-picker';
 import ProfilePhotoEdit from './ProfilePhotoEdit';
 import CarouselImageEditor from './CarouselImageEditor';
 import { deleteDraftUploadedImageByUrl, getAccountAuthStatus, getMyDevicePermissions, getMyUiHints, setMyDevicePermissions, setMyUiHints, updateProfilePhoto, updateSocialNetworks, uploadImage } from '../services/userService';
+import { trackAdPaidEvent } from '../services/adRevenueService';
 import { API_URL, getServerResourceUrl } from '../config/api';
 import { BANNER_AD_UNIT_ID, INTERSTITIAL_AD_UNIT_ID, REWARDED_AD_UNIT_ID } from '../config/admob';
 import { POST_TTL_MS } from '../config/postTtl';
@@ -1166,6 +1167,20 @@ const FrontScreen = ({
       rewardedEarnedRef.current = true;
     });
 
+    const unsubscribePaid = rewarded.addAdEventListener(AdEventType.PAID, event => {
+      const placement = pendingIntimidadesPubIdRef.current
+        ? 'home_intimidades_rewarded_unlock'
+        : pendingChannelImageUnlockKeyRef.current
+          ? 'chat_channel_image_rewarded_unlock'
+          : 'rewarded_unknown_placement';
+
+      trackAdPaidEvent({
+        format: 'rewarded',
+        placement,
+        event,
+      });
+    });
+
     const unsubscribeClosed = rewarded.addAdEventListener(AdEventType.CLOSED, () => {
       const pubId = pendingIntimidadesPubIdRef.current;
       const unlockKey = pendingChannelImageUnlockKeyRef.current;
@@ -1208,6 +1223,7 @@ const FrontScreen = ({
       }
       unsubscribeLoaded();
       unsubscribeEarned();
+      unsubscribePaid();
       unsubscribeClosed();
       unsubscribeError();
     };
@@ -4555,12 +4571,21 @@ const FrontScreen = ({
       isHomeInterstitialShowingRef.current = false;
     });
 
+    const unsubscribePaid = interstitial.addAdEventListener(AdEventType.PAID, event => {
+      trackAdPaidEvent({
+        format: 'interstitial',
+        placement: 'home_feed_interstitial_rotation',
+        event,
+      });
+    });
+
     interstitial.load();
 
     return () => {
       unsubscribeLoaded();
       unsubscribeClosed();
       unsubscribeError();
+      unsubscribePaid();
     };
   }, []);
 
@@ -8522,6 +8547,13 @@ const FrontScreen = ({
                 unitId={BANNER_AD_UNIT_ID}
                 size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
                 requestOptions={{ requestNonPersonalizedAdsOnly: true }}
+                onPaid={(event) => {
+                  trackAdPaidEvent({
+                    format: 'banner',
+                    placement: 'home_profile_ring_viewer_banner',
+                    event,
+                  });
+                }}
                 onAdLoaded={() => setHomeProfileRingBannerReady(true)}
                 onAdFailedToLoad={(error) => {
                   setHomeProfileRingBannerReady(false);
