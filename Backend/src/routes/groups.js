@@ -657,6 +657,16 @@ router.get('/:id/messages', authenticateToken, async (req, res) => {
     return res.status(400).json({ error: 'ID inválido' });
   }
 
+  const hasPaginationParams = (req.query?.limit !== undefined) || (req.query?.beforeId !== undefined);
+
+  const parsedLimit = Number(req.query?.limit);
+  const limit = Number.isFinite(parsedLimit)
+    ? Math.max(1, Math.min(100, Math.trunc(parsedLimit)))
+    : 40;
+
+  const parsedBeforeId = Number(req.query?.beforeId);
+  const beforeId = Number.isFinite(parsedBeforeId) ? Math.trunc(parsedBeforeId) : null;
+
   try {
     const accessCheck = await pool.query(
       `SELECT 1
@@ -677,16 +687,47 @@ router.get('/:id/messages', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'No tienes acceso a este grupo' });
     }
 
+    if (!hasPaginationParams) {
+      const result = await pool.query(
+        `SELECT gm.*, u.username
+         FROM group_messages gm
+         JOIN users u ON gm.sender_email = u.email
+         WHERE gm.group_id = $1
+         ORDER BY gm.id ASC`,
+        [id]
+      );
+      res.json(result.rows);
+      return;
+    }
+
+    const whereBeforeClause = beforeId ? 'AND gm.id < $2' : '';
+    const queryParams = beforeId
+      ? [id, beforeId, limit + 1]
+      : [id, limit + 1];
+
     const result = await pool.query(
-      `SELECT gm.*, u.username
-       FROM group_messages gm
-       JOIN users u ON gm.sender_email = u.email
-       WHERE gm.group_id = $1
-       ORDER BY gm.id ASC`,
-      [id]
+      `SELECT page.*, u.username
+       FROM (
+         SELECT gm.*
+         FROM group_messages gm
+         WHERE gm.group_id = $1
+           ${whereBeforeClause}
+         ORDER BY gm.id DESC
+         LIMIT $${beforeId ? 3 : 2}
+       ) AS page
+       JOIN users u ON page.sender_email = u.email
+       ORDER BY page.id ASC`,
+      queryParams
     );
 
-    res.json(result.rows);
+    const rows = result.rows || [];
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(rows.length - limit) : rows;
+
+    res.json({
+      messages: pageRows,
+      hasMore,
+    });
   } catch (error) {
     console.error('Error al obtener mensajes de grupo:', error);
     res.status(500).json({ error: 'Error interno del servidor' });

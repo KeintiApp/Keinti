@@ -24,6 +24,7 @@ import {
   TextInput,
   Easing,
   InteractionManager,
+  AppState,
 } from 'react-native';
 import type { ImageSourcePropType, ViewToken } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -543,6 +544,10 @@ const CHAT_INPUT_KEYBOARD_GAP = Platform.OS === 'ios' ? 18 : 10;
 // Cap the multiline chat input so it doesn't grow indefinitely.
 // After reaching this height, the TextInput becomes internally scrollable.
 const CHAT_INPUT_MAX_HEIGHT = 140;
+const CHANNEL_CHAT_PAGE_SIZE = 40;
+const CHANNEL_CHAT_LOAD_OLDER_TOP_THRESHOLD = 100;
+const GROUP_CHAT_PAGE_SIZE = 40;
+const GROUP_CHAT_LOAD_OLDER_TOP_THRESHOLD = 100;
 
 const GROUP_MEMBERS_PANEL_HEIGHT = Math.round(SCREEN_HEIGHT * 0.6);
 
@@ -2521,6 +2526,18 @@ const FrontScreen = ({
     groupChatLoadingGroupIdRef.current = groupChatLoadingGroupId;
   }, [groupChatLoadingGroupId]);
 
+  const resetGroupChatPaginationState = (clearMessages: boolean = true) => {
+    groupChatLastSigRef.current = '';
+    groupOldestMessageIdRef.current = null;
+    groupOldestFetchInFlightRef.current = null;
+    lastGroupChatMessagesLengthRef.current = 0;
+    setGroupHasMoreOlderMessages(true);
+    setIsLoadingOlderGroupMessages(false);
+    if (clearMessages) {
+      setGroupChatMessages([]);
+    }
+  };
+
   const openGroupChat = (group: Group) => {
     if (!authToken || !accountVerified) {
       const key = groupsTab === 'unidos'
@@ -2539,7 +2556,10 @@ const FrontScreen = ({
     setExpandedMention(null);
     setGroupMessageOptions(null);
     setGroupLimitedMemberEmails([]);
-    setGroupChatMessages([]);
+    resetGroupChatPaginationState(true);
+    pendingGroupScrollToLatestAfterRefreshRef.current = true;
+    setIsGroupNearBottom(true);
+    setShowGroupScrollToLatest(false);
     setGroupChatLoadingGroupId(group.id);
     setChatView('groupChat');
   };
@@ -3048,21 +3068,40 @@ const FrontScreen = ({
     };
   }, [authToken, selectedGroup?.ownerEmail]);
   const [channelChatLoadingPostId, setChannelChatLoadingPostId] = useState<string | null>(null);
+  const [channelHasMoreOlderMessages, setChannelHasMoreOlderMessages] = useState(true);
+  const [isLoadingOlderChannelMessages, setIsLoadingOlderChannelMessages] = useState(false);
 
   const currentChannelPostIdRef = useRef<string | null>(null);
   const channelChatLoadingPostIdRef = useRef<string | null>(null);
   const channelChatFetchSeqRef = useRef(0);
   const channelInteractionsFetchSeqRef = useRef(0);
   const channelChatLastSigRef = useRef<string>('');
+  const channelOldestMessageIdRef = useRef<number | null>(null);
+  const channelOldestFetchInFlightRef = useRef<number | null>(null);
 
   useEffect(() => {
     channelChatLoadingPostIdRef.current = channelChatLoadingPostId;
   }, [channelChatLoadingPostId]);
 
+  const resetChannelChatPaginationState = (clearMessages: boolean = true) => {
+    channelChatLastSigRef.current = '';
+    channelOldestMessageIdRef.current = null;
+    channelOldestFetchInFlightRef.current = null;
+    lastChatMessagesLengthRef.current = 0;
+    setChannelHasMoreOlderMessages(true);
+    setIsLoadingOlderChannelMessages(false);
+    if (clearMessages) {
+      setChatMessages([]);
+    }
+  };
+
   const openJoinedChannelChat = (channel: any) => {
     const postId = String(channel?.post_id ?? channel?.postId ?? channel?.id ?? '').trim();
     currentChannelPostIdRef.current = postId || null;
-    channelChatLastSigRef.current = '';
+    resetChannelChatPaginationState(true);
+    pendingChannelScrollToLatestAfterRefreshRef.current = true;
+    setIsChannelNearBottom(true);
+    setShowChannelScrollToLatest(false);
     // Normalize the shape so the rest of the screen can rely on `post_id`.
     setSelectedChannel(postId ? { ...channel, post_id: postId } : channel);
     setChatView('channel');
@@ -3071,7 +3110,6 @@ const FrontScreen = ({
     setReplyingToMessageIndex(null);
     setReplyingToUsername(null);
     setExpandedMention(null);
-    setChatMessages([]);
     setChannelInteractions([]);
     // IMPORTANT: set the ref synchronously so the first fetch can reliably clear the loader.
     channelChatLoadingPostIdRef.current = postId || null;
@@ -3170,6 +3208,17 @@ const FrontScreen = ({
   const groupChatScrollViewRef = useRef<ScrollView>(null);
   const lastChatMessagesLengthRef = useRef(0);
   const lastGroupChatMessagesLengthRef = useRef(0);
+  const channelScrollOffsetYRef = useRef(0);
+  const channelContentHeightRef = useRef(0);
+  const pendingChannelPrependAdjustRef = useRef<{ previousHeight: number; previousOffset: number } | null>(null);
+  const pendingChannelScrollToLatestAfterRefreshRef = useRef(false);
+  const groupScrollOffsetYRef = useRef(0);
+  const groupContentHeightRef = useRef(0);
+  const pendingGroupPrependAdjustRef = useRef<{ previousHeight: number; previousOffset: number } | null>(null);
+  const pendingGroupScrollToLatestAfterRefreshRef = useRef(false);
+  const groupOldestMessageIdRef = useRef<number | null>(null);
+  const groupOldestFetchInFlightRef = useRef<number | null>(null);
+  const groupChatLastSigRef = useRef<string>('');
   const groupChatPollingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const channelChatPollingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const homePostsPollingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -3177,12 +3226,16 @@ const FrontScreen = ({
   const [isChannelNearBottom, setIsChannelNearBottom] = useState(true);
   const [showChannelScrollToLatest, setShowChannelScrollToLatest] = useState(false);
   const [channelScrollToLatestPulse, setChannelScrollToLatestPulse] = useState(false);
+  const [channelScrollToLatestLoading, setChannelScrollToLatestLoading] = useState(false);
   const channelScrollToLatestPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [isGroupNearBottom, setIsGroupNearBottom] = useState(true);
   const [showGroupScrollToLatest, setShowGroupScrollToLatest] = useState(false);
   const [groupScrollToLatestPulse, setGroupScrollToLatestPulse] = useState(false);
+  const [groupScrollToLatestLoading, setGroupScrollToLatestLoading] = useState(false);
   const groupScrollToLatestPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [groupHasMoreOlderMessages, setGroupHasMoreOlderMessages] = useState(true);
+  const [isLoadingOlderGroupMessages, setIsLoadingOlderGroupMessages] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -3213,10 +3266,39 @@ const FrontScreen = ({
     // When (re)entering a channel chat, start at the latest messages.
     setIsChannelNearBottom(true);
     setShowChannelScrollToLatest(false);
-    setTimeout(() => {
-      chatScrollViewRef.current?.scrollToEnd({ animated: false });
-    }, 80);
+    lastChatMessagesLengthRef.current = 0;
+    pendingChannelScrollToLatestAfterRefreshRef.current = true;
+    // Fallback scroll in case data was already loaded before the flag was armed.
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        chatScrollViewRef.current?.scrollToEnd({ animated: false });
+      }, 200);
+    });
   }, [activeBottomTab, chatView, channelTab]);
+
+  useEffect(() => {
+    const shouldPinGroupToLatest =
+      activeBottomTab === 'chat' &&
+      chatView === 'groupChat';
+
+    if (!shouldPinGroupToLatest) {
+      setShowGroupScrollToLatest(false);
+      setIsGroupNearBottom(true);
+      return;
+    }
+
+    // When (re)entering a group chat, start at the latest messages.
+    setIsGroupNearBottom(true);
+    setShowGroupScrollToLatest(false);
+    lastGroupChatMessagesLengthRef.current = 0;
+    pendingGroupScrollToLatestAfterRefreshRef.current = true;
+    // Fallback scroll in case data was already loaded before the flag was armed.
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        groupChatScrollViewRef.current?.scrollToEnd({ animated: false });
+      }, 200);
+    });
+  }, [activeBottomTab, chatView, selectedGroup?.id]);
 
   const [presentationTitle, setPresentationTitle] = useState('');
   const [presentationText, setPresentationText] = useState('');
@@ -4449,8 +4531,10 @@ const FrontScreen = ({
 
     if (isInOwnChannelChat && !enteredOwnChannelChatRef.current) {
       currentChannelPostIdRef.current = ownPostId;
-      channelChatLastSigRef.current = '';
-      setChatMessages([]);
+      resetChannelChatPaginationState(true);
+      pendingChannelScrollToLatestAfterRefreshRef.current = true;
+      setIsChannelNearBottom(true);
+      setShowChannelScrollToLatest(false);
       setChannelInteractions([]);
       setChannelMessagesTab('General');
       setReplyingToMessageIndex(null);
@@ -4980,13 +5064,28 @@ const FrontScreen = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingJoinedGroupToast, activeBottomTab, chatView, groupsTab]);
 
-  const fetchGroupChatMessages = async (groupId: string) => {
+  const fetchGroupChatMessages = async (
+    groupId: string,
+    mode: 'latest' | 'poll' | 'older' = 'latest'
+  ) => {
     if (!authToken) return;
+
+    let beforeId: number | null = null;
+    if (mode === 'older') {
+      beforeId = groupOldestMessageIdRef.current;
+      if (!beforeId || !Number.isFinite(beforeId)) return;
+    }
 
     const fetchSeq = ++groupChatFetchSeqRef.current;
 
     try {
-      const resp = await fetch(`${API_URL}/api/groups/${groupId}/messages`, {
+      const params = new URLSearchParams();
+      params.set('limit', String(GROUP_CHAT_PAGE_SIZE));
+      if (mode === 'older' && beforeId) {
+        params.set('beforeId', String(beforeId));
+      }
+
+      const resp = await fetch(`${API_URL}/api/groups/${groupId}/messages?${params.toString()}`, {
         headers: {
           'Authorization': `Bearer ${authToken}`,
         }
@@ -4999,8 +5098,79 @@ const FrontScreen = ({
       if (selectedGroupIdRef.current !== groupId) return;
 
       if (!resp.ok) return;
-      const data = await resp.json();
-      if (Array.isArray(data)) setGroupChatMessages(data);
+      const data = await resp.json().catch(() => ([] as any));
+      const pageMessages = Array.isArray(data)
+        ? data
+        : (Array.isArray((data as any)?.messages) ? (data as any).messages : []);
+      const hasMore = Array.isArray(data)
+        ? pageMessages.length >= GROUP_CHAT_PAGE_SIZE
+        : Boolean((data as any)?.hasMore);
+
+      const getMsgKey = (msg: any, idx: number) => String(msg?.id ?? `${msg?.sender_email ?? 'u'}:${msg?.created_at ?? ''}:${idx}`);
+      const buildSig = (messages: any[]) => {
+        const firstId = messages.length ? String((messages[0] as any)?.id ?? '') : '';
+        const lastId = messages.length ? String((messages[messages.length - 1] as any)?.id ?? '') : '';
+        return `${messages.length}:${firstId}:${lastId}`;
+      };
+
+      if (mode === 'older') {
+        setGroupHasMoreOlderMessages(hasMore);
+        if (pageMessages.length === 0) return;
+
+        pendingGroupPrependAdjustRef.current = {
+          previousHeight: groupContentHeightRef.current,
+          previousOffset: groupScrollOffsetYRef.current,
+        };
+
+        setGroupChatMessages((prev) => {
+          const seen = new Set(prev.map((m: any, i: number) => getMsgKey(m, i)));
+          const toPrepend = pageMessages.filter((m: any, i: number) => !seen.has(getMsgKey(m, i)));
+          if (toPrepend.length === 0) return prev;
+          const next = [...toPrepend, ...prev];
+          const nextOldest = Number((next[0] as any)?.id);
+          groupOldestMessageIdRef.current = Number.isFinite(nextOldest) ? nextOldest : null;
+          groupChatLastSigRef.current = buildSig(next);
+          return next;
+        });
+        return;
+      }
+
+      if (mode === 'latest') {
+        const nextSig = buildSig(pageMessages);
+        const nextOldest = Number((pageMessages[0] as any)?.id);
+        groupOldestMessageIdRef.current = Number.isFinite(nextOldest) ? nextOldest : null;
+        setGroupHasMoreOlderMessages(hasMore);
+        if (nextSig !== groupChatLastSigRef.current) {
+          groupChatLastSigRef.current = nextSig;
+          setGroupChatMessages(pageMessages);
+        }
+        return;
+      }
+
+      // poll: merge latest page into the currently loaded slice without dropping older loaded pages.
+      setGroupChatMessages((prev) => {
+        if (!prev.length) {
+          const nextSig = buildSig(pageMessages);
+          groupChatLastSigRef.current = nextSig;
+          return pageMessages;
+        }
+
+        const byKey = new Map<string, any>();
+        prev.forEach((m: any, i: number) => byKey.set(getMsgKey(m, i), m));
+        pageMessages.forEach((m: any, i: number) => byKey.set(getMsgKey(m, i), m));
+
+        const merged = Array.from(byKey.values()).sort((a: any, b: any) => {
+          const ai = Number(a?.id);
+          const bi = Number(b?.id);
+          if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) return ai - bi;
+          return String(a?.created_at ?? '').localeCompare(String(b?.created_at ?? ''));
+        });
+
+        const nextSig = buildSig(merged);
+        if (nextSig === groupChatLastSigRef.current) return prev;
+        groupChatLastSigRef.current = nextSig;
+        return merged;
+      });
     } catch (e) {
       console.error('Error fetching group messages:', e);
     } finally {
@@ -5010,6 +5180,27 @@ const FrontScreen = ({
       if (groupChatLoadingGroupIdRef.current === groupId) {
         setGroupChatLoadingGroupId(null);
       }
+    }
+  };
+
+  const loadOlderGroupMessages = async () => {
+    if (isLoadingOlderGroupMessages) return;
+    if (!groupHasMoreOlderMessages) return;
+
+    const beforeId = groupOldestMessageIdRef.current;
+    if (!beforeId || !Number.isFinite(beforeId)) return;
+    if (groupOldestFetchInFlightRef.current === beforeId) return;
+
+    const groupId = selectedGroup?.id;
+    if (!groupId) return;
+
+    setIsLoadingOlderGroupMessages(true);
+    groupOldestFetchInFlightRef.current = beforeId;
+    try {
+      await fetchGroupChatMessages(groupId, 'older');
+    } finally {
+      groupOldestFetchInFlightRef.current = null;
+      setIsLoadingOlderGroupMessages(false);
     }
   };
 
@@ -5071,7 +5262,7 @@ const FrontScreen = ({
       if (selectedGroup?.id) {
         fetchGroupLimitedMembersIfOwner(selectedGroup.id);
         // Limitar no debe eliminar mensajes; refrescar asegura que se mantengan visibles.
-        fetchGroupChatMessages(selectedGroup.id);
+        fetchGroupChatMessages(selectedGroup.id, 'poll');
       }
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'No se pudo limitar');
@@ -5104,7 +5295,7 @@ const FrontScreen = ({
 
       if (selectedGroup?.id) {
         fetchGroupLimitedMembersIfOwner(selectedGroup.id);
-        fetchGroupChatMessages(selectedGroup.id);
+        fetchGroupChatMessages(selectedGroup.id, 'poll');
       }
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'No se pudo quitar la limitación');
@@ -5199,19 +5390,35 @@ const FrontScreen = ({
     setGroupMessageOptions(null);
   };
 
-  const fetchChannelMessages = async (targetPostId?: string) => {
+  const fetchChannelMessages = async (
+    targetPostId?: string,
+    mode: 'latest' | 'poll' | 'older' = 'latest'
+  ) => {
     if (!authToken) return;
     const idToFetchRaw = targetPostId || (userPublication ? userPublication.id : null);
     if (!idToFetchRaw) return;
 
     const idToFetch = String(idToFetchRaw);
+
+    let beforeId: number | null = null;
+    if (mode === 'older') {
+      beforeId = channelOldestMessageIdRef.current;
+      if (!beforeId || !Number.isFinite(beforeId)) return;
+    }
+
     const fetchSeq = ++channelChatFetchSeqRef.current;
 
     // Track expected chat target (covers both own channel and joined channels).
     currentChannelPostIdRef.current = idToFetch;
 
     try {
-      const response = await fetch(`${API_URL}/api/channels/messages/${idToFetch}`, {
+      const params = new URLSearchParams();
+      params.set('limit', String(CHANNEL_CHAT_PAGE_SIZE));
+      if (mode === 'older' && beforeId) {
+        params.set('beforeId', String(beforeId));
+      }
+
+      const response = await fetch(`${API_URL}/api/channels/messages/${idToFetch}?${params.toString()}`, {
         headers: {
           'Authorization': `Bearer ${authToken}`
         }
@@ -5224,18 +5431,79 @@ const FrontScreen = ({
       if (currentChannelPostIdRef.current !== idToFetch) return;
 
       if (response.ok) {
-        const data = await response.json().catch(() => []);
-        const messages = Array.isArray(data) ? data : [];
-        const firstId = messages.length ? String((messages[0] as any)?.id ?? '') : '';
-        const lastId = messages.length ? String((messages[messages.length - 1] as any)?.id ?? '') : '';
-        const nextSig = `${messages.length}:${firstId}:${lastId}`;
+        const data = await response.json().catch(() => ([] as any));
+        const pageMessages = Array.isArray(data)
+          ? data
+          : (Array.isArray((data as any)?.messages) ? (data as any).messages : []);
+        const hasMore = Array.isArray(data)
+          ? pageMessages.length >= CHANNEL_CHAT_PAGE_SIZE
+          : Boolean((data as any)?.hasMore);
 
-        // Avoid resetting the entire list when the payload didn't change.
-        // This significantly reduces UI jank and prevents "stuck" feeling while scrolling.
-        if (nextSig !== channelChatLastSigRef.current) {
-          channelChatLastSigRef.current = nextSig;
-          setChatMessages(messages);
+        const getMsgKey = (msg: any, idx: number) => String(msg?.id ?? `${msg?.sender_email ?? 'u'}:${msg?.created_at ?? ''}:${idx}`);
+        const buildSig = (messages: any[]) => {
+          const firstId = messages.length ? String((messages[0] as any)?.id ?? '') : '';
+          const lastId = messages.length ? String((messages[messages.length - 1] as any)?.id ?? '') : '';
+          return `${messages.length}:${firstId}:${lastId}`;
+        };
+
+        if (mode === 'older') {
+          setChannelHasMoreOlderMessages(hasMore);
+          if (pageMessages.length === 0) return;
+
+          pendingChannelPrependAdjustRef.current = {
+            previousHeight: channelContentHeightRef.current,
+            previousOffset: channelScrollOffsetYRef.current,
+          };
+
+          setChatMessages((prev) => {
+            const seen = new Set(prev.map((m: any, i: number) => getMsgKey(m, i)));
+            const toPrepend = pageMessages.filter((m: any, i: number) => !seen.has(getMsgKey(m, i)));
+            if (toPrepend.length === 0) return prev;
+            const next = [...toPrepend, ...prev];
+            const nextOldest = Number((next[0] as any)?.id);
+            channelOldestMessageIdRef.current = Number.isFinite(nextOldest) ? nextOldest : null;
+            channelChatLastSigRef.current = buildSig(next);
+            return next;
+          });
+          return;
         }
+
+        if (mode === 'latest') {
+          const nextSig = buildSig(pageMessages);
+          const nextOldest = Number((pageMessages[0] as any)?.id);
+          channelOldestMessageIdRef.current = Number.isFinite(nextOldest) ? nextOldest : null;
+          setChannelHasMoreOlderMessages(hasMore);
+          if (nextSig !== channelChatLastSigRef.current) {
+            channelChatLastSigRef.current = nextSig;
+            setChatMessages(pageMessages);
+          }
+          return;
+        }
+
+        // poll: merge latest page into the currently loaded slice without dropping older loaded pages.
+        setChatMessages((prev) => {
+          if (!prev.length) {
+            const nextSig = buildSig(pageMessages);
+            channelChatLastSigRef.current = nextSig;
+            return pageMessages;
+          }
+
+          const byKey = new Map<string, any>();
+          prev.forEach((m: any, i: number) => byKey.set(getMsgKey(m, i), m));
+          pageMessages.forEach((m: any, i: number) => byKey.set(getMsgKey(m, i), m));
+
+          const merged = Array.from(byKey.values()).sort((a: any, b: any) => {
+            const ai = Number(a?.id);
+            const bi = Number(b?.id);
+            if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) return ai - bi;
+            return String(a?.created_at ?? '').localeCompare(String(b?.created_at ?? ''));
+          });
+
+          const nextSig = buildSig(merged);
+          if (nextSig === channelChatLastSigRef.current) return prev;
+          channelChatLastSigRef.current = nextSig;
+          return merged;
+        });
       } else {
         // If we cannot fetch messages (expired/not authorized/etc.), avoid leaving the UI stuck behind a loader.
         console.warn('[ChannelChat] Failed to fetch messages:', response.status);
@@ -5250,6 +5518,34 @@ const FrontScreen = ({
         channelChatLoadingPostIdRef.current = null;
         setChannelChatLoadingPostId(null);
       }
+
+    }
+  };
+
+  const loadOlderChannelMessages = async () => {
+    if (isLoadingOlderChannelMessages) return;
+    if (!channelHasMoreOlderMessages) return;
+
+    const beforeId = channelOldestMessageIdRef.current;
+    if (!beforeId || !Number.isFinite(beforeId)) return;
+    if (channelOldestFetchInFlightRef.current === beforeId) return;
+
+    const targetPostId = String(
+      (selectedChannel as any)?.post_id ??
+      (selectedChannel as any)?.postId ??
+      (selectedChannel as any)?.id ??
+      userPublication?.id ??
+      ''
+    );
+    if (!targetPostId) return;
+
+    setIsLoadingOlderChannelMessages(true);
+    channelOldestFetchInFlightRef.current = beforeId;
+    try {
+      await fetchChannelMessages(targetPostId, 'older');
+    } finally {
+      channelOldestFetchInFlightRef.current = null;
+      setIsLoadingOlderChannelMessages(false);
     }
   };
 
@@ -5278,18 +5574,45 @@ const FrontScreen = ({
         if (selectedChannel) {
           const selectedPostId = (selectedChannel as any)?.post_id ?? (selectedChannel as any)?.postId ?? (selectedChannel as any)?.id;
           fetchChannelInteractions(selectedPostId);
-          fetchChannelMessages(selectedPostId);
+          fetchChannelMessages(selectedPostId, 'latest');
         } else if (userPublication) {
           fetchChannelInteractions();
-          fetchChannelMessages(userPublication.id);
+          fetchChannelMessages(userPublication.id, 'latest');
         }
       }
     }
   }, [activeBottomTab, chatView, channelTab, userPublication, selectedChannel]);
 
   useEffect(() => {
+    if (authToken) return;
+    resetChannelChatPaginationState(true);
+    setChannelInteractions([]);
+    setShowChannelScrollToLatest(false);
+    setIsChannelNearBottom(true);
+    resetGroupChatPaginationState(true);
+    setShowGroupScrollToLatest(false);
+    setIsGroupNearBottom(true);
+  }, [authToken]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') return;
+      resetChannelChatPaginationState(true);
+      setShowChannelScrollToLatest(false);
+      setIsChannelNearBottom(true);
+      resetGroupChatPaginationState(true);
+      setShowGroupScrollToLatest(false);
+      setIsGroupNearBottom(true);
+    });
+
+    return () => {
+      sub.remove();
+    };
+  }, []);
+
+  useEffect(() => {
     if (activeBottomTab === 'chat' && chatView === 'groupChat' && selectedGroup?.id) {
-      fetchGroupChatMessages(selectedGroup.id);
+      fetchGroupChatMessages(selectedGroup.id, 'latest');
       fetchGroupLimitedMembersIfOwner(selectedGroup.id);
     }
   }, [activeBottomTab, chatView, selectedGroup?.id, authToken]);
@@ -5315,7 +5638,7 @@ const FrontScreen = ({
 
     const groupId = selectedGroup!.id;
     groupChatPollingTimerRef.current = setInterval(() => {
-      fetchGroupChatMessages(groupId);
+      fetchGroupChatMessages(groupId, 'poll');
     }, 4000);
 
     return () => {
@@ -5355,7 +5678,7 @@ const FrontScreen = ({
 
     const postId = String(postIdToPoll);
     channelChatPollingTimerRef.current = setInterval(() => {
-      fetchChannelMessages(postId);
+      fetchChannelMessages(postId, 'poll');
     }, 4000);
 
     return () => {
@@ -10799,26 +11122,11 @@ const FrontScreen = ({
 
                   {/* Botón Aplicar */}
                   <TouchableOpacity
-                    style={[styles.applyButton, !canApplyPresentation && styles.applyButtonDisabled]}
+                    style={[styles.applyButton, canApplyPresentation ? styles.applyButtonActive : styles.applyButtonDisabled]}
                     activeOpacity={canApplyPresentation ? 0.7 : 1}
                     onPress={handleApplyPresentation}
                     disabled={!canApplyPresentation}>
-                    {canApplyPresentation && (
-                      <Svg
-                        style={StyleSheet.absoluteFillObject}
-                        viewBox="0 0 100 100"
-                        preserveAspectRatio="none"
-                      >
-                        <Defs>
-                          <LinearGradient id="apply_btn_grad" x1="0" y1="0" x2="0" y2="1">
-                            <Stop offset="0" stopColor="#FFFFFF" stopOpacity="1" />
-                            <Stop offset="1" stopColor="#FFB74D" stopOpacity="1" />
-                          </LinearGradient>
-                        </Defs>
-                        <Rect x="0" y="0" width="100" height="100" fill="url(#apply_btn_grad)" />
-                      </Svg>
-                    )}
-                    <Text style={[styles.applyButtonText, !canApplyPresentation && styles.applyButtonTextDisabled]}>{t('common.apply' as TranslationKey)}</Text>
+                    <Text style={[styles.applyButtonText, canApplyPresentation ? styles.applyButtonTextActive : styles.applyButtonTextDisabled]}>{t('common.apply' as TranslationKey)}</Text>
                   </TouchableOpacity>
                   </ScrollView>
 
@@ -11774,28 +12082,72 @@ const FrontScreen = ({
                     scrollEventThrottle={16}
                     onScroll={(e) => {
                       const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+                      groupScrollOffsetYRef.current = contentOffset.y;
+                      groupContentHeightRef.current = contentSize.height;
                       const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
                       const nearBottom = distanceFromBottom <= 40;
+                      const nearTop = contentOffset.y <= GROUP_CHAT_LOAD_OLDER_TOP_THRESHOLD;
 
-                      setIsGroupNearBottom(nearBottom);
-                      setShowGroupScrollToLatest(!nearBottom);
+                      setIsGroupNearBottom(prev => (prev === nearBottom ? prev : nearBottom));
+                      setShowGroupScrollToLatest(prev => {
+                        const next = !nearBottom;
+                        return prev === next ? prev : next;
+                      });
+
+                      if (nearTop) {
+                        loadOlderGroupMessages();
+                      }
                     }}
-                    onContentSizeChange={() => {
-                      const currentLen = groupChatMessages.length;
-                      const prevLen = lastGroupChatMessagesLengthRef.current;
-                      if (currentLen !== prevLen) {
-                        lastGroupChatMessagesLengthRef.current = currentLen;
-                        if (currentLen > prevLen) {
-                          if (isGroupNearBottom) {
-                            groupChatScrollViewRef.current?.scrollToEnd({ animated: true });
-                          } else {
-                            setShowGroupScrollToLatest(true);
+                    onContentSizeChange={(_w, h) => {
+                      groupContentHeightRef.current = h;
+
+                      let didScrollToLatest = false;
+                      if (pendingGroupScrollToLatestAfterRefreshRef.current && groupChatMessages.length > 0) {
+                        pendingGroupScrollToLatestAfterRefreshRef.current = false;
+                        didScrollToLatest = true;
+                        setIsGroupNearBottom(true);
+                        setShowGroupScrollToLatest(false);
+                        requestAnimationFrame(() => {
+                          groupChatScrollViewRef.current?.scrollToEnd({ animated: false });
+                        });
+                      }
+
+                      const pendingAdjust = pendingGroupPrependAdjustRef.current;
+                      if (pendingAdjust) {
+                        const delta = h - pendingAdjust.previousHeight;
+                        if (delta > 0) {
+                          groupChatScrollViewRef.current?.scrollTo({
+                            y: Math.max(0, pendingAdjust.previousOffset + delta),
+                            animated: false,
+                          });
+                        }
+                        pendingGroupPrependAdjustRef.current = null;
+                      }
+
+                      if (!didScrollToLatest) {
+                        const currentLen = groupChatMessages.length;
+                        const prevLen = lastGroupChatMessagesLengthRef.current;
+                        if (currentLen !== prevLen) {
+                          lastGroupChatMessagesLengthRef.current = currentLen;
+                          if (currentLen > prevLen) {
+                            if (isGroupNearBottom) {
+                              groupChatScrollViewRef.current?.scrollToEnd({ animated: true });
+                            } else {
+                              setShowGroupScrollToLatest(true);
+                            }
                           }
                         }
+                      } else {
+                        lastGroupChatMessagesLengthRef.current = groupChatMessages.length;
                       }
                     }}
                   >
                     <View style={{ paddingHorizontal: 20, paddingTop: 20 }}>
+                      {isLoadingOlderGroupMessages && (
+                        <View style={{ paddingVertical: 8, alignItems: 'center' }}>
+                          <ActivityIndicator color="#FFB74D" size="small" />
+                        </View>
+                      )}
                       {(() => {
                         const allMessages = Array.isArray(groupChatMessages) ? groupChatMessages : [];
                         const messageById: Record<string, any> = {};
@@ -12188,23 +12540,28 @@ const FrontScreen = ({
                       <View style={{ alignItems: 'flex-end', marginBottom: 6 }}>
                         <TouchableOpacity
                           activeOpacity={0.85}
-                          onPress={() => {
-                            setGroupScrollToLatestPulse(true);
-                            if (groupScrollToLatestPulseTimerRef.current) {
-                              clearTimeout(groupScrollToLatestPulseTimerRef.current);
-                              groupScrollToLatestPulseTimerRef.current = null;
-                            }
-                            groupScrollToLatestPulseTimerRef.current = setTimeout(() => {
-                              setGroupScrollToLatestPulse(false);
-                              groupScrollToLatestPulseTimerRef.current = null;
-                            }, 500);
+                          onPress={async () => {
+                            setGroupScrollToLatestLoading(true);
 
-                            // Ensure the pulse is visible before scrolling.
-                            setTimeout(() => {
+                            const groupId = selectedGroup?.id;
+                            if (groupId) {
+                              resetGroupChatPaginationState(false);
+                              pendingGroupScrollToLatestAfterRefreshRef.current = true;
+                              await fetchGroupChatMessages(groupId, 'latest');
+                            }
+
+                            // Fallback: scroll with increasing delays to handle varied render timings.
+                            const doScrollToBottom = () => {
                               groupChatScrollViewRef.current?.scrollToEnd({ animated: true });
                               setIsGroupNearBottom(true);
                               setShowGroupScrollToLatest(false);
-                            }, 40);
+                            };
+                            requestAnimationFrame(doScrollToBottom);
+                            setTimeout(doScrollToBottom, 200);
+                            setTimeout(() => {
+                              doScrollToBottom();
+                              setGroupScrollToLatestLoading(false);
+                            }, 500);
                           }}
                           style={{
                             width: 36,
@@ -12214,20 +12571,11 @@ const FrontScreen = ({
                             position: 'relative',
                           }}
                         >
-                          <View
-                            pointerEvents="none"
-                            style={{
-                              position: 'absolute',
-                              top: 0,
-                              right: 0,
-                              bottom: 0,
-                              left: 0,
-                              borderRadius: 18,
-                              backgroundColor: groupScrollToLatestPulse ? 'rgba(255, 255, 255, 0.28)' : 'transparent',
-                            }}
-                          />
                           <View style={{ zIndex: 1 }}>
-                            <MaterialIcons name="arrow-downward" size={20} color="#FFB74D" />
+                            {groupScrollToLatestLoading
+                              ? <ActivityIndicator size="small" color="#FFB74D" />
+                              : <MaterialIcons name="arrow-downward" size={20} color="#FFB74D" />
+                            }
                           </View>
                         </TouchableOpacity>
                       </View>
@@ -12736,30 +13084,71 @@ const FrontScreen = ({
                               nestedScrollEnabled
                               showsVerticalScrollIndicator={false}
                               ref={chatScrollViewRef}
+                              ListHeaderComponent={isLoadingOlderChannelMessages ? (
+                                <View style={{ paddingVertical: 8, alignItems: 'center' }}>
+                                  <ActivityIndicator color="#FFB74D" size="small" />
+                                </View>
+                              ) : null}
                               scrollEventThrottle={16}
                               onScroll={(e) => {
                                 const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+                                channelScrollOffsetYRef.current = contentOffset.y;
+                                channelContentHeightRef.current = contentSize.height;
                                 const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
                                 const nearBottom = distanceFromBottom <= 40;
+                                const nearTop = contentOffset.y <= CHANNEL_CHAT_LOAD_OLDER_TOP_THRESHOLD;
 
                                 setIsChannelNearBottom(prev => (prev === nearBottom ? prev : nearBottom));
                                 setShowChannelScrollToLatest(prev => {
                                   const next = !nearBottom;
                                   return prev === next ? prev : next;
                                 });
+
+                                if (nearTop) {
+                                  loadOlderChannelMessages();
+                                }
                               }}
-                              onContentSizeChange={() => {
-                                const currentLen = chatMessages.length;
-                                const prevLen = lastChatMessagesLengthRef.current;
-                                if (currentLen !== prevLen) {
-                                  lastChatMessagesLengthRef.current = currentLen;
-                                  if (currentLen > prevLen) {
-                                    if (isChannelNearBottom) {
-                                      chatScrollViewRef.current?.scrollToEnd({ animated: true });
-                                    } else {
-                                      setShowChannelScrollToLatest(true);
+                              onContentSizeChange={(_w, h) => {
+                                channelContentHeightRef.current = h;
+
+                                let didScrollToLatest = false;
+                                if (pendingChannelScrollToLatestAfterRefreshRef.current && messagesToRender.length > 0) {
+                                  pendingChannelScrollToLatestAfterRefreshRef.current = false;
+                                  didScrollToLatest = true;
+                                  setIsChannelNearBottom(true);
+                                  setShowChannelScrollToLatest(false);
+                                  requestAnimationFrame(() => {
+                                    chatScrollViewRef.current?.scrollToOffset({ offset: h, animated: false });
+                                  });
+                                }
+
+                                const pendingAdjust = pendingChannelPrependAdjustRef.current;
+                                if (pendingAdjust) {
+                                  const delta = h - pendingAdjust.previousHeight;
+                                  if (delta > 0) {
+                                    chatScrollViewRef.current?.scrollToOffset({
+                                      offset: Math.max(0, pendingAdjust.previousOffset + delta),
+                                      animated: false,
+                                    });
+                                  }
+                                  pendingChannelPrependAdjustRef.current = null;
+                                }
+
+                                if (!didScrollToLatest) {
+                                  const currentLen = chatMessages.length;
+                                  const prevLen = lastChatMessagesLengthRef.current;
+                                  if (currentLen !== prevLen) {
+                                    lastChatMessagesLengthRef.current = currentLen;
+                                    if (currentLen > prevLen) {
+                                      if (isChannelNearBottom) {
+                                        chatScrollViewRef.current?.scrollToEnd({ animated: true });
+                                      } else {
+                                        setShowChannelScrollToLatest(true);
+                                      }
                                     }
                                   }
+                                } else {
+                                  lastChatMessagesLengthRef.current = chatMessages.length;
                                 }
                               }}
                               renderItem={({ item: msg, index }) => {
@@ -13393,23 +13782,35 @@ const FrontScreen = ({
                           <View style={{ alignItems: 'flex-end', marginBottom: 6 }}>
                             <TouchableOpacity
                               activeOpacity={0.85}
-                              onPress={() => {
-                                setChannelScrollToLatestPulse(true);
-                                if (channelScrollToLatestPulseTimerRef.current) {
-                                  clearTimeout(channelScrollToLatestPulseTimerRef.current);
-                                  channelScrollToLatestPulseTimerRef.current = null;
-                                }
-                                channelScrollToLatestPulseTimerRef.current = setTimeout(() => {
-                                  setChannelScrollToLatestPulse(false);
-                                  channelScrollToLatestPulseTimerRef.current = null;
-                                }, 500);
+                              onPress={async () => {
+                                setChannelScrollToLatestLoading(true);
 
-                                // Ensure the pulse is visible before scrolling.
-                                setTimeout(() => {
-                                  chatScrollViewRef.current?.scrollToEnd({ animated: true });
+                                const targetPostId = String(
+                                  selectedChannel?.post_id ??
+                                  selectedChannel?.postId ??
+                                  selectedChannel?.id ??
+                                  userPublication?.id ??
+                                  ''
+                                );
+
+                                if (targetPostId) {
+                                  resetChannelChatPaginationState(false);
+                                  pendingChannelScrollToLatestAfterRefreshRef.current = true;
+                                  await fetchChannelMessages(targetPostId, 'latest');
+                                }
+
+                                // Fallback: scroll with increasing delays to handle varied render timings.
+                                const doScrollToBottom = () => {
+                                  chatScrollViewRef.current?.scrollToOffset({ offset: 999999, animated: true });
                                   setIsChannelNearBottom(true);
                                   setShowChannelScrollToLatest(false);
-                                }, 40);
+                                };
+                                requestAnimationFrame(doScrollToBottom);
+                                setTimeout(doScrollToBottom, 200);
+                                setTimeout(() => {
+                                  doScrollToBottom();
+                                  setChannelScrollToLatestLoading(false);
+                                }, 500);
                               }}
                               style={{
                                 width: 36,
@@ -13432,7 +13833,10 @@ const FrontScreen = ({
                                 }}
                               />
                               <View style={{ zIndex: 1 }}>
-                                <MaterialIcons name="arrow-downward" size={20} color="#FFB74D" />
+                                {channelScrollToLatestLoading
+                                  ? <ActivityIndicator size="small" color="#FFB74D" />
+                                  : <MaterialIcons name="arrow-downward" size={20} color="#FFB74D" />
+                                }
                               </View>
                             </TouchableOpacity>
                           </View>
@@ -17314,7 +17718,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginHorizontal: 20,
     marginBottom: 20,
-    backgroundColor: 'transparent',
     paddingVertical: 10,
     paddingHorizontal: 24,
     borderRadius: 10,
@@ -17322,8 +17725,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
+  applyButtonActive: {
+    backgroundColor: '#000000',
+    borderWidth: 1,
+    borderColor: '#FFB74D',
+  },
   applyButtonDisabled: {
-    backgroundColor: '#000000ff',
+    backgroundColor: '#000000',
     borderWidth: 1,
     borderColor: '#2d150eff',
     shadowOpacity: 0,
@@ -17333,9 +17741,11 @@ const styles = StyleSheet.create({
     elevation: 0,
   },
   applyButtonText: {
-    color: '#000000',
     fontSize: 14,
     fontWeight: 'bold',
+  },
+  applyButtonTextActive: {
+    color: '#FFB74D',
   },
   applyButtonTextDisabled: {
     color: '#2d150eff',

@@ -382,6 +382,15 @@ router.post('/messages', authenticateToken, async (req, res) => {
 router.get('/messages/:postId', authenticateToken, async (req, res) => {
   const { postId } = req.params;
   const requesterEmail = req.user.email;
+  const hasPaginationParams = (req.query?.limit !== undefined) || (req.query?.beforeId !== undefined);
+
+  const parsedLimit = Number(req.query?.limit);
+  const limit = Number.isFinite(parsedLimit)
+    ? Math.max(1, Math.min(100, Math.trunc(parsedLimit)))
+    : 40;
+
+  const parsedBeforeId = Number(req.query?.beforeId);
+  const beforeId = Number.isFinite(parsedBeforeId) ? Math.trunc(parsedBeforeId) : null;
 
   const numericPostId = Number(postId);
   if (!Number.isFinite(numericPostId)) {
@@ -405,16 +414,49 @@ router.get('/messages/:postId', authenticateToken, async (req, res) => {
     // Los demás usuarios solo ven los mensajes no ocultos.
     const isPublisher = requesterEmail === publisherEmail;
 
+    if (!hasPaginationParams) {
+      const result = await pool.query(
+        `SELECT cm.*, u.username 
+         FROM channel_messages cm
+         JOIN users u ON cm.sender_email = u.email
+         WHERE cm.post_id = $1
+           ${isPublisher ? '' : 'AND cm.hidden = FALSE'}
+         ORDER BY cm.id ASC`,
+        [numericPostId]
+      );
+      res.json(result.rows);
+      return;
+    }
+
+    const whereBeforeClause = beforeId ? 'AND cm.id < $2' : '';
+    const queryParams = beforeId
+      ? [numericPostId, beforeId, limit + 1]
+      : [numericPostId, limit + 1];
+
     const result = await pool.query(
-      `SELECT cm.*, u.username 
-       FROM channel_messages cm
-       JOIN users u ON cm.sender_email = u.email
-       WHERE cm.post_id = $1
-         ${isPublisher ? '' : 'AND cm.hidden = FALSE'}
-       ORDER BY cm.id ASC`,
-      [numericPostId]
+      `SELECT page.*, u.username
+       FROM (
+         SELECT cm.*
+         FROM channel_messages cm
+         WHERE cm.post_id = $1
+           ${isPublisher ? '' : 'AND cm.hidden = FALSE'}
+           ${whereBeforeClause}
+         ORDER BY cm.id DESC
+         LIMIT $${beforeId ? 3 : 2}
+       ) AS page
+       JOIN users u ON page.sender_email = u.email
+       ORDER BY page.id DESC`,
+      queryParams
     );
-    res.json(result.rows);
+
+    const rowsDesc = result.rows || [];
+    const hasMore = rowsDesc.length > limit;
+    const pageRowsAsc = rowsDesc.slice(0, limit).reverse();
+
+    res.json({
+      messages: pageRowsAsc,
+      hasMore,
+    });
   } catch (error) {
     console.error('Error al obtener mensajes:', error);
     res.status(500).json({ error: 'Error interno del servidor' });

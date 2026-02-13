@@ -36,7 +36,8 @@ type Screen =
   | 'changePassword'
   | 'blockedUsers'
   | 'devicePermissions'
-  | 'aboutKeinti';
+  | 'aboutKeinti'
+  | 'moreAboutKeinti';
 
 type GalleryPermissionStatus = 'granted' | 'denied' | 'unknown';
 
@@ -354,6 +355,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const logoutSheetAnim = useRef(new Animated.Value(0)).current;
 
+  const [showAuthSuccessModal, setShowAuthSuccessModal] = useState(false);
   const [showRevokeGalleryPermissionModal, setShowRevokeGalleryPermissionModal] = useState(false);
   const [isRevokingGalleryPermission, setIsRevokingGalleryPermission] = useState(false);
 
@@ -417,18 +419,23 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       return;
     }
 
+    if (screen === 'moreAboutKeinti') {
+      setScreen('aboutKeinti');
+      return;
+    }
+
     if (screen === 'privacyPolicy') {
-      setScreen('securityControl');
+      setScreen('aboutKeinti');
       return;
     }
 
     if (screen === 'cookiesAdPolicy') {
-      setScreen('securityControl');
+      setScreen('aboutKeinti');
       return;
     }
 
     if (screen === 'termsOfUse') {
-      setScreen('securityControl');
+      setScreen('aboutKeinti');
       return;
     }
 
@@ -1657,6 +1664,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               ? t('config.devicePermissions')
             : screen === 'aboutKeinti'
               ? t('aboutKeinti.title')
+            : screen === 'moreAboutKeinti'
+              ? t('aboutKeinti.moreAboutKeinti' as TranslationKey)
             : screen === 'privacyPolicy'
               ? t('securityControl.privacyPolicy')
             : screen === 'cookiesAdPolicy'
@@ -1752,6 +1761,40 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
         <ScrollView contentContainerStyle={styles.content}>
           <View style={styles.personalDataHeaderBox}>
             <Text style={styles.personalDataTitle}>{t('aboutKeinti.title')}</Text>
+          </View>
+
+          <View style={styles.section}>
+            <SimpleSettingRow
+              title={t('securityControl.privacyPolicy')}
+              showTopBorder={false}
+              onPress={() => setScreen('privacyPolicy')}
+            />
+            <SimpleSettingRow
+              title={t('securityControl.cookiesAdPolicy')}
+              onPress={() => setScreen('cookiesAdPolicy')}
+            />
+            <SimpleSettingRow
+              title={t('securityControl.termsOfUse')}
+              onPress={() => setScreen('termsOfUse')}
+            />
+            <SimpleSettingRow
+              title={t('securityControl.childSafetyStandards')}
+              onPress={() => openPolicyUrl('childSafetyStandards')}
+            />
+            <SimpleSettingRow
+              title={t('securityControl.accountDeletionPolicy')}
+              onPress={() => openPolicyUrl('accountDeletion')}
+            />
+            <SimpleSettingRow
+              title={t('aboutKeinti.moreAboutKeinti' as TranslationKey)}
+              onPress={() => setScreen('moreAboutKeinti')}
+            />
+          </View>
+        </ScrollView>
+      ) : screen === 'moreAboutKeinti' ? (
+        <ScrollView contentContainerStyle={styles.content}>
+          <View style={styles.personalDataHeaderBox}>
+            <Text style={styles.personalDataTitle}>{t('aboutKeinti.moreAboutKeinti' as TranslationKey)}</Text>
           </View>
 
           <View style={styles.section}>
@@ -2203,28 +2246,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           <Text style={styles.sectionDescription}>{t('securityControl.passwordAndAuthDescription')}</Text>
           <View style={styles.section}>
             <SimpleSettingRow
-              title={t('securityControl.privacyPolicy')}
-              showTopBorder={false}
-              onPress={() => setScreen('privacyPolicy')}
-            />
-            <SimpleSettingRow
-              title={t('securityControl.cookiesAdPolicy')}
-              onPress={() => setScreen('cookiesAdPolicy')}
-            />
-            <SimpleSettingRow
-              title={t('securityControl.termsOfUse')}
-              onPress={() => setScreen('termsOfUse')}
-            />
-            <SimpleSettingRow
-              title={t('securityControl.childSafetyStandards')}
-              onPress={() => openPolicyUrl('childSafetyStandards')}
-            />
-            <SimpleSettingRow
-              title={t('securityControl.accountDeletionPolicy')}
-              onPress={() => openPolicyUrl('accountDeletion')}
-            />
-            <SimpleSettingRow
               title={t('accountCenter.changePassword')}
+              showTopBorder={false}
               onPress={() => {
                 setCurrentPassword('');
                 setNewPassword('');
@@ -2725,7 +2748,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                             setAccountVerified(true);
                             setAccountTotpEnabled(true);
                             onAccountVerifiedChange?.(true);
-                            Alert.alert(t('accountAuth.successTitle'), t('accountAuth.successBody'));
+                            setShowAuthSuccessModal(true);
                           }
                           await refreshAccountAuth();
                         } catch (e: any) {
@@ -3168,6 +3191,35 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       )}
 
 
+
+      <Modal
+        visible={showAuthSuccessModal}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setShowAuthSuccessModal(false)}
+      >
+        <TouchableWithoutFeedback onPress={() => setShowAuthSuccessModal(false)}>
+          <View style={styles.authSuccessOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.authSuccessPanel}>
+                <View style={{ alignItems: 'center', marginBottom: 14 }}>
+                  <VerifiedBadgeIcon size={38} variant="gradient" gradientColors={['#FFB74D', '#ffec5aff']} checkColor="#000000" />
+                </View>
+                <Text style={styles.authSuccessTitle}>{t('accountAuth.successTitle')}</Text>
+                <Text style={styles.authSuccessBody}>{t('accountAuth.successBody')}</Text>
+                <TouchableOpacity
+                  style={styles.authSuccessButton}
+                  activeOpacity={0.7}
+                  onPress={() => setShowAuthSuccessModal(false)}
+                >
+                  <Text style={styles.authSuccessButtonText}>{t('common.accept' as TranslationKey)}</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
 
       <Modal
         visible={!!adminSelfiePreviewUri}
@@ -4038,6 +4090,52 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 18,
+  },
+  authSuccessOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  authSuccessPanel: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#000000',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#FFB74D',
+    paddingVertical: 22,
+    paddingHorizontal: 20,
+  },
+  authSuccessTitle: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  authSuccessBody: {
+    color: '#FFFFFF',
+    opacity: 0.85,
+    fontSize: 13.5,
+    lineHeight: 19,
+    textAlign: 'center',
+    marginBottom: 18,
+  },
+  authSuccessButton: {
+    backgroundColor: '#000000',
+    borderWidth: 1,
+    borderColor: '#FFB74D',
+    borderRadius: 12,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  authSuccessButtonText: {
+    color: '#FFB74D',
+    fontSize: 14,
+    fontWeight: '700',
   },
   deletePanel: {
     width: '100%',

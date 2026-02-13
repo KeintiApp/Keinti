@@ -20,6 +20,7 @@ export type TranslationKey =
   | 'common.block'
   | 'common.check'
   | 'common.apply'
+  | 'common.accept'
   | 'common.create'
 
   | 'auth.sessionRequiredTitle'
@@ -268,6 +269,7 @@ export type TranslationKey =
   | 'config.yourAccountIn'
 
   | 'aboutKeinti.title'
+  | 'aboutKeinti.moreAboutKeinti'
   | 'aboutKeinti.body'
 
   | 'devicePermissions.description'
@@ -431,6 +433,7 @@ const es: Record<TranslationKey, string> = {
   'common.block': 'Bloquear',
   'common.check': 'Comprobar',
   'common.apply': 'Aplicar',
+  'common.accept': 'Aceptar',
   'common.create': 'Crear',
 
   'auth.sessionRequiredTitle': 'Sesión requerida',
@@ -677,6 +680,7 @@ const es: Record<TranslationKey, string> = {
   'config.yourAccountIn': 'Tu cuenta en',
 
   'aboutKeinti.title': 'Acerca de Keinti',
+  'aboutKeinti.moreAboutKeinti': 'Más de Keinti',
   'aboutKeinti.body': `Para todos los usuarios de Keinti:
 
 Keinti es una red social orientada al descubrimiento de perfiles y a la interacción directa entre personas. Nuestro propósito es ofrecer un entorno dinámico que favorezca la visibilidad de los usuarios, dentro de Keinti y como complemento a su presencia digital.
@@ -858,6 +862,7 @@ const en: Record<TranslationKey, string> = {
   'common.block': 'Block',
   'common.check': 'Check',
   'common.apply': 'Apply',
+  'common.accept': 'Accept',
   'common.create': 'Create',
 
   'auth.sessionRequiredTitle': 'Session required',
@@ -1120,6 +1125,7 @@ const en: Record<TranslationKey, string> = {
   'config.yourAccountIn': 'Your account on',
 
   'aboutKeinti.title': 'About Keinti',
+  'aboutKeinti.moreAboutKeinti': 'More about Keinti',
   'aboutKeinti.body': `For all Keinti users:
 
 Keinti is a social network focused on profile discovery and direct interaction between people. Our goal is to provide a dynamic environment that helps users increase their visibility—within Keinti and as a complement to their broader online presence.
