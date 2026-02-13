@@ -16,7 +16,7 @@ const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
 
-const EMAIL_VERIFICATION_CODE_LENGTH = 8;
+const EMAIL_VERIFICATION_CODE_LENGTH = 10;
 const EMAIL_VERIFICATION_TTL_SECONDS = Math.max(60, Number(process.env.EMAIL_VERIFICATION_TTL_SECONDS || 300));
 const EMAIL_VERIFICATION_MAX_SENDS = Math.max(1, Number(process.env.EMAIL_VERIFICATION_MAX_SENDS || 2));
 const EMAIL_VERIFICATION_MAX_ATTEMPTS = Math.max(1, Number(process.env.EMAIL_VERIFICATION_MAX_ATTEMPTS || 6));
@@ -88,12 +88,19 @@ async function findSupabaseUserIdByEmail(email) {
 }
 
 function generateEmailVerificationCode() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let out = '';
-  for (let i = 0; i < EMAIL_VERIFICATION_CODE_LENGTH; i++) {
-    out += chars[crypto.randomInt(0, chars.length)];
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  while (true) {
+    let out = '';
+    for (let i = 0; i < EMAIL_VERIFICATION_CODE_LENGTH; i++) {
+      out += chars[crypto.randomInt(0, chars.length)];
+    }
+
+    const hasLetter = /[A-Za-z]/.test(out);
+    const hasNumber = /\d/.test(out);
+    if (hasLetter && hasNumber) {
+      return out;
+    }
   }
-  return out;
 }
 
 function generatePasswordResetCode() {
@@ -141,7 +148,7 @@ async function sendVerificationEmail(toEmail, code) {
     from: `${appName} <${from}>`,
     to: toEmail,
     subject: `${appName} - Código de verificación`,
-    text: `Tu código de verificación es: ${code}\n\nCaduca en ${ttlMinutes} minutos.`,
+    text: `Tu código de verificación es: ${code}\n\nCaduca en ${ttlMinutes} minutos.\n\nEl código distingue mayúsculas y minúsculas.`,
   });
 
   // Nodemailer may resolve even when the SMTP server rejects the recipient.
@@ -577,7 +584,7 @@ router.get('/username/is-registered', async (req, res) => {
 // Verificar código recibido por email
 router.post('/email/verify-code', async (req, res) => {
   const email = normalizeEmail(req.body?.email);
-  const code = String(req.body?.code || '').trim().toUpperCase();
+  const code = String(req.body?.code || '').trim();
 
   if (!isValidEmailFormat(email)) {
     return res.status(400).json({ error: 'Email inválido', code: 'INVALID_EMAIL' });
@@ -728,6 +735,24 @@ router.get('/signup/check-email-status', async (req, res) => {
     const userRow = userResult.rows[0] || null;
     if (userRow && isAppProfileComplete(userRow)) {
       return res.json({ status: 'registered' });
+    }
+
+    // 1.5 If a rectification claim is pending, keep the email blocked from
+    // re-entering the verification step while admins review it.
+    const rectificationResult = await pool.query(
+      `SELECT status
+       FROM email_verification_rectifications
+       WHERE lower(email) = lower($1)
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [email]
+    ).catch(() => null);
+
+    const latestRectificationStatus = String(rectificationResult?.rows?.[0]?.status || '').trim().toLowerCase();
+    if (latestRectificationStatus === 'pending') {
+      return res.json({
+        status: 'rectification_pending',
+      });
     }
 
     // 2. Check lock/attempt state in email_verification_codes.

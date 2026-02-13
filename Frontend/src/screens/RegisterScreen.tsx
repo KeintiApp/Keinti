@@ -13,8 +13,6 @@ import {
   Alert,
   Animated,
   Easing,
-  Linking,
-  AppState,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from 'react-native-vector-icons/MaterialIcons';
@@ -24,14 +22,14 @@ import { COUNTRIES } from '../constants/countries';
 import {
   submitEmailRectification,
   checkUsernameRegistered,
-  completeSupabaseProfile,
+  registerUser,
+  requestEmailVerificationCode,
+  verifyEmailVerificationCode,
   cancelExpiredSignup,
   getSignupAttemptsStatus,
   checkSignupEmailStatus,
-  recordSignupAttempt,
 } from '../services/userService';
 import { useI18n } from '../i18n/I18nProvider';
-import { SUPABASE_REDIRECT_URL, isSupabaseConfigured, supabase } from '../config/supabase';
 import {
   COOKIES_ADVERTISING_POLICY_MD,
   PRIVACY_POLICY_MD,
@@ -101,6 +99,7 @@ const GradientLoader = () => {
 };
 
 const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenProps) => {
+  const PENDING_SIGNUP_PREFIX = 'keinti:pendingSignup:';
   const androidTopInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
   const { t } = useI18n();
   const USERNAME_MAX_LENGTH = 22; // Incluye el '@'
@@ -158,9 +157,23 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
   const pendingKeyForEmail = (e: string) => `keinti:pendingSignup:${String(e || '').trim().toLowerCase()}`;
 
-  const persistPendingSignup = async () => {
+  const persistPendingSignup = async (options?: { verificationDeadline?: number }) => {
     const e = String(email || '').trim().toLowerCase();
     if (!e) return;
+
+    const existingRaw = await AsyncStorage.getItem(pendingKeyForEmail(e)).catch(() => null);
+    let existing: any = null;
+    if (existingRaw) {
+      try {
+        existing = JSON.parse(existingRaw);
+      } catch {
+        existing = null;
+      }
+    }
+
+    const existingDeadline = Number(existing?.verificationDeadline || 0);
+    const fallbackDeadline = Number(verificationDeadlineRef.current || 0);
+    const nextDeadline = Number(options?.verificationDeadline || 0) || existingDeadline || fallbackDeadline || 0;
 
     const payload = {
       email: e,
@@ -170,6 +183,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
       nationality: String(nationality || '').trim(),
       password: String(password || ''),
       createdAt: Date.now(),
+      verificationDeadline: nextDeadline,
     };
 
     await AsyncStorage.setItem(pendingKeyForEmail(e), JSON.stringify(payload));
@@ -204,6 +218,95 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
     if (!e) return;
     await AsyncStorage.removeItem(pendingKeyForEmail(e)).catch(() => {});
   };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const restorePendingSignup = async () => {
+      if (step !== 1 || String(email || '').trim() !== '') {
+        return;
+      }
+
+      const keys = await AsyncStorage.getAllKeys().catch(() => [] as string[]);
+      const pendingKeys = (keys || []).filter((k) => String(k || '').startsWith(PENDING_SIGNUP_PREFIX));
+      if (pendingKeys.length === 0 || cancelled) {
+        return;
+      }
+
+      const entries = await Promise.all(
+        pendingKeys.map(async (k) => {
+          const raw = await AsyncStorage.getItem(k).catch(() => null);
+          if (!raw) return null;
+          try {
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return null;
+            const parsedEmail = String(parsed.email || '').trim().toLowerCase();
+            if (!parsedEmail) return null;
+            return {
+              email: parsedEmail,
+              username: String(parsed.username || '').trim(),
+              birthDate: String(parsed.birthDate || '').trim(),
+              gender: String(parsed.gender || '').trim(),
+              nationality: String(parsed.nationality || '').trim(),
+              password: String(parsed.password || ''),
+              createdAt: Number(parsed.createdAt || 0),
+              verificationDeadline: Number(parsed.verificationDeadline || 0),
+            };
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      const validEntries = entries.filter((it): it is NonNullable<typeof it> => !!it);
+      if (validEntries.length === 0 || cancelled) {
+        return;
+      }
+
+      const selected = validEntries.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+      if (!selected || cancelled) {
+        return;
+      }
+
+      const status = await checkSignupEmailStatus(selected.email).catch(() => null);
+      if (cancelled) return;
+
+      if (status?.status === 'rectification_pending') {
+        // While admins review the claim, do not return to verification step.
+        await AsyncStorage.removeItem(pendingKeyForEmail(selected.email)).catch(() => {});
+        setEmail(selected.email);
+        setRequestCodeInlineError(t('register.emailLockedRetryInline'));
+        setStep(1);
+        return;
+      }
+
+      setEmail(selected.email);
+      setUsername(selected.username);
+      setBirthDate(selected.birthDate);
+      setGender(selected.gender);
+      setNationality(selected.nationality);
+      setPassword(selected.password);
+      setConfirmPassword(selected.password);
+
+      if (selected.verificationDeadline > Date.now()) {
+        verificationDeadlineRef.current = selected.verificationDeadline;
+        setVerificationDeadline(selected.verificationDeadline);
+        setVerificationSecondsLeft(
+          Math.max(0, Math.ceil((selected.verificationDeadline - Date.now()) / 1000))
+        );
+        setStep(5);
+      } else {
+        setStep(4);
+      }
+    };
+
+    restorePendingSignup();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const isUiBlocked =
     isSubmitting || isVerifyingCode || isCheckingEmail || isCheckingUsername || isSendingRectification;
@@ -500,197 +603,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   const isStep2Valid = isValidUsername(username) && isValidBirthDate(birthDate);
   const isStep3Valid = gender !== '' && nationality !== '';
   const isStep4Valid = isValidPassword(password) && passwordsMatch();
-  // Link-only flow: code entry is optional/legacy.
-  const isStep5Valid = true;
-
-  const finalizeSupabaseRegistration = async (accessToken: string) => {
-    const token = String(accessToken || '').trim();
-    if (!token) {
-      throw new Error('No se obtuvo access_token');
-    }
-
-    // Restore pending form data in case the app restarted before the callback.
-    const pending = await loadPendingSignup();
-    const finalUsername = String((pending?.username ?? username) || '').trim();
-    const finalBirthDate = String((pending?.birthDate ?? birthDate) || '').trim();
-    const finalGender = String((pending?.gender ?? gender) || '').trim();
-    const finalNationality = String((pending?.nationality ?? nationality) || '').trim();
-    const finalPassword = String((pending?.password ?? password) || '');
-
-    // Keep state in sync so UI shows what we will save.
-    if (pending) {
-      if (!username && pending.username) setUsername(pending.username);
-      if (!birthDate && pending.birthDate) setBirthDate(pending.birthDate);
-      if (!gender && pending.gender) setGender(pending.gender);
-      if (!nationality && pending.nationality) setNationality(pending.nationality);
-      if (!password && pending.password) setPassword(pending.password);
-    }
-
-    if (!finalUsername || finalUsername.length < 2) {
-      throw new Error(t('register.missingProfileData'));
-    }
-    if (!finalBirthDate) {
-      throw new Error(t('register.missingProfileData'));
-    }
-    if (!finalNationality) {
-      throw new Error(t('register.missingProfileData'));
-    }
-
-    // Password is set during signUp; avoid re-setting it here to prevent noisy warnings
-    // like "New password should be different from the old password".
-    // (For legacy users created without a password, the Login flow handles profile completion
-    // but password should be set via "Forgot your password".)
-
-    setIsSubmitting(true);
-    await completeSupabaseProfile(token, {
-      username: finalUsername,
-      birthDate: finalBirthDate,
-      gender: finalGender,
-      nationality: finalNationality,
-    });
-
-    await clearPendingSignup();
-
-    setShowSuccessMessage(true);
-
-    setTimeout(() => {
-      setShowSuccessMessage(false);
-      onRegisterSuccess();
-    }, 2000);
-  };
-
-  const maybeFinalizeFromExistingSession = async () => {
-    if (!isSupabaseConfigured() || !supabase) return false;
-    if (deepLinkHandledRef.current) return false;
-    if (isSubmitting || isVerifyingCode) return false;
-
-    const session = (await supabase.auth.getSession().catch(() => null))?.data?.session || null;
-    const sessionEmail = session?.user?.email ? String(session.user.email).trim().toLowerCase() : '';
-    const expectedEmail = String(email || '').trim().toLowerCase();
-
-    if (!session?.access_token) return false;
-    if (!sessionEmail || !expectedEmail || sessionEmail !== expectedEmail) return false;
-
-    deepLinkHandledRef.current = true;
-    setIsVerifyingCode(true);
-    setVerifyCodeInlineError('');
-
-    try {
-      await finalizeSupabaseRegistration(session.access_token);
-      return true;
-    } finally {
-      setIsSubmitting(false);
-      setIsVerifyingCode(false);
-    }
-  };
-
-  const handleSupabaseCallbackUrl = async (url: string) => {
-    const raw = String(url || '').trim();
-    if (!raw) return;
-    if (!isSupabaseConfigured() || !supabase) return;
-
-    // Only process once per registration attempt.
-    if (deepLinkHandledRef.current) return;
-    deepLinkHandledRef.current = true;
-
-    setIsVerifyingCode(true);
-    setVerifyCodeInlineError('');
-
-    try {
-      const parsed = new URL(raw);
-
-      const errorDescription = parsed.searchParams.get('error_description');
-      if (errorDescription) {
-        throw new Error(decodeURIComponent(errorDescription));
-      }
-
-      const code = parsed.searchParams.get('code');
-      if (code) {
-        const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-        if (error) {
-          throw new Error(error.message || 'No se pudo completar la sesión');
-        }
-        const accessToken = data?.session?.access_token;
-        if (!accessToken) {
-          throw new Error('No se obtuvo access_token');
-        }
-        await finalizeSupabaseRegistration(accessToken);
-        return;
-      }
-
-      // Fallback: implicit flow (access_token in URL hash)
-      const hash = String(parsed.hash || '').replace(/^#/, '');
-      if (hash) {
-        const params = new URLSearchParams(hash);
-        const accessToken = params.get('access_token');
-        const refreshToken = params.get('refresh_token');
-        if (accessToken && refreshToken) {
-          const { error: sessionError } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-          });
-          if (sessionError) {
-            throw new Error(sessionError.message || 'No se pudo establecer la sesión');
-          }
-          await finalizeSupabaseRegistration(accessToken);
-          return;
-        }
-      }
-
-      // If we reached here, the callback didn't include usable auth data.
-      throw new Error('Enlace de verificación inválido. Solicita un nuevo email.');
-    } finally {
-      setIsSubmitting(false);
-      setIsVerifyingCode(false);
-    }
-  };
-
-  // Handle Supabase magic-link callbacks (Confirm your signup)
-  useEffect(() => {
-    if (step !== 5) return;
-
-    let mounted = true;
-
-    const checkInitial = async () => {
-      const initialUrl = await Linking.getInitialURL().catch(() => null);
-      if (!mounted) return;
-      if (initialUrl) {
-        await handleSupabaseCallbackUrl(initialUrl);
-      }
-    };
-
-    const onUrl = async ({ url }: { url: string }) => {
-      await handleSupabaseCallbackUrl(url);
-    };
-
-    const sub = Linking.addEventListener('url', onUrl);
-    checkInitial();
-
-    // If the user confirms via browser and comes back manually, detect the session.
-    // Also recalculate the countdown timer instantly to account for time spent
-    // in the background (the setInterval may have been frozen by the OS).
-    const appStateSub = AppState.addEventListener('change', async (state) => {
-      if (state === 'active') {
-        // Instant timer recalculation using the ref (always fresh value).
-        if (verificationDeadlineRef.current > 0) {
-          const remaining = Math.max(
-            0,
-            Math.ceil((verificationDeadlineRef.current - Date.now()) / 1000)
-          );
-          setVerificationSecondsLeft(remaining);
-        }
-
-        await maybeFinalizeFromExistingSession();
-      }
-    });
-
-    return () => {
-      mounted = false;
-      sub.remove();
-      appStateSub.remove();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step]);
+  const isStep5Valid = /^[A-Za-z0-9]{10}$/.test(String(emailVerificationCode || '').trim());
 
   const formatCountdown = (totalSeconds: number) => {
     const safe = Math.max(0, Math.floor(totalSeconds));
@@ -862,6 +775,10 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
             setEmailAlreadyInUse(true);
             return;
 
+          case 'rectification_pending':
+            setRequestCodeInlineError(t('register.emailLockedRetryInline'));
+            return;
+
           case 'pending_confirmation':
             setRequestCodeInlineError(t('register.pendingConfirmation'));
             return;
@@ -932,13 +849,10 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
       return;
     }
 
-    if (!isSupabaseConfigured() || !supabase) {
-      setRequestCodeInlineError('Falta configurar Supabase (SUPABASE_URL / SUPABASE_ANON_KEY)');
-      return;
-    }
-
     setIsSubmitting(true);
     setRequestCodeInlineError('');
+    setVerifyCodeInlineError('');
+    setVerifyCodeRemainingAttempts(null);
     setSignupExpiredNotice('');
 
     try {
@@ -959,46 +873,30 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
         // Non-blocking: if the check fails we still allow the signup attempt.
       }
 
-      deepLinkHandledRef.current = false;
       expiryHandledRef.current = false;
-      await persistPendingSignup();
       setIsEmailLocked(false);
       setRectificationText('');
       setRectificationSent(false);
 
-      const { error } = await supabase.auth.signUp({
-        email: String(email || '').trim(),
-        password: String(password || ''),
-        options: {
-          // Ensure the confirmation link opens the app.
-          emailRedirectTo: SUPABASE_REDIRECT_URL,
-        },
-      } as any);
+      const requestData = await requestEmailVerificationCode(String(email || '').trim());
 
-      if (error) {
-        const msg = String(error.message || '').toLowerCase();
-        if (msg.includes('rate') || msg.includes('too many') || msg.includes('limit')) {
-          setRequestCodeInlineError(t('register.emailLockedRetryInline'));
-          return;
-        }
-        throw new Error(error.message || 'No se pudo enviar el email de confirmación');
-      }
-
-      // Record the attempt in the backend so check-email-status knows
-      // the timer is active if the user re-opens the registration screen.
-      try {
-        await recordSignupAttempt(String(email || '').trim());
-      } catch {
-        // Non-blocking: timer tracking is best-effort.
-      }
-
-      // Supabase email OTP suele caducar alrededor de 5 minutos.
-      startVerificationTimer(300);
-      setVerificationSendCount((prev) => prev + 1);
+      const seconds = Math.max(60, Number(requestData?.expiresInSeconds || 300));
+      startVerificationTimer(seconds);
+      await persistPendingSignup({ verificationDeadline: Date.now() + seconds * 1000 });
+      setVerificationSendCount(Number(requestData?.sendCount || 1));
       setEmailVerificationCode('');
       setStep(5);
     } catch (error: any) {
-      console.error('Error solicitando código (Supabase):', error);
+      const apiCode = error?.code || error?.details?.code;
+      if (apiCode === 'TOO_MANY_CODE_REQUESTS') {
+        setRequestCodeInlineError(t('register.emailLockedRetryInline'));
+        return;
+      }
+      if (apiCode === 'EMAIL_LOCKED') {
+        setRequestCodeInlineError(t('register.emailLockedInlineError'));
+        return;
+      }
+      console.error('Error solicitando código de verificación:', error);
       const message = error instanceof Error ? error.message : t('register.unableToComplete');
       Alert.alert(t('register.errorTitle'), message);
     } finally {
@@ -1007,14 +905,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   };
 
   const handleVerifyCodeAndRegister = async () => {
-    // Link-only: we no longer require manual OTP entry.
-    // Keep this handler as a fallback for future configs.
     if (isVerifyingCode || isSubmitting) {
-      return;
-    }
-
-    if (!isSupabaseConfigured() || !supabase) {
-      setVerifyCodeInlineError('Falta configurar Supabase (SUPABASE_URL / SUPABASE_ANON_KEY)');
       return;
     }
 
@@ -1029,39 +920,57 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
         return;
       }
 
-      const { data: verifyData, error: verifyError } = await supabase.auth.verifyOtp({
+      await verifyEmailVerificationCode({
         email: String(email || '').trim(),
-        token: code,
-        type: 'email',
-      } as any);
+        code,
+      });
 
-      if (verifyError) {
-        const msg = String(verifyError.message || '').toLowerCase();
-        if (msg.includes('expired')) {
-          Alert.alert(t('register.errorTitle'), t('register.codeExpired'));
-          return;
-        }
-        setVerifyCodeInlineError(t('register.codeInvalidInline'));
-        return;
-      }
-      const accessToken =
-        verifyData?.session?.access_token || (await supabase.auth.getSession()).data?.session?.access_token;
-      if (!accessToken) {
-        throw new Error('No se obtuvo access_token');
-      }
+      await registerUser({
+        email: String(email || '').trim(),
+        username: String(username || '').trim(),
+        password: String(password || ''),
+        birthDate: String(birthDate || '').trim(),
+        gender: String(gender || '').trim(),
+        nationality: String(nationality || '').trim(),
+      });
 
-      await finalizeSupabaseRegistration(accessToken);
+      await clearPendingSignup();
+
+      setShowSuccessMessage(true);
+      setTimeout(() => {
+        setShowSuccessMessage(false);
+        onRegisterSuccess();
+      }, 2000);
     } catch (error: any) {
       const apiCode = error?.code || error?.details?.code;
-      if (apiCode === 'USERNAME_TAKEN') {
+
+      if (apiCode === 'CODE_EXPIRED') {
+        Alert.alert(t('register.errorTitle'), t('register.codeExpired'));
+        return;
+      }
+
+      if (apiCode === 'CODE_INCORRECT' || apiCode === 'INVALID_CODE') {
+        setVerifyCodeInlineError(t('register.codeInvalidInline'));
+        const remaining = Number(error?.details?.remainingAttempts);
+        setVerifyCodeRemainingAttempts(Number.isFinite(remaining) ? remaining : null);
+        return;
+      }
+
+      if (apiCode === 'EMAIL_LOCKED') {
+        markEmailLocked();
+        setRequestCodeInlineError(t('register.emailLockedInlineError'));
+        return;
+      }
+
+      const message = error instanceof Error ? error.message : t('register.unableToComplete');
+      if (/nombre de usuario/i.test(message) || apiCode === 'USERNAME_TAKEN') {
         setUsernameAlreadyInUse(true);
         Alert.alert(t('register.errorTitle'), 'El nombre de usuario ya está en uso');
         setStep(2);
         return;
       }
 
-      console.error('Error verificando/registrando (Supabase):', error);
-      const message = error instanceof Error ? error.message : t('register.unableToComplete');
+      console.error('Error verificando código/registrando:', error);
       Alert.alert(t('register.errorTitle'), message);
     } finally {
       setIsSubmitting(false);
@@ -1080,39 +989,26 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
       return;
     }
 
-    if (!isSupabaseConfigured() || !supabase) {
-      setRequestCodeInlineError('Falta configurar Supabase (SUPABASE_URL / SUPABASE_ANON_KEY)');
-      return;
-    }
-
     setIsSubmitting(true);
 
     try {
-      deepLinkHandledRef.current = false;
       expiryHandledRef.current = false;
-      await persistPendingSignup();
 
-      const { error } = await supabase.auth.resend({
-        type: 'signup',
-        email: String(email || '').trim(),
-        options: {
-          emailRedirectTo: SUPABASE_REDIRECT_URL,
-        },
-      } as any);
+      const requestData = await requestEmailVerificationCode(String(email || '').trim());
 
-      if (error) {
-        const msg = String(error.message || '').toLowerCase();
-        if (msg.includes('rate') || msg.includes('too many') || msg.includes('limit')) {
-          markEmailLocked();
-          return;
-        }
-        throw new Error(error.message || 'No se pudo reenviar el email');
-      }
-
-      startVerificationTimer(300);
-      setVerificationSendCount((prev) => prev + 1);
+      const seconds = Math.max(60, Number(requestData?.expiresInSeconds || 300));
+      startVerificationTimer(seconds);
+      await persistPendingSignup({ verificationDeadline: Date.now() + seconds * 1000 });
+      setVerificationSendCount(Number(requestData?.sendCount || verificationSendCount + 1));
       setEmailVerificationCode('');
     } catch (error: any) {
+      const apiCode = error?.code || error?.details?.code;
+      if (apiCode === 'EMAIL_LOCKED') {
+        markEmailLocked();
+        setRequestCodeInlineError(t('register.emailLockedInlineError'));
+        return;
+      }
+
       const message = error instanceof Error
         ? error.message
         : t('register.unableToComplete');
@@ -1139,8 +1035,10 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
         email: String(email || '').trim(),
         message,
       });
+
+      await clearPendingSignup();
       setRectificationSent(true);
-      Alert.alert(t('accountAuth.successTitle'), t('register.rectificationSent'));
+      _onBack({ noticeMessage: t('register.rectificationSent') });
     } catch (error: any) {
       console.error('Error enviando rectificación:', error);
       const msg = error instanceof Error ? error.message : t('register.unableToComplete');
@@ -1466,10 +1364,32 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
                       {t('register.emailVerificationHint')}
                       <Text style={styles.verificationHintStrong}> {email}</Text>
                     </Text>
-                    <Text style={[styles.verificationHint, { marginTop: 10 }]}
-                    >
-                      {t('register.emailVerificationLinkHint')}
-                    </Text>
+                  </View>
+
+                  <View style={styles.inputContainer}>
+                    <Text style={styles.label}>{t('register.code')}</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder={t('register.codePlaceholder')}
+                      placeholderTextColor="#ffffffff"
+                      value={emailVerificationCode}
+                      onChangeText={(v) => {
+                        setEmailVerificationCode(String(v || '').replace(/\s/g, '').slice(0, 10));
+                        setVerifyCodeInlineError('');
+                        setVerifyCodeRemainingAttempts(null);
+                      }}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      editable={!isEmailLocked && !isSubmitting && !isVerifyingCode}
+                    />
+                    {verifyCodeInlineError !== '' && (
+                      <Text style={styles.errorText}>{verifyCodeInlineError}</Text>
+                    )}
+                    {verifyCodeRemainingAttempts !== null && verifyCodeRemainingAttempts >= 0 && (
+                      <Text style={styles.countdownText}>
+                        {t('register.remainingAttemptsInline').replace('{count}', String(verifyCodeRemainingAttempts))}
+                      </Text>
+                    )}
                   </View>
 
                   <View style={styles.inputContainer}>
@@ -1522,6 +1442,44 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
                             ((String(rectificationText || '').trim().length === 0) || isSendingRectification || rectificationSent) && styles.nextButtonTextDisabled,
                           ]}>
                           {isSendingRectification ? t('common.loading') : t('register.rectificationSend')}
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+
+                  {!isEmailLocked && (
+                    <>
+                      <TouchableOpacity
+                        style={[
+                          styles.nextButton,
+                          (!isStep5Valid || isSubmitting || isVerifyingCode) && styles.nextButtonDisabled,
+                        ]}
+                        onPress={handleVerifyCodeAndRegister}
+                        activeOpacity={0.8}
+                        disabled={!isStep5Valid || isSubmitting || isVerifyingCode}>
+                        <Text
+                          style={[
+                            styles.nextButtonText,
+                            (!isStep5Valid || isSubmitting || isVerifyingCode) && styles.nextButtonTextDisabled,
+                          ]}>
+                          {isVerifyingCode ? t('common.loading') : t('register.verifyAndSignUp')}
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.resendButton,
+                          (verificationSecondsLeft > 0 || isSubmitting || isVerifyingCode) && styles.resendButtonDisabled,
+                        ]}
+                        onPress={handleResendCode}
+                        activeOpacity={0.8}
+                        disabled={verificationSecondsLeft > 0 || isSubmitting || isVerifyingCode}>
+                        <Text
+                          style={[
+                            styles.resendButtonText,
+                            (verificationSecondsLeft > 0 || isSubmitting || isVerifyingCode) && styles.resendButtonTextDisabled,
+                          ]}>
+                          {t('register.resendCode')}
                         </Text>
                       </TouchableOpacity>
                     </>

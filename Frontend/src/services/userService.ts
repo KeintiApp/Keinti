@@ -535,6 +535,7 @@ export type SignupEmailStatusType =
   | 'registered'
   | 'pending_confirmation'
   | 'expired_unconfirmed'
+  | 'rectification_pending'
   | 'locked_temp'
   | 'locked_permanent';
 

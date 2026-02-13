@@ -18,6 +18,7 @@ interface SocialNetwork {
 }
 
 type Screen = 'login' | 'register' | 'front' | 'configuration';
+const PENDING_SIGNUP_PREFIX = 'keinti:pendingSignup:';
 
 function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('login');
@@ -450,8 +451,17 @@ function App() {
         return;
       }
 
-      // No stored backend session: show Login immediately.
+      // No stored backend session: restore pending signup flow if present; otherwise show Login.
+      let hasPendingSignup = false;
+      try {
+        const keys = await AsyncStorage.getAllKeys();
+        hasPendingSignup = keys.some((k) => String(k || '').startsWith(PENDING_SIGNUP_PREFIX));
+      } catch {
+        hasPendingSignup = false;
+      }
+
       if (!cancelled) {
+        setCurrentScreen(hasPendingSignup ? 'register' : 'login');
         setIsBootstrapping(false);
       }
 
