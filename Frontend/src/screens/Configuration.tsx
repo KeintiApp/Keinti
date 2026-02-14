@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import ImageCropPicker from 'react-native-image-crop-picker';
+import Clipboard from '@react-native-clipboard/clipboard';
 import { API_URL, getServerResourceUrl } from '../config/api';
 import { POLICY_URLS, type PolicyUrlKey } from '../config/policies';
 import { useI18n } from '../i18n/I18nProvider';
@@ -2717,11 +2718,24 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                   {totpSecret ? (
                     <View style={{ marginTop: 12 }}>
                       <Text style={styles.inputLabel}>{t('accountAuth.secretLabel')}</Text>
-                      <View style={[styles.passwordRow, { minHeight: 52, height: undefined, paddingVertical: 12, alignItems: 'flex-start' }]}> 
-                        <Text selectable style={styles.passwordInput}>
+                      <TouchableOpacity
+                        activeOpacity={0.7}
+                        onPress={() => {
+                          Clipboard.setString(totpSecret);
+                          if (Platform.OS === 'android') {
+                            const { ToastAndroid } = require('react-native');
+                            ToastAndroid.show(language === 'en' ? 'Copied!' : '¡Copiado!', ToastAndroid.SHORT);
+                          } else {
+                            Alert.alert(language === 'en' ? 'Copied!' : '¡Copiado!');
+                          }
+                        }}
+                        style={[styles.passwordRow, { minHeight: 52, height: undefined, paddingVertical: 12, alignItems: 'flex-start' }]}
+                      > 
+                        <Text selectable style={[styles.passwordInput, { flex: 1 }]}>
                           {totpSecret}
                         </Text>
-                      </View>
+                        <MaterialIcons name="content-copy" size={20} color="#FFB74D" style={{ marginLeft: 8, marginTop: 2 }} />
+                      </TouchableOpacity>
                       <Text style={styles.helperText}>{t('accountAuth.secretHint')}</Text>
                     </View>
                   ) : null}
