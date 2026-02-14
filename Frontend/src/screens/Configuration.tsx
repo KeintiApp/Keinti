@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, GestureResponderEvent, Image, Linking, Modal, PermissionsAndroid, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import ImageCropPicker from 'react-native-image-crop-picker';
@@ -208,6 +209,7 @@ const PersonalDataItem = ({
 
 const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }: ConfigurationProps) => {
   const { language, setLanguage, t } = useI18n();
+  const safeAreaInsets = useSafeAreaInsets();
   const [screen, setScreen] = useState<Screen>('main');
   const [verifyTab, setVerifyTab] = useState<'objectives' | 'benefits'>('objectives');
   const [showImportantNoticePanel, setShowImportantNoticePanel] = useState(false);
@@ -2521,7 +2523,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
             )}
           </View>
 
-          <View style={styles.verifyBottomBar}>
+          <View style={[styles.verifyBottomBar, { paddingBottom: 20 + safeAreaInsets.bottom }]}>
              <View style={styles.verifyTabRow}>
                 <TouchableOpacity onPress={() => setVerifyTab('objectives')} style={styles.verifyTabButton}>
                     <Text style={[styles.verifyTabText, verifyTab === 'objectives' && styles.verifyTabTextActive]}>{t('verifyKeinti.tabObjectives')}</Text>
@@ -2536,7 +2538,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                 <View
                   style={{
                     position: 'absolute',
-                    bottom: 50,
+                    bottom: 50 + safeAreaInsets.bottom,
                     marginHorizontal: 20,
                     backgroundColor: '#1E1E1E',
                     borderRadius: 12,
@@ -3350,6 +3352,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
             style={[
               styles.logoutSheet,
               {
+                paddingBottom: 18 + safeAreaInsets.bottom,
                 transform: [
                   {
                     translateY: logoutSheetAnim.interpolate({
@@ -3469,6 +3472,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
             style={[
               styles.deleteAccountSheet,
               {
+                paddingBottom: 18 + safeAreaInsets.bottom,
                 transform: [
                   {
                     translateY: deleteAccountSheetAnim.interpolate({

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Image, Linking, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import LoginScreen from './src/screens/LoginScreen';
 import RegisterScreen from './src/screens/RegisterScreen';
@@ -588,6 +589,7 @@ function App() {
   };
 
   return (
+    <SafeAreaProvider>
     <I18nProvider language={language} setLanguage={setLanguage}>
       {isBootstrapping ? (
         <SafeAreaView style={styles.bootContainer}>
@@ -653,6 +655,7 @@ function App() {
         />
       )}
     </I18nProvider>
+    </SafeAreaProvider>
   );
 }
 

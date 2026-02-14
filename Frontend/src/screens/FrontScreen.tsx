@@ -2193,7 +2193,21 @@ const FrontScreen = ({
 
     const showSub = Keyboard.addListener(showEvt, (e: any) => {
       setIsKeyboardVisible(true);
-      const h = e?.endCoordinates?.height;
+      // On Android, endCoordinates.height may exclude the keyboard toolbar
+      // (e.g. Samsung emoji/clipboard bar). Compute from screenY instead,
+      // which gives the true top of the keyboard in screen coordinates.
+      // We also subtract the bottom system inset (nav bar) because the
+      // view's bottom:0 sits at the window bottom, not the screen bottom.
+      let h: number;
+      if (Platform.OS === 'android' && typeof e?.endCoordinates?.screenY === 'number') {
+        const screenH = Dimensions.get('screen').height;
+        const windowH = Dimensions.get('window').height;
+        const statusBarH = StatusBar.currentHeight ?? 0;
+        const bottomInset = Math.max(0, Math.round(screenH - windowH - statusBarH));
+        h = Math.max(0, Math.round(screenH - e.endCoordinates.screenY - bottomInset));
+      } else {
+        h = e?.endCoordinates?.height;
+      }
       setKeyboardHeight(typeof h === 'number' && h > 0 ? h : 0);
     });
     const hideSub = Keyboard.addListener(hideEvt, () => {
@@ -8550,7 +8564,7 @@ const FrontScreen = ({
         <Animated.View
           style={[
             styles.profileRingColorPanel,
-            isKeyboardVisible && keyboardHeight > 0 ? { bottom: keyboardHeight } : null,
+            isKeyboardVisible && keyboardHeight > 0 ? { bottom: Platform.OS === 'android' ? 0 : keyboardHeight } : null,
             { transform: [{ translateY: profileRingColorPanelAnimation }] },
           ]}
         >
@@ -9332,7 +9346,7 @@ const FrontScreen = ({
           <View style={[styles.homeScreenContainer, { paddingTop: Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT + 8 : 8, paddingBottom: 0 }]}>
             <ScrollView
               style={{ flex: 1 }}
-              contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingBottom: 71 }}
+              contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingBottom: bottomNavHeight + bottomSystemOffset + 16 }}
               scrollEnabled={isHomeMainScrollEnabled}
             >
               {giveAways.length === 0 && publications.length === 0 ? (
@@ -10348,7 +10362,7 @@ const FrontScreen = ({
         {/* Pantalla Profile */}
         {
           activeBottomTab === 'profile' && (
-            <View style={styles.profileScreenContainer}>
+            <View style={[styles.profileScreenContainer, { paddingBottom: bottomNavHeight + bottomSystemOffset + 16 }]}>
               {profileView === 'profile' ? (
                 <ScrollView contentContainerStyle={styles.profileScrollContent}>
                   {profilePresentation ? (
@@ -11144,7 +11158,15 @@ const FrontScreen = ({
                   )}
                 </View>
               ) : (
-                <ScrollView contentContainerStyle={{ paddingTop: 20, paddingBottom: 80 }}>
+                <KeyboardAvoidingView
+                  style={{ flex: 1 }}
+                  behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                  keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : (ANDROID_STATUS_BAR_HEIGHT || 0)}
+                >
+                <ScrollView
+                  contentContainerStyle={{ paddingTop: 20, paddingBottom: isKeyboardVisible ? (keyboardHeight || 0) + 40 : 80 }}
+                  keyboardShouldPersistTaps="handled"
+                >
 
                   <View
                     pointerEvents={hasImageOrTextIntimidad ? 'none' : 'auto'}
@@ -11998,6 +12020,7 @@ const FrontScreen = ({
 
 
                 </ScrollView >
+                </KeyboardAvoidingView>
               )
               }
             </View >
@@ -12076,7 +12099,7 @@ const FrontScreen = ({
                         (groupInputBarHeight || 72) +
                         (isKeyboardVisible
                           ? (keyboardHeight || 0) + CHAT_INPUT_KEYBOARD_GAP + 12
-                          : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + 12),
+                          : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + bottomSystemOffset + 12),
                     }}
                     ref={groupChatScrollViewRef}
                     scrollEventThrottle={16}
@@ -12530,7 +12553,7 @@ const FrontScreen = ({
                       right: 0,
                       bottom: isKeyboardVisible
                         ? (keyboardHeight || 0) + CHAT_INPUT_KEYBOARD_GAP
-                        : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT),
+                        : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + bottomSystemOffset,
                       paddingHorizontal: 20,
                       paddingTop: 20,
                       paddingBottom: isKeyboardVisible ? 8 : 0,
@@ -13072,7 +13095,7 @@ const FrontScreen = ({
                                   (channelInputBarHeight || 72) +
                                   (isKeyboardVisible
                                     ? (keyboardHeight || 0) + CHAT_INPUT_KEYBOARD_GAP + 12
-                                    : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + 12),
+                                    : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + bottomSystemOffset + 12),
                               }}
                               data={messagesToRender}
                               keyExtractor={(msg: any, index: number) => String((msg as any)?.__key ?? (msg as any)?.id ?? `idx-${index}`)}
@@ -13472,7 +13495,7 @@ const FrontScreen = ({
                         })()
                     )
                   ) : (
-                    <ScrollView style={[styles.scrollContainer, { flex: 1, paddingTop: 0, marginTop: chatPanelsTopOffset }]}>
+                    <ScrollView style={[styles.scrollContainer, { flex: 1, paddingTop: 0, paddingBottom: bottomNavHeight + bottomSystemOffset + 16, marginTop: chatPanelsTopOffset }]}>
                       <View style={styles.chatContainer}>
                         {myChannels.filter(c => getRemainingTime(c.post_created_at) !== 'Tiempo agotado').length === 0 ? (
                           <View style={styles.emptyStateContainer}>
@@ -13772,7 +13795,7 @@ const FrontScreen = ({
                         right: 0,
                         bottom: isKeyboardVisible
                           ? (keyboardHeight || 0) + CHAT_INPUT_KEYBOARD_GAP
-                          : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT),
+                          : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + bottomSystemOffset,
                         paddingHorizontal: 10,
                         paddingTop: 10,
                         paddingBottom: isKeyboardVisible ? 8 : 4,
@@ -14285,7 +14308,7 @@ const FrontScreen = ({
 
                 </View>
               ) : (
-                <View style={{ flex: 1, position: 'relative', paddingBottom: 120 }}>
+                <View style={{ flex: 1, position: 'relative', paddingBottom: bottomNavHeight + bottomSystemOffset + 16 }}>
                   <ScrollView
                     style={{ flex: 1, width: '100%', marginTop: chatPanelsTopOffset + 12 }}
                     contentContainerStyle={{ alignItems: 'center', paddingTop: 6, paddingBottom: 2 }}
@@ -17117,7 +17140,7 @@ const styles = StyleSheet.create({
   profileScreenContainer: {
     flex: 1,
     paddingTop: Platform.OS === 'android' ? ANDROID_SAFE_TOP + 68 : 68,
-    paddingBottom: 68,
+    paddingBottom: 0,
     paddingHorizontal: 2,
   },
   profileScrollContent: {
