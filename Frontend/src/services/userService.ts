@@ -392,23 +392,40 @@ export const registerUser = async (userData: RegisterPayload) => {
 };
 
 export const requestEmailVerificationCode = async (email: string) => {
-  const response = await fetch(`${API_URL}/api/auth/email/request-code`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email }),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 s timeout
 
-  const data = (await response.json().catch(() => ({}))) as ApiErrorShape & {
-    ok?: boolean;
-    expiresInSeconds?: number;
-    sendCount?: number;
-  };
+  try {
+    const response = await fetch(`${API_URL}/api/auth/email/request-code`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+      signal: controller.signal,
+    });
 
-  if (!response.ok) {
-    throw new ApiError(data?.error || 'No se pudo enviar el código', response.status, data);
+    const data = (await response.json().catch(() => ({}))) as ApiErrorShape & {
+      ok?: boolean;
+      expiresInSeconds?: number;
+      sendCount?: number;
+    };
+
+    if (!response.ok) {
+      throw new ApiError(data?.error || 'No se pudo enviar el código', response.status, data);
+    }
+
+    return data;
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new ApiError(
+        'La solicitud tardó demasiado. Comprueba tu conexión e inténtalo de nuevo.',
+        0,
+        { code: 'REQUEST_TIMEOUT' },
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  return data;
 };
 
 export const checkEmailRegistered = async (email: string) => {

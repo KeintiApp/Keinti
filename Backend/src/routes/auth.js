@@ -1,7 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/database');
 const { deleteObject } = require('../services/supabaseStorageService');
@@ -122,71 +121,90 @@ function hashVerificationCode(code) {
   return crypto.createHash('sha256').update(String(code || ''), 'utf8').digest('hex');
 }
 
-function getEmailTransporter() {
-  const user = String(process.env.EMAIL_VERIFICATION_SMTP_USER || '').trim();
-  const pass = String(process.env.EMAIL_VERIFICATION_SMTP_PASS || '').trim();
+// ── Resend HTTP API helper ──────────────────────────────────────────
+// Uses the Resend REST API (HTTPS, port 443) instead of SMTP so it
+// works on cloud providers like Render that block outbound SMTP ports.
 
-  if (!user || !pass) {
-    const err = new Error('Email verification SMTP not configured');
-    err.code = 'EMAIL_SMTP_NOT_CONFIGURED';
+const RESEND_API_URL = 'https://api.resend.com/emails';
+
+function getResendConfig() {
+  const apiKey = String(process.env.RESEND_API_KEY || '').trim();
+  const from = String(
+    process.env.RESEND_FROM_EMAIL || 'Keinti <auth@oficial.keintiapp.com>'
+  ).trim();
+
+  if (!apiKey) {
+    console.error('❌ RESEND_API_KEY not set');
+    const err = new Error('Email service not configured (RESEND_API_KEY missing)');
+    err.code = 'EMAIL_SERVICE_NOT_CONFIGURED';
     throw err;
   }
 
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user, pass },
-  });
+  return { apiKey, from };
+}
+
+async function sendEmailViaResend({ to, subject, text }) {
+  const { apiKey, from } = getResendConfig();
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000); // 15 s timeout
+
+  try {
+    const res = await fetch(RESEND_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ from, to: [to], subject, text }),
+      signal: controller.signal,
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      console.error('❌ Resend API error:', res.status, data);
+      const err = new Error(data?.message || 'Resend API error');
+      err.code = 'EMAIL_SEND_FAILED';
+      err.statusCode = res.status;
+      throw err;
+    }
+
+    console.log(`✅ Email sent to ${to} via Resend (id: ${data?.id})`);
+    return data;
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      console.error('❌ Resend API request timed out');
+      const error = new Error('Email send timed out');
+      error.code = 'EMAIL_SEND_TIMEOUT';
+      throw error;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function sendVerificationEmail(toEmail, code) {
-  const from = String(process.env.EMAIL_VERIFICATION_SMTP_USER || '').trim();
   const appName = String(process.env.APP_NAME || 'Keinti').trim();
   const ttlMinutes = Math.ceil(EMAIL_VERIFICATION_TTL_SECONDS / 60);
 
-  const transporter = getEmailTransporter();
-  const info = await transporter.sendMail({
-    from: `${appName} <${from}>`,
+  await sendEmailViaResend({
     to: toEmail,
     subject: `${appName} - Código de verificación`,
     text: `Tu código de verificación es: ${code}\n\nCaduca en ${ttlMinutes} minutos.\n\nEl código distingue mayúsculas y minúsculas.`,
   });
-
-  // Nodemailer may resolve even when the SMTP server rejects the recipient.
-  // In that case, report a failure so the client can show a friendly message.
-  const rejected = Array.isArray(info?.rejected) ? info.rejected.filter(Boolean) : [];
-  const accepted = Array.isArray(info?.accepted) ? info.accepted.filter(Boolean) : [];
-  if (rejected.length > 0 || accepted.length === 0) {
-    const err = new Error('Email recipient rejected');
-    err.code = 'EMAIL_RECIPIENT_REJECTED';
-    // Keep details for server logs only.
-    err.rejected = rejected;
-    err.response = info?.response;
-    throw err;
-  }
 }
 
 async function sendPasswordResetEmail(toEmail, code) {
-  const from = String(process.env.EMAIL_VERIFICATION_SMTP_USER || '').trim();
   const appName = String(process.env.APP_NAME || 'Keinti').trim();
   const ttlMinutes = Math.ceil(PASSWORD_RESET_TTL_SECONDS / 60);
 
-  const transporter = getEmailTransporter();
-  const info = await transporter.sendMail({
-    from: `${appName} <${from}>`,
+  await sendEmailViaResend({
     to: toEmail,
     subject: `${appName} - Código para recuperar tu contraseña`,
     text: `Tu código para recuperar la contraseña es: ${code}\n\nCaduca en ${ttlMinutes} minutos.`,
   });
-
-  const rejected = Array.isArray(info?.rejected) ? info.rejected.filter(Boolean) : [];
-  const accepted = Array.isArray(info?.accepted) ? info.accepted.filter(Boolean) : [];
-  if (rejected.length > 0 || accepted.length === 0) {
-    const err = new Error('Email recipient rejected');
-    err.code = 'EMAIL_RECIPIENT_REJECTED';
-    err.rejected = rejected;
-    err.response = info?.response;
-    throw err;
-  }
 }
 
 function isStrongPassword(pass) {
@@ -539,10 +557,26 @@ router.post('/email/request-code', async (req, res) => {
       sendCount: nextSendCount,
     });
   } catch (error) {
-    console.error('Error requesting email verification code:', error);
+    const errCode = error?.code || 'EMAIL_SEND_FAILED';
+    console.error('Error requesting email verification code:', {
+      code: errCode,
+      message: error?.message,
+      stack: error?.stack,
+    });
+
+    // Provide a more specific client-facing message when possible.
+    let clientMessage = 'No se pudo enviar el código de verificación. Inténtalo más tarde.';
+    if (errCode === 'EMAIL_SMTP_NOT_CONFIGURED') {
+      clientMessage = 'El servicio de correo no está configurado. Contacta al soporte.';
+    } else if (errCode === 'EMAIL_SMTP_CONNECTION_FAILED') {
+      clientMessage = 'No se pudo conectar al servidor de correo. Inténtalo de nuevo en unos minutos.';
+    } else if (errCode === 'EMAIL_RECIPIENT_REJECTED') {
+      clientMessage = 'El correo electrónico introducido no es válido o no acepta mensajes.';
+    }
+
     return res.status(500).json({
-      error: 'No se pudo enviar el código de verificación. Inténtalo más tarde.',
-      code: 'EMAIL_SEND_FAILED',
+      error: clientMessage,
+      code: errCode,
     });
   }
 });
