@@ -2161,15 +2161,14 @@ const FrontScreen = ({
 
     const showSub = Keyboard.addListener(showEvt, (e: any) => {
       setIsKeyboardVisible(true);
-      // On Android, endCoordinates.height may exclude the keyboard toolbar
-      // (e.g. Samsung emoji/clipboard bar). Compute from screenY instead,
-      // which gives the true top of the keyboard in screen coordinates.
-      // We also subtract the bottom system inset (nav bar) because the
-      // view's bottom:0 sits at the window bottom, not the screen bottom.
+      // With edge-to-edge enabled the root view stretches to the screen
+      // bottom, so we need the full distance from the screen bottom to the
+      // keyboard top (screenH − screenY). Do NOT subtract the nav-bar
+      // inset: the view's bottom:0 already sits at the screen edge.
       let h: number;
       if (Platform.OS === 'android' && typeof e?.endCoordinates?.screenY === 'number') {
         const screenH = Dimensions.get('screen').height;
-        h = Math.max(0, Math.round(screenH - e.endCoordinates.screenY - safeAreaInsets.bottom));
+        h = Math.max(0, Math.round(screenH - e.endCoordinates.screenY));
       } else {
         h = e?.endCoordinates?.height;
       }

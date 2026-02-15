@@ -116,8 +116,8 @@ android {
         applicationId "com.keintiapp.keinti"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 24
-        versionName "1.2.4"
+        versionCode 25
+        versionName "1.2.5"
 
         // Used by AndroidManifest.xml meta-data: com.google.android.geo.API_KEY
         manifestPlaceholders = [googleMapsApiKey: googleMapsApiKey]
