@@ -215,6 +215,13 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   const [verifyTab, setVerifyTab] = useState<'objectives' | 'benefits'>('objectives');
   const [showImportantNoticePanel, setShowImportantNoticePanel] = useState(false);
 
+  // Merge static content padding with the dynamic bottom safe-area inset so
+  // scroll content is never hidden behind the Android navigation bar.
+  const contentStyle = useMemo(
+    () => [styles.content, { paddingBottom: 24 + safeAreaInsets.bottom }],
+    [safeAreaInsets.bottom],
+  );
+
   const formatNumber = useMemo(() => {
     try {
       const locale = language === 'es' ? 'es-ES' : 'en-US';
@@ -1691,7 +1698,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       </View>
 
       {screen === 'main' ? (
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={contentStyle}>
           <View style={styles.section}>
             <View style={styles.languageRow}>
               <View style={styles.rowLeft}>
@@ -1761,7 +1768,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
         </ScrollView>
       ) : screen === 'aboutKeinti' ? (
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={contentStyle}>
           <View style={styles.personalDataHeaderBox}>
             <Text style={styles.personalDataTitle}>{t('aboutKeinti.title')}</Text>
           </View>
@@ -1795,7 +1802,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </View>
         </ScrollView>
       ) : screen === 'moreAboutKeinti' ? (
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={contentStyle}>
           <View style={styles.personalDataHeaderBox}>
             <Text style={styles.personalDataTitle}>{t('aboutKeinti.moreAboutKeinti' as TranslationKey)}</Text>
           </View>
@@ -1831,7 +1838,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </View>
         </ScrollView>
       ) : screen === 'devicePermissions' ? (
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={contentStyle}>
           <View style={styles.personalDataHeaderBox}>
             <Text style={styles.personalDataTitle}>{t('config.devicePermissions')}</Text>
             <Text style={styles.personalDataDescription}>{t('devicePermissions.description')}</Text>
@@ -1880,7 +1887,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </View>
         </ScrollView>
       ) : screen === 'accountCenter' ? (
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={contentStyle}>
           <View style={styles.section}>
             <SettingRow
               title={t('accountCenter.personalData')}
@@ -1924,7 +1931,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </View>
         </ScrollView>
       ) : screen === 'adminSelfies' ? (
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={contentStyle} keyboardShouldPersistTaps="handled">
           <Text style={styles.personalDataTitle}>{t('adminSelfies.title')}</Text>
           <Text style={styles.sectionDescription}>
             {isBackendAdmin ? 'Herramientas de moderación (solo admins).' : 'No autorizado.'}
@@ -2172,7 +2179,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           ) : null}
         </ScrollView>
       ) : screen === 'personalData' ? (
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={contentStyle}>
           <View style={styles.personalDataHeaderBox}>
             <Text style={styles.personalDataTitle}>{t('personalData.title')}</Text>
             <Text style={styles.personalDataDescription}>{t('personalData.description')}</Text>
@@ -2242,7 +2249,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </View>
         </ScrollView>
       ) : screen === 'securityControl' ? (
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={contentStyle}>
           <Text style={styles.personalDataTitle}>{t('accountCenter.securityControl')}</Text>
 
           <Text style={styles.sectionCaption}>{t('securityControl.passwordAndAuth')}</Text>
@@ -2576,7 +2583,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </View>
         </View>
       ) : screen === 'accountAuth' ? (
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={contentStyle} keyboardShouldPersistTaps="handled">
           <Text style={styles.personalDataTitle}>{t('securityControl.accountAuth')}</Text>
           <Text style={styles.sectionDescription}>{t('accountAuth.description')}</Text>
 
@@ -2795,7 +2802,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </View>
         </ScrollView>
       ) : screen === 'cookiesAdPolicy' ? (
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={contentStyle}>
           <View style={styles.personalDataHeaderBox}>
             <Text style={styles.personalDataTitle}>{t('securityControl.cookiesAdPolicy')}</Text>
 
@@ -2817,7 +2824,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </View>
         </ScrollView>
       ) : screen === 'termsOfUse' ? (
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={contentStyle}>
           <View style={styles.personalDataHeaderBox}>
             <Text style={styles.personalDataTitle}>{t('securityControl.termsOfUse')}</Text>
 
@@ -2839,7 +2846,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </View>
         </ScrollView>
       ) : screen === 'privacyPolicy' ? (
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={contentStyle}>
           <View style={styles.personalDataHeaderBox}>
             <Text style={styles.personalDataTitle}>{t('securityControl.privacyPolicy')}</Text>
 
@@ -2893,7 +2900,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </View>
         </ScrollView>
       ) : screen === 'changePassword' ? (
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={contentStyle} keyboardShouldPersistTaps="handled">
           <Text style={styles.appLine}>
             {(myUsername || '@usuario').startsWith('@') ? (myUsername || '@usuario') : `@${myUsername || 'usuario'}`} - Keinti
           </Text>
@@ -3129,7 +3136,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </TouchableOpacity>
         </ScrollView>
       ) : (
-        <View style={[styles.content, { flex: 1 }]}>
+        <View style={[contentStyle, { flex: 1 }]}>
           <View style={[styles.section, { flex: 1 }]}>
             {isLoadingBlockedUsers ? (
               <View style={styles.centeredBox}>

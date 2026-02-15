@@ -51,6 +51,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import type { Language, TranslationKey } from '../i18n/translations';
 
 import Svg, { Defs, LinearGradient, Stop, Rect, Circle, Path, Text as SvgText } from 'react-native-svg';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const BLOCKED_JOINED_GROUP_IDS_KEY = 'keinti.blocked_joined_group_ids';
 const PROFILE_YOUR_PROFILE_HINT_SEEN_KEY = 'keinti.hints.profile_your_profile_seen';
@@ -76,25 +77,6 @@ const CHANNEL_IMAGE_LOCK_BLUR_RADIUS = 22;
 
 // Height reserved by the custom bottom nav bar (plus a small safety margin).
 const BOTTOM_NAV_OVERLAY_HEIGHT = 60;
-
-const getAndroidBottomSystemOffset = () => {
-  if (Platform.OS !== 'android') return 0;
-
-  const windowSize = Dimensions.get('window');
-  const screenSize = Dimensions.get('screen');
-  const statusBar = StatusBar.currentHeight ?? 0;
-
-  // Best effort: when Android reports different screen/window heights,
-  // the remaining area is typically occupied by system UI (nav/task bars).
-  const measuredInset = Math.max(0, Math.round(screenSize.height - windowSize.height - statusBar));
-
-  // Some tablets (e.g. with persistent taskbar) may under-report this delta.
-  // Add a conservative fallback only for tablet-like layouts.
-  const isTabletLike = Math.min(windowSize.width, windowSize.height) >= 600;
-  const tabletFallbackInset = isTabletLike ? 44 : 0;
-
-  return Math.max(measuredInset, tabletFallbackInset);
-};
 
 const hashString = (input: string) => {
   // Simple non-crypto hash for stable storage keys.
@@ -1074,24 +1056,10 @@ const FrontScreen = ({
 
   const [adsInitialized, setAdsInitialized] = useState(false);
   const [homeProfileRingBannerReady, setHomeProfileRingBannerReady] = useState(false);
-  const [bottomSystemOffset, setBottomSystemOffset] = useState<number>(getAndroidBottomSystemOffset());
+  const safeAreaInsets = useSafeAreaInsets();
+  const bottomSystemOffset = safeAreaInsets.bottom;
 
   const [keintiVerified, setKeintiVerified] = useState(false);
-
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-
-    const recalc = () => {
-      setBottomSystemOffset(getAndroidBottomSystemOffset());
-    };
-
-    recalc();
-    const sub = Dimensions.addEventListener('change', recalc);
-
-    return () => {
-      sub?.remove?.();
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -2201,10 +2169,7 @@ const FrontScreen = ({
       let h: number;
       if (Platform.OS === 'android' && typeof e?.endCoordinates?.screenY === 'number') {
         const screenH = Dimensions.get('screen').height;
-        const windowH = Dimensions.get('window').height;
-        const statusBarH = StatusBar.currentHeight ?? 0;
-        const bottomInset = Math.max(0, Math.round(screenH - windowH - statusBarH));
-        h = Math.max(0, Math.round(screenH - e.endCoordinates.screenY - bottomInset));
+        h = Math.max(0, Math.round(screenH - e.endCoordinates.screenY - safeAreaInsets.bottom));
       } else {
         h = e?.endCoordinates?.height;
       }
