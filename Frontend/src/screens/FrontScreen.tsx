@@ -3247,10 +3247,16 @@ const FrontScreen = ({
     lastChatMessagesLengthRef.current = 0;
     pendingChannelScrollToLatestAfterRefreshRef.current = true;
     // Fallback scroll in case data was already loaded before the flag was armed.
+    // On Android the FlatList may need an extra layout pass before content is visible,
+    // so we issue multiple deferred scrolls to ensure the content materialises.
     requestAnimationFrame(() => {
+      chatScrollViewRef.current?.scrollToEnd({ animated: false });
       setTimeout(() => {
         chatScrollViewRef.current?.scrollToEnd({ animated: false });
-      }, 200);
+      }, 150);
+      setTimeout(() => {
+        chatScrollViewRef.current?.scrollToEnd({ animated: false });
+      }, 400);
     });
   }, [activeBottomTab, chatView, channelTab]);
 
@@ -3271,10 +3277,16 @@ const FrontScreen = ({
     lastGroupChatMessagesLengthRef.current = 0;
     pendingGroupScrollToLatestAfterRefreshRef.current = true;
     // Fallback scroll in case data was already loaded before the flag was armed.
+    // On Android the ScrollView may need extra layout passes before content is visible,
+    // so we issue multiple deferred scrolls.
     requestAnimationFrame(() => {
+      groupChatScrollViewRef.current?.scrollToEnd({ animated: false });
       setTimeout(() => {
         groupChatScrollViewRef.current?.scrollToEnd({ animated: false });
-      }, 200);
+      }, 150);
+      setTimeout(() => {
+        groupChatScrollViewRef.current?.scrollToEnd({ animated: false });
+      }, 400);
     });
   }, [activeBottomTab, chatView, selectedGroup?.id]);
 
@@ -9572,10 +9584,13 @@ const FrontScreen = ({
                                 keyExtractor={(_, index) => `pub-${pub.id}-image-${index}`}
                                 horizontal
                                 pagingEnabled
+                                bounces={false}
                                 showsHorizontalScrollIndicator={false}
+                                snapToAlignment="center"
                                 snapToInterval={SCREEN_WIDTH - 4}
                                 decelerationRate="fast"
                                 scrollEventThrottle={16}
+                                removeClippedSubviews={false}
                                 onScrollBeginDrag={() => setHomeCarouselGestureActive(true)}
                                 onScrollEndDrag={() => setHomeCarouselGestureActive(false)}
                                 onMomentumScrollBegin={() => setHomeCarouselGestureActive(true)}
@@ -9612,6 +9627,7 @@ const FrontScreen = ({
                                         <Image
                                           source={{ uri: getServerResourceUrl(item.uri) }}
                                           style={styles.carouselImage}
+                                          resizeMode="cover"
                                           onLoadEnd={() => markHomePresentationImageLoaded(pub.id, index)}
                                           onError={() => markHomePresentationImageLoaded(pub.id, index)}
                                         />
@@ -10452,6 +10468,7 @@ const FrontScreen = ({
                               snapToAlignment="center"
                               snapToInterval={SCREEN_WIDTH - 4}
                               showsHorizontalScrollIndicator={false}
+                              removeClippedSubviews={false}
                               onViewableItemsChanged={handleProfileViewableItemsChanged.current}
                               viewabilityConfig={carouselViewabilityConfig.current}
                               renderItem={({ item, index }) => (
@@ -10994,6 +11011,7 @@ const FrontScreen = ({
                         snapToAlignment="center"
                         snapToInterval={SCREEN_WIDTH}
                         showsHorizontalScrollIndicator={false}
+                        removeClippedSubviews={false}
                         onViewableItemsChanged={handleCarouselViewableItemsChanged.current}
                         viewabilityConfig={carouselViewabilityConfig.current}
                         renderItem={({ item, index }) => (
@@ -12094,6 +12112,8 @@ const FrontScreen = ({
                         didScrollToLatest = true;
                         setIsGroupNearBottom(true);
                         setShowGroupScrollToLatest(false);
+                        // Immediate + deferred scroll to ensure Android renders content
+                        groupChatScrollViewRef.current?.scrollToEnd({ animated: false });
                         requestAnimationFrame(() => {
                           groupChatScrollViewRef.current?.scrollToEnd({ animated: false });
                         });
@@ -13046,7 +13066,7 @@ const FrontScreen = ({
                           };
 
                           return (
-                            <View style={{ flex: 1, marginTop: chatPanelsTopOffset, overflow: 'hidden' }}>
+                            <View style={{ flex: 1, marginTop: chatPanelsTopOffset, overflow: Platform.OS === 'android' ? 'visible' : 'hidden' as any }}>
                               <FlatList
                               key={`channel-chat-${channelChatMountKey}-${String(selectedChannel?.post_id ?? selectedChannel?.postId ?? selectedChannel?.id ?? userPublication?.id ?? 'none')}`}
                               style={[styles.scrollContainer, { paddingTop: 0, paddingBottom: 0, flex: 1 }]}
@@ -13063,9 +13083,9 @@ const FrontScreen = ({
                               }}
                               data={messagesToRender}
                               keyExtractor={(msg: any, index: number) => String((msg as any)?.__key ?? (msg as any)?.id ?? `idx-${index}`)}
-                              initialNumToRender={12}
-                              maxToRenderPerBatch={12}
-                              windowSize={7}
+                              initialNumToRender={20}
+                              maxToRenderPerBatch={20}
+                              windowSize={11}
                               removeClippedSubviews={false}
                               keyboardShouldPersistTaps="handled"
                               nestedScrollEnabled
@@ -13104,6 +13124,8 @@ const FrontScreen = ({
                                   didScrollToLatest = true;
                                   setIsChannelNearBottom(true);
                                   setShowChannelScrollToLatest(false);
+                                  // Immediate + deferred scroll to ensure Android renders content
+                                  chatScrollViewRef.current?.scrollToOffset({ offset: h, animated: false });
                                   requestAnimationFrame(() => {
                                     chatScrollViewRef.current?.scrollToOffset({ offset: h, animated: false });
                                   });
