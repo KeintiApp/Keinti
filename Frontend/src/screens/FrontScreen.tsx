@@ -3297,9 +3297,14 @@ const FrontScreen = ({
   const [carouselImages, setCarouselImages] = useState<CarouselImageData[]>([]);
   const [activeCarouselImageIndex, setActiveCarouselImageIndex] = useState(0);
   const [activeProfileImageIndex, setActiveProfileImageIndex] = useState(0);
+  const [profileViewMountKey, setProfileViewMountKey] = useState(0);
+  const [profileCarouselMountKey, setProfileCarouselMountKey] = useState(0);
   const [profilePresentation, setProfilePresentation] = useState<PresentationContent | null>(null);
   const [profilePresentationImagesLoaded, setProfilePresentationImagesLoaded] = useState<Record<number, boolean>>({});
   const profilePresentationPrefetchSigRef = useRef<string>('');
+  const profileCarouselRepaintAfterLoadSigRef = useRef<string>('');
+  const wasInProfileCarouselRef = useRef(false);
+  const wasInProfileMainViewRef = useRef(false);
 
   const [profileRingHintMessage, setProfileRingHintMessage] = useState<string | null>(null);
   const showProfileRingHint = profileRingHintMessage != null;
@@ -6029,6 +6034,8 @@ const FrontScreen = ({
   const [homePresentationImagesLoaded, setHomePresentationImagesLoaded] = useState<Record<string, Record<number, boolean>>>({});
   const homePresentationPrefetchSigRef = useRef<string>('');
   const homePresentationActiveIndexRef = useRef<Record<string, number>>({});
+  const [homeCarouselMountKeysByPubId, setHomeCarouselMountKeysByPubId] = useState<Record<string, number>>({});
+  const homeCarouselRepaintAfterLoadSigByPubIdRef = useRef<Record<string, string>>({});
 
   const markHomePresentationImageLoaded = useCallback((pubId: string | number, imageIndex: number) => {
     const key = String(pubId || '');
@@ -6090,6 +6097,40 @@ const FrontScreen = ({
     });
   }, []);
 
+  const profilePresentationLoadedCount = useMemo(() => {
+    const total = profilePresentation?.images?.length ?? 0;
+    if (total <= 0) return 0;
+    let count = 0;
+    for (let i = 0; i < total; i += 1) {
+      if (profilePresentationImagesLoaded[i]) count += 1;
+    }
+    return count;
+  }, [profilePresentation?.images, profilePresentationImagesLoaded]);
+
+  useEffect(() => {
+    const isInProfileMainView = activeBottomTab === 'profile' && profileView === 'profile';
+
+    if (isInProfileMainView && !wasInProfileMainViewRef.current) {
+      setProfileViewMountKey(prev => prev + 1);
+    }
+
+    wasInProfileMainViewRef.current = isInProfileMainView;
+  }, [activeBottomTab, profileView]);
+
+  useEffect(() => {
+    const isInProfileCarousel =
+      activeBottomTab === 'profile' &&
+      profileView === 'profile' &&
+      !!profilePresentation?.images?.length;
+
+    if (isInProfileCarousel && !wasInProfileCarouselRef.current) {
+      setProfileCarouselMountKey(prev => prev + 1);
+      setProfileCarouselImageLayouts({});
+    }
+
+    wasInProfileCarouselRef.current = isInProfileCarousel;
+  }, [activeBottomTab, profileView, profilePresentation?.images?.length]);
+
   useEffect(() => {
     if (activeBottomTab !== 'profile') return;
     if (profileView !== 'profile') return;
@@ -6102,6 +6143,7 @@ const FrontScreen = ({
     const sig = uris.join('|');
     if (profilePresentationPrefetchSigRef.current === sig) return;
     profilePresentationPrefetchSigRef.current = sig;
+    profileCarouselRepaintAfterLoadSigRef.current = '';
 
     // Reset loading map when the carousel images change.
     setProfilePresentationImagesLoaded({});
@@ -6123,6 +6165,24 @@ const FrontScreen = ({
       }
     });
   }, [activeBottomTab, profileView, profilePresentation, markProfilePresentationImageLoaded]);
+
+  useEffect(() => {
+    if (activeBottomTab !== 'profile') return;
+    if (profileView !== 'profile') return;
+    if (!profilePresentation?.images || profilePresentation.images.length === 0) return;
+
+    const total = profilePresentation.images.length;
+    if (profilePresentationLoadedCount < total) return;
+
+    const sig = `${profilePresentation.images.map((img: any) => String(img?.uri || '')).join('|')}::${total}`;
+    if (profileCarouselRepaintAfterLoadSigRef.current === sig) return;
+    profileCarouselRepaintAfterLoadSigRef.current = sig;
+
+    requestAnimationFrame(() => {
+      setProfileCarouselMountKey(prev => prev + 1);
+      setProfileCarouselImageLayouts({});
+    });
+  }, [activeBottomTab, profileView, profilePresentation, profilePresentationLoadedCount]);
 
   useEffect(() => {
     if (activeBottomTab !== 'home') return;
@@ -6155,6 +6215,35 @@ const FrontScreen = ({
       }
     });
   }, [activeBottomTab, currentPostIndex, publications, markHomePresentationImageLoaded]);
+
+  useEffect(() => {
+    if (activeBottomTab !== 'home') return;
+
+    const pub = publications?.[currentPostIndex];
+    if (!pub || !pub.presentation?.images || pub.presentation.images.length === 0) return;
+
+    const pubId = String(pub.id || '');
+    if (!pubId) return;
+
+    const total = pub.presentation.images.length;
+    const loadedMap = homePresentationImagesLoaded[pubId] || {};
+    let loadedCount = 0;
+    for (let i = 0; i < total; i += 1) {
+      if (loadedMap[i]) loadedCount += 1;
+    }
+    if (loadedCount < total) return;
+
+    const sig = `${pub.presentation.images.map((img: any) => String(img?.uri || '')).join('|')}::${total}`;
+    if (homeCarouselRepaintAfterLoadSigByPubIdRef.current[pubId] === sig) return;
+    homeCarouselRepaintAfterLoadSigByPubIdRef.current[pubId] = sig;
+
+    requestAnimationFrame(() => {
+      setHomeCarouselMountKeysByPubId(prev => ({
+        ...prev,
+        [pubId]: (prev[pubId] || 0) + 1,
+      }));
+    });
+  }, [activeBottomTab, currentPostIndex, publications, homePresentationImagesLoaded]);
 
   const publicationAnimations = useRef<Record<string, { scale: Animated.Value, opacity: Animated.Value }>>({});
   const publicationLastTaps = useRef<Record<string, number>>({});
@@ -6504,7 +6593,14 @@ const FrontScreen = ({
         toValue: 400,
         duration: 300,
         useNativeDriver: true,
-      }).start(() => setShowReactionPanel(false));
+      }).start(() => {
+        setShowReactionPanel(false);
+        if (activeBottomTab === 'profile' && profileView === 'profile') {
+          setProfileViewMountKey(prev => prev + 1);
+          setProfileCarouselMountKey(prev => prev + 1);
+          setProfileCarouselImageLayouts({});
+        }
+      });
     } else {
       // Show
       setShowReactionPanel(true);
@@ -9580,8 +9676,10 @@ const FrontScreen = ({
                                 );
                               })()}
                               <FlatList
+                                key={`home-carousel-${String(pub.id)}-${homeCarouselMountKeysByPubId[String(pub.id)] || 0}-${pub.presentation.images.length}`}
                                 data={pub.presentation.images}
                                 keyExtractor={(_, index) => `pub-${pub.id}-image-${index}`}
+                                extraData={homePresentationImagesLoaded[String(pub.id)]}
                                 horizontal
                                 pagingEnabled
                                 bounces={false}
@@ -10344,7 +10442,7 @@ const FrontScreen = ({
           activeBottomTab === 'profile' && (
             <View style={[styles.profileScreenContainer, { paddingBottom: bottomNavHeight + bottomSystemOffset + 16 }]}>
               {profileView === 'profile' ? (
-                <ScrollView contentContainerStyle={styles.profileScrollContent}>
+                <ScrollView key={`profile-main-view-${profileViewMountKey}`} contentContainerStyle={styles.profileScrollContent}>
                   {profilePresentation ? (
                     <>
                       <View style={styles.presentationHeaderContainer}>
@@ -10441,10 +10539,7 @@ const FrontScreen = ({
                           <View style={styles.profilePresentationCarousel}>
                             {(() => {
                               const total = profilePresentation.images.length;
-                              const loadedCount = Math.min(
-                                total,
-                                Object.values(profilePresentationImagesLoaded).filter(Boolean).length
-                              );
+                              const loadedCount = Math.min(total, profilePresentationLoadedCount);
                               const isLoading = loadedCount < total;
                               if (!isLoading) return null;
 
@@ -10459,8 +10554,10 @@ const FrontScreen = ({
                               );
                             })()}
                             <FlatList
+                              key={`profile-presentation-carousel-${profileCarouselMountKey}-${profilePresentation.images.length}-${profilePresentationLoadedCount}`}
                               data={profilePresentation.images}
                               keyExtractor={(_, index) => `profile-presentation-image-${index}`}
+                              extraData={profilePresentationImagesLoaded}
                               horizontal
                               pagingEnabled
                               bounces={false}
@@ -13094,11 +13191,16 @@ const FrontScreen = ({
                                   didScrollToLatest = true;
                                   setIsChannelNearBottom(true);
                                   setShowChannelScrollToLatest(false);
-                                  // Immediate + deferred scroll to ensure Android renders content
-                                  chatScrollViewRef.current?.scrollToOffset({ offset: h, animated: false });
+                                  // Use scrollToEnd instead of offset=contentHeight: on some Android devices
+                                  // offset-based jumps can temporarily land in a blank viewport until a later
+                                  // layout pass (e.g. focusing input). Repeating scrollToEnd is more stable.
+                                  chatScrollViewRef.current?.scrollToEnd({ animated: false });
                                   requestAnimationFrame(() => {
-                                    chatScrollViewRef.current?.scrollToOffset({ offset: h, animated: false });
+                                    chatScrollViewRef.current?.scrollToEnd({ animated: false });
                                   });
+                                  setTimeout(() => {
+                                    chatScrollViewRef.current?.scrollToEnd({ animated: false });
+                                  }, 140);
                                 }
 
                                 const pendingAdjust = pendingChannelPrependAdjustRef.current;
@@ -13128,6 +13230,17 @@ const FrontScreen = ({
                                   }
                                 } else {
                                   lastChatMessagesLengthRef.current = chatMessages.length;
+                                }
+                              }}
+                              onLayout={() => {
+                                if (pendingChannelScrollToLatestAfterRefreshRef.current && messagesToRender.length > 0) {
+                                  pendingChannelScrollToLatestAfterRefreshRef.current = false;
+                                  setIsChannelNearBottom(true);
+                                  setShowChannelScrollToLatest(false);
+                                  chatScrollViewRef.current?.scrollToEnd({ animated: false });
+                                  requestAnimationFrame(() => {
+                                    chatScrollViewRef.current?.scrollToEnd({ animated: false });
+                                  });
                                 }
                               }}
                               renderItem={({ item: msg, index }) => {

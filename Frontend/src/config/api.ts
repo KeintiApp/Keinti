@@ -58,7 +58,16 @@ export const getServerResourceUrl = (path: string) => {
 
   const normalized = normalizeLegacyImageUrl(raw);
 
-  if (normalized.startsWith('http') || normalized.startsWith('file://')) return normalized;
+  if (
+    normalized.startsWith('http') ||
+    normalized.startsWith('file://') ||
+    normalized.startsWith('content://') ||
+    normalized.startsWith('data:') ||
+    normalized.startsWith('blob:') ||
+    normalized.startsWith('ph://')
+  ) {
+    return normalized;
+  }
   return `${API_URL}${normalized.startsWith('/') ? normalized : `/${normalized}`}`;
 };
 
