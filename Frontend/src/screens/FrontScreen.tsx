@@ -12054,25 +12054,10 @@ const FrontScreen = ({
                   </View>
 
                   {groupChatLoadingGroupId && selectedGroup?.id && groupChatLoadingGroupId === selectedGroup.id ? (
-                    <View
-                      pointerEvents="none"
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        backgroundColor: '#000000',
-                        zIndex: 9,
-                      }}
-                    >
+                    <View style={{ flex: 1, marginTop: 60, justifyContent: 'center', alignItems: 'center' }}>
                       <GradientSpinner size={54} />
                     </View>
-                  ) : null}
-
-                  <ScrollView
+                  ) : <ScrollView
                     style={[styles.scrollContainer, { paddingTop: 0, paddingBottom: 0, marginTop: 60, flex: 1 }]}
                     contentContainerStyle={{
                       flexGrow: 1,
@@ -12524,7 +12509,7 @@ const FrontScreen = ({
                         });
                       })()}
                     </View>
-                  </ScrollView>
+                  </ScrollView>}
 
                   <View
                     onLayout={(e) => {
@@ -12886,33 +12871,18 @@ const FrontScreen = ({
                     </View>
                   )}
 
-                  {(channelChatLoadingPostId && (userPublication || selectedChannel) && channelChatLoadingPostId === String(
-                    selectedChannel?.post_id ??
-                    selectedChannel?.postId ??
-                    selectedChannel?.id ??
-                    userPublication?.id ??
-                    ''
-                  )) ? (
-                    <View
-                      pointerEvents="none"
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        backgroundColor: '#000000',
-                        zIndex: 9,
-                      }}
-                    >
-                      <GradientSpinner size={54} />
-                    </View>
-                  ) : null}
-
                   {channelTab === 'Tu canal' ? (
-                    (!userPublication && !selectedChannel) ? (
+                    (channelChatLoadingPostId && (userPublication || selectedChannel) && channelChatLoadingPostId === String(
+                      selectedChannel?.post_id ??
+                      selectedChannel?.postId ??
+                      selectedChannel?.id ??
+                      userPublication?.id ??
+                      ''
+                    )) ? (
+                      <View style={{ flex: 1, marginTop: chatPanelsTopOffset, justifyContent: 'center', alignItems: 'center' }}>
+                        <GradientSpinner size={54} />
+                      </View>
+                    ) : (!userPublication && !selectedChannel) ? (
                       <View style={[styles.scrollContainer, { paddingTop: 0, paddingBottom: 0, marginTop: chatPanelsTopOffset, flex: 1 }]}>
                         <View style={[styles.chatContainer, { flex: 1, justifyContent: 'center' }]}>
                           <View style={styles.emptyStateContainer}>
