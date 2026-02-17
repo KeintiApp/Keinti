@@ -1869,6 +1869,8 @@ const FrontScreen = ({
   const [channelInputBarHeight, setChannelInputBarHeight] = useState<number>(72);
   const [groupInputBarHeight, setGroupInputBarHeight] = useState<number>(72);
   const [channelChatMountKey, setChannelChatMountKey] = useState(0);
+  const [chatScreenMountKey, setChatScreenMountKey] = useState(0);
+  const [joinedChannelRepaintKey, setJoinedChannelRepaintKey] = useState(0);
   const prevActiveBottomTabRef = useRef<string>('home');
   const [isHomePostsLoading, setIsHomePostsLoading] = useState(false);
   const [hasHomePostsLoadedOnce, setHasHomePostsLoadedOnce] = useState(false);
@@ -2524,6 +2526,7 @@ const FrontScreen = ({
       showActionToast(t(key as TranslationKey));
       return;
     }
+    setChatScreenMountKey(k => k + 1);
     setActiveGroupOptionsId(null);
     setActiveJoinedGroupOptionsId(null);
     setSelectedGroup(group);
@@ -2540,6 +2543,10 @@ const FrontScreen = ({
     setShowGroupScrollToLatest(false);
     setGroupChatLoadingGroupId(group.id);
     setChatView('groupChat');
+
+    requestAnimationFrame(() => {
+      setChatScreenMountKey(k => k + 1);
+    });
   };
 
   const markYourProfileHintSeen = () => {
@@ -3075,8 +3082,10 @@ const FrontScreen = ({
 
   const openJoinedChannelChat = (channel: any) => {
     const postId = String(channel?.post_id ?? channel?.postId ?? channel?.id ?? '').trim();
+    setChatScreenMountKey(k => k + 1);
     currentChannelPostIdRef.current = postId || null;
     resetChannelChatPaginationState(true);
+    setChannelChatMountKey(k => k + 1);
     pendingChannelScrollToLatestAfterRefreshRef.current = true;
     setIsChannelNearBottom(true);
     setShowChannelScrollToLatest(false);
@@ -3092,6 +3101,15 @@ const FrontScreen = ({
     // IMPORTANT: set the ref synchronously so the first fetch can reliably clear the loader.
     channelChatLoadingPostIdRef.current = postId || null;
     setChannelChatLoadingPostId(postId || null);
+
+    // Android render workaround: force a repaint across the first two frames
+    // when entering a joined channel chat to avoid black/invisible initial draw.
+    requestAnimationFrame(() => {
+      setJoinedChannelRepaintKey(k => k + 1);
+      setTimeout(() => {
+        setJoinedChannelRepaintKey(k => k + 1);
+      }, 80);
+    });
   };
 
   const fetchMyChannels = async () => {
@@ -3977,6 +3995,7 @@ const FrontScreen = ({
 
   const closeProfileRingViewerPanelAndThen = useCallback((afterClose?: () => void) => {
     if (!showProfileRingViewerPanel) {
+      setHomeProfileRingBannerReady(false);
       afterClose?.();
       return;
     }
@@ -3990,6 +4009,7 @@ const FrontScreen = ({
     }).start(({ finished }) => {
       if (!finished) return;
       setShowProfileRingViewerPanel(false);
+      setHomeProfileRingBannerReady(false);
       setViewingProfileRingId(null);
       setViewingProfileRingSource('profile');
       setViewingProfileRingHomePostId(null);
@@ -4053,6 +4073,7 @@ const FrontScreen = ({
 
   const openProfileRingViewerPanel = useCallback((ringId: string) => {
     setViewingProfileRingId(ringId);
+    setHomeProfileRingBannerReady(false);
 
     if (showProfileRingColorPanel) {
       closeProfileRingColorPanelAndThen();
@@ -4406,6 +4427,12 @@ const FrontScreen = ({
     activeBottomTab === 'home' &&
     hasSeenHomeSwipeTutorial === false &&
     publications.length > 0;
+
+  useEffect(() => {
+    if (activeBottomTab !== 'home') {
+      setHomeProfileRingBannerReady(false);
+    }
+  }, [activeBottomTab]);
 
   const homeSwipeTutorialArrowOpacity = homeSwipeTutorialAnim.interpolate({
     inputRange: [0, 1],
@@ -8636,7 +8663,9 @@ const FrontScreen = ({
         <Animated.View
           style={[
             styles.profileRingColorPanel,
-            isKeyboardVisible && keyboardHeight > 0 ? { bottom: Platform.OS === 'android' ? 0 : keyboardHeight } : null,
+            isKeyboardVisible && keyboardHeight > 0
+              ? { bottom: Platform.OS === 'android' ? 0 : keyboardHeight }
+              : { bottom: bottomSystemOffset },
             { transform: [{ translateY: profileRingColorPanelAnimation }] },
           ]}
         >
@@ -8897,6 +8926,7 @@ const FrontScreen = ({
         <Animated.View
           style={[
             styles.profileRingViewerPanel,
+            { bottom: bottomSystemOffset },
             { borderTopColor: viewingProfileRing.color || '#FFB74D' },
             { transform: [{ translateY: profileRingViewerPanelAnimation }] },
           ]}
@@ -8984,7 +9014,7 @@ const FrontScreen = ({
               </View>
             )}
           </ScrollView>
-          {viewingProfileRingSource === 'home' && adsInitialized && (
+          {(viewingProfileRingSource === 'home' || activeBottomTab === 'home') && adsInitialized && (
             <View style={[styles.profileRingViewerAdContainer, !homeProfileRingBannerReady && { minHeight: 0, marginTop: 0 }]}>
               <BannerAd
                 key={`ring-banner-${viewingProfileRingId || 'none'}`}
@@ -9418,7 +9448,7 @@ const FrontScreen = ({
           <View style={[styles.homeScreenContainer, { paddingTop: Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT + 8 : 8, paddingBottom: 0 }]}>
             <ScrollView
               style={{ flex: 1 }}
-              contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingBottom: bottomNavHeight + bottomSystemOffset + 16 }}
+              contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingBottom: bottomNavHeight + 16 }}
               scrollEnabled={isHomeMainScrollEnabled}
             >
               {giveAways.length === 0 && publications.length === 0 ? (
@@ -10440,7 +10470,7 @@ const FrontScreen = ({
         {/* Pantalla Profile */}
         {
           activeBottomTab === 'profile' && (
-            <View style={[styles.profileScreenContainer, { paddingBottom: bottomNavHeight + bottomSystemOffset + 16 }]}>
+            <View style={[styles.profileScreenContainer, { paddingBottom: bottomNavHeight + 16 }]}>
               {profileView === 'profile' ? (
                 <ScrollView key={`profile-main-view-${profileViewMountKey}`} contentContainerStyle={styles.profileScrollContent}>
                   {profilePresentation ? (
@@ -12110,6 +12140,7 @@ const FrontScreen = ({
         {
           activeBottomTab === 'chat' && (
             <KeyboardAvoidingView
+              key={`chat-root-${chatScreenMountKey}`}
               style={{ flex: 1 }}
               enabled={false}
               behavior={undefined}
@@ -12163,7 +12194,7 @@ const FrontScreen = ({
                         (groupInputBarHeight || 72) +
                         (isKeyboardVisible
                           ? (keyboardHeight || 0) + CHAT_INPUT_KEYBOARD_GAP + 12
-                          : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + bottomSystemOffset + 12),
+                          : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + 12),
                     }}
                     ref={groupChatScrollViewRef}
                     scrollEventThrottle={16}
@@ -12619,7 +12650,7 @@ const FrontScreen = ({
                       right: 0,
                       bottom: isKeyboardVisible
                         ? (keyboardHeight || 0) + CHAT_INPUT_KEYBOARD_GAP
-                        : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + bottomSystemOffset,
+                        : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT),
                       paddingHorizontal: 20,
                       paddingTop: 20,
                       paddingBottom: isKeyboardVisible ? 8 : 0,
@@ -12936,7 +12967,10 @@ const FrontScreen = ({
                   </Modal>
                 </View>
               ) : chatView === 'channel' ? (
-                <View style={{ flex: 1 }}>
+                <View
+                  key={`channel-view-${String(selectedChannel?.post_id ?? selectedChannel?.postId ?? selectedChannel?.id ?? userPublication?.id ?? 'none')}-${channelChatMountKey}-${joinedChannelRepaintKey}`}
+                  style={{ flex: 1 }}
+                >
                   {/* Header for viewer mode */}
                   {selectedChannel && (
                     <View style={{
@@ -12969,7 +13003,7 @@ const FrontScreen = ({
                   )}
 
                   {channelTab === 'Tu canal' ? (
-                    (channelChatLoadingPostId && (userPublication || selectedChannel) && channelChatLoadingPostId === String(
+                    (!selectedChannel && channelChatLoadingPostId && (userPublication || selectedChannel) && channelChatLoadingPostId === String(
                       selectedChannel?.post_id ??
                       selectedChannel?.postId ??
                       selectedChannel?.id ??
@@ -13146,7 +13180,7 @@ const FrontScreen = ({
                                   (channelInputBarHeight || 72) +
                                   (isKeyboardVisible
                                     ? (keyboardHeight || 0) + CHAT_INPUT_KEYBOARD_GAP + 12
-                                    : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + bottomSystemOffset + 12),
+                                    : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + 12),
                               }}
                               data={messagesToRender}
                               keyExtractor={(msg: any, index: number) => String((msg as any)?.__key ?? (msg as any)?.id ?? `idx-${index}`)}
@@ -13160,6 +13194,11 @@ const FrontScreen = ({
                               ref={chatScrollViewRef}
                               ListHeaderComponent={isLoadingOlderChannelMessages ? (
                                 <View style={{ paddingVertical: 8, alignItems: 'center' }}>
+                                  <ActivityIndicator color="#FFB74D" size="small" />
+                                </View>
+                              ) : null}
+                              ListEmptyComponent={selectedChannel && channelChatLoadingPostId ? (
+                                <View style={{ paddingVertical: 22, alignItems: 'center' }}>
                                   <ActivityIndicator color="#FFB74D" size="small" />
                                 </View>
                               ) : null}
@@ -13564,7 +13603,7 @@ const FrontScreen = ({
                         })()
                     )
                   ) : (
-                    <ScrollView style={[styles.scrollContainer, { flex: 1, paddingTop: 0, paddingBottom: bottomNavHeight + bottomSystemOffset + 16, marginTop: chatPanelsTopOffset }]}>
+                    <ScrollView style={[styles.scrollContainer, { flex: 1, paddingTop: 0, paddingBottom: bottomNavHeight + 16, marginTop: chatPanelsTopOffset }]}>
                       <View style={styles.chatContainer}>
                         {myChannels.filter(c => getRemainingTime(c.post_created_at) !== 'Tiempo agotado').length === 0 ? (
                           <View style={styles.emptyStateContainer}>
@@ -13864,7 +13903,7 @@ const FrontScreen = ({
                         right: 0,
                         bottom: isKeyboardVisible
                           ? (keyboardHeight || 0) + CHAT_INPUT_KEYBOARD_GAP
-                          : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + bottomSystemOffset,
+                          : (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT),
                         paddingHorizontal: 10,
                         paddingTop: 10,
                         paddingBottom: isKeyboardVisible ? 8 : 4,
@@ -14377,7 +14416,7 @@ const FrontScreen = ({
 
                 </View>
               ) : (
-                <View style={{ flex: 1, position: 'relative', paddingBottom: bottomNavHeight + bottomSystemOffset + 16 }}>
+                <View style={{ flex: 1, position: 'relative', paddingBottom: bottomNavHeight + 16 }}>
                   <ScrollView
                     style={{ flex: 1, width: '100%', marginTop: chatPanelsTopOffset + 12 }}
                     contentContainerStyle={{ alignItems: 'center', paddingTop: 6, paddingBottom: 2 }}
@@ -15287,7 +15326,8 @@ const FrontScreen = ({
             styles.bottomNavBar,
             {
               justifyContent: 'space-evenly',
-              bottom: bottomSystemOffset,
+              bottom: 0,
+              paddingBottom: bottomSystemOffset + 6,
             },
           ]}
           pointerEvents={(activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)) ? 'none' : 'auto'}
@@ -15396,7 +15436,7 @@ const FrontScreen = ({
           style={[
             styles.bottomToastContainer,
             {
-              bottom: bottomNavHeight + bottomSystemOffset + 20,
+              bottom: bottomNavHeight + 20,
               opacity: bottomToastAnim,
               transform: [
                 {
@@ -17031,18 +17071,23 @@ const styles = StyleSheet.create({
     right: 0,
     flexDirection: 'row',
     backgroundColor: '#000000',
-    paddingVertical: 6,
+    paddingTop: 0,
+    paddingBottom: 1,
     paddingHorizontal: 20,
     justifyContent: 'space-between',
     alignItems: 'center',
+    zIndex: 9999,
+    elevation: 9999,
   },
   bottomNavLeft: {
     flexDirection: 'row',
     gap: 20,
   },
   bottomNavItem: {
-    padding: 8,
-    borderRadius: 12,
+    paddingTop: 1,
+    paddingBottom: 2,
+    paddingHorizontal: 8,
+    borderRadius: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -18305,6 +18350,7 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
   },
   profileRingViewerAdContainer: {
+    width: '100%',
     marginTop: 14,
     alignItems: 'center',
     justifyContent: 'center',
