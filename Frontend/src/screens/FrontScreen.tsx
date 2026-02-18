@@ -3577,6 +3577,7 @@ const FrontScreen = ({
   const [showProfileRingColorPanel, setShowProfileRingColorPanel] = useState(false);
   const PROFILE_RING_PANEL_HIDDEN_Y = SCREEN_HEIGHT + 320;
   const [profileRingColorPanelAnimation] = useState(new Animated.Value(PROFILE_RING_PANEL_HIDDEN_Y));
+  const profileRingPanelScrollRef = useRef<ScrollView | null>(null);
   const [selectedProfileRingId, setSelectedProfileRingId] = useState<string | null>(null);
 
   const [showProfileRingViewerPanel, setShowProfileRingViewerPanel] = useState(false);
@@ -4312,6 +4313,16 @@ const FrontScreen = ({
     setProfileRingDescriptionDraft(description);
   }, [selectedProfileRingId]);
 
+  const ensureProfileRingFocusedFieldVisible = useCallback(() => {
+    requestAnimationFrame(() => {
+      profileRingPanelScrollRef.current?.scrollToEnd({ animated: true });
+    });
+
+    setTimeout(() => {
+      profileRingPanelScrollRef.current?.scrollToEnd({ animated: true });
+    }, 120);
+  }, []);
+
   const deleteSelectedProfileRing = useCallback(() => {
     if (!selectedProfileRingId) {
       closeProfileRingColorPanel();
@@ -4427,6 +4438,8 @@ const FrontScreen = ({
     activeBottomTab === 'home' &&
     hasSeenHomeSwipeTutorial === false &&
     publications.length > 0;
+
+  const profileRingPanelsBottomOffset = Math.max(bottomNavHeight, bottomSystemOffset);
 
   useEffect(() => {
     if (activeBottomTab !== 'home') {
@@ -8664,8 +8677,8 @@ const FrontScreen = ({
           style={[
             styles.profileRingColorPanel,
             isKeyboardVisible && keyboardHeight > 0
-              ? { bottom: Platform.OS === 'android' ? 0 : keyboardHeight }
-              : { bottom: bottomSystemOffset },
+              ? { bottom: keyboardHeight }
+              : { bottom: profileRingPanelsBottomOffset },
             { transform: [{ translateY: profileRingColorPanelAnimation }] },
           ]}
         >
@@ -8692,9 +8705,11 @@ const FrontScreen = ({
             </TouchableOpacity>
           </View>
           <ScrollView
+            ref={profileRingPanelScrollRef}
             style={styles.profileRingPanelScroll}
             contentContainerStyle={styles.profileRingPanelScrollContent}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.profileRingColorOptionsRow}>
@@ -8741,6 +8756,7 @@ const FrontScreen = ({
                 style={[styles.profileRingTextInput, styles.profileRingTextArea]}
                 value={profileRingDescriptionDraft}
                 onChangeText={updateSelectedProfileRingDescription}
+                onFocus={ensureProfileRingFocusedFieldVisible}
                 maxLength={280}
                 placeholderTextColor="rgba(255, 255, 255, 0.3)"
                 autoCapitalize="sentences"
@@ -8840,6 +8856,7 @@ const FrontScreen = ({
                           placeholderTextColor="rgba(255, 255, 255, 0.3)"
                           value={profileRingLinkUrlDraft}
                           onChangeText={handleProfileRingLinkUrlChange}
+                          onFocus={ensureProfileRingFocusedFieldVisible}
                           autoCapitalize="none"
                           autoCorrect={false}
                           keyboardType="url"
@@ -8926,7 +8943,7 @@ const FrontScreen = ({
         <Animated.View
           style={[
             styles.profileRingViewerPanel,
-            { bottom: bottomSystemOffset },
+            { bottom: profileRingPanelsBottomOffset },
             { borderTopColor: viewingProfileRing.color || '#FFB74D' },
             { transform: [{ translateY: profileRingViewerPanelAnimation }] },
           ]}
@@ -18305,7 +18322,8 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
     borderTopWidth: 1,
     borderTopColor: '#FFB74D',
-    zIndex: 1000,
+    zIndex: 11000,
+    elevation: 11000,
     paddingTop: 14,
     paddingHorizontal: 20,
     paddingBottom: 24,
@@ -18321,7 +18339,8 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
     borderTopWidth: 2,
     borderTopColor: '#FFB74D',
-    zIndex: 1000,
+    zIndex: 11000,
+    elevation: 11000,
     paddingTop: 14,
     paddingHorizontal: 20,
     paddingBottom: 24,

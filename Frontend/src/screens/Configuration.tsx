@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, GestureResponderEvent, Image, Linking, Modal, PermissionsAndroid, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, GestureResponderEvent, Image, Keyboard, Linking, Modal, PermissionsAndroid, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
@@ -214,6 +214,9 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   const [screen, setScreen] = useState<Screen>('main');
   const [verifyTab, setVerifyTab] = useState<'objectives' | 'benefits'>('objectives');
   const [showImportantNoticePanel, setShowImportantNoticePanel] = useState(false);
+  const [verifyBottomBarHeight, setVerifyBottomBarHeight] = useState(0);
+  const accountAuthScrollRef = useRef<ScrollView | null>(null);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   // Merge static content padding with the dynamic bottom safe-area inset so
   // scroll content is never hidden behind the Android navigation bar.
@@ -221,6 +224,35 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
     () => [styles.content, { paddingBottom: 24 + safeAreaInsets.bottom }],
     [safeAreaInsets.bottom],
   );
+
+  const accountAuthContentStyle = useMemo(
+    () => [styles.content, { paddingBottom: 24 + safeAreaInsets.bottom + (keyboardHeight > 0 ? keyboardHeight + 24 : 0) }],
+    [keyboardHeight, safeAreaInsets.bottom],
+  );
+
+  const verifyKeintiScrollBottomPadding = useMemo(
+    () => Math.max(100, verifyBottomBarHeight + 20),
+    [verifyBottomBarHeight],
+  );
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const onShow = Keyboard.addListener(showEvent, (e: any) => {
+      const h = Number(e?.endCoordinates?.height ?? 0);
+      setKeyboardHeight(Number.isFinite(h) && h > 0 ? h : 0);
+    });
+
+    const onHide = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      onShow.remove();
+      onHide.remove();
+    };
+  }, []);
 
   const formatNumber = useMemo(() => {
     try {
@@ -1931,7 +1963,12 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </View>
         </ScrollView>
       ) : screen === 'adminSelfies' ? (
-        <ScrollView contentContainerStyle={contentStyle} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          ref={accountAuthScrollRef}
+          contentContainerStyle={accountAuthContentStyle}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+        >
           <Text style={styles.personalDataTitle}>{t('adminSelfies.title')}</Text>
           <Text style={styles.sectionDescription}>
             {isBackendAdmin ? 'Herramientas de moderación (solo admins).' : 'No autorizado.'}
@@ -2320,7 +2357,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
             <Text style={styles.verifySubtitle}>{t('securityControl.verifyYourKeinti')}</Text>
 
             {verifyTab === 'objectives' ? (
-              <ScrollView contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+              <ScrollView contentContainerStyle={{ paddingBottom: verifyKeintiScrollBottomPadding }} showsVerticalScrollIndicator={false}>
                 <Text style={styles.verifySectionTitle}>{t('verifyKeinti.objectivesTitle')}</Text>
 
                 <View style={styles.verifyItem}>
@@ -2509,7 +2546,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
               </ScrollView>
             ) : (
-              <ScrollView contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+              <ScrollView contentContainerStyle={{ paddingBottom: verifyKeintiScrollBottomPadding }} showsVerticalScrollIndicator={false}>
                  <Text style={styles.verifySectionTitle}>{t('verifyKeinti.benefitsTitle')}</Text>
 
                  <View style={styles.verifyItem}>
@@ -2531,7 +2568,15 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
             )}
           </View>
 
-          <View style={[styles.verifyBottomBar, { paddingBottom: 20 + safeAreaInsets.bottom }]}>
+          <View
+            style={[styles.verifyBottomBar, { paddingBottom: 20 + safeAreaInsets.bottom }]}
+            onLayout={(e) => {
+              const h = Number(e?.nativeEvent?.layout?.height ?? 0);
+              if (Number.isFinite(h) && h > 0) {
+                setVerifyBottomBarHeight((prev) => (prev === h ? prev : h));
+              }
+            }}
+          >
              <View style={styles.verifyTabRow}>
                 <TouchableOpacity onPress={() => setVerifyTab('objectives')} style={styles.verifyTabButton}>
                     <Text style={[styles.verifyTabText, verifyTab === 'objectives' && styles.verifyTabTextActive]}>{t('verifyKeinti.tabObjectives')}</Text>
@@ -2753,6 +2798,14 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       style={styles.input}
                       value={totpCode}
                       onChangeText={(v) => setTotpCode(v.replace(/[^0-9]/g, '').slice(0, 6))}
+                      onFocus={() => {
+                        requestAnimationFrame(() => {
+                          accountAuthScrollRef.current?.scrollToEnd({ animated: true });
+                        });
+                        setTimeout(() => {
+                          accountAuthScrollRef.current?.scrollToEnd({ animated: true });
+                        }, 120);
+                      }}
                       keyboardType="number-pad"
                       placeholder={t('accountAuth.codePlaceholder')}
                       placeholderTextColor="#FFFFFF"
@@ -3227,7 +3280,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
             <TouchableWithoutFeedback>
               <View style={styles.authSuccessPanel}>
                 <View style={{ alignItems: 'center', marginBottom: 14 }}>
-                  <VerifiedBadgeIcon size={38} variant="gradient" gradientColors={['#FFB74D', '#ffec5aff']} checkColor="#000000" />
+                  <VerifiedBadgeIcon size={38} variant="solid" solidColor="#B0B0B0" solidOpacity={1} checkColor="#000000" />
                 </View>
                 <Text style={styles.authSuccessTitle}>{t('accountAuth.successTitle')}</Text>
                 <Text style={styles.authSuccessBody}>{t('accountAuth.successBody')}</Text>
