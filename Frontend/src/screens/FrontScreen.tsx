@@ -145,6 +145,7 @@ const GROUP_MEMBERS_VISIBLE_CARDS = 5;
 const GROUP_MEMBERS_CARD_GAP = 10;
 const GROUP_MEMBERS_LIST_BOTTOM_SPACER = 28;
 const GROUP_MEMBER_CARD_ESTIMATED_HEIGHT = 74;
+const JOINED_GROUPS_RENDER_BATCH = 24;
 
 const GradientSpinner = ({ size = 44 }: { size?: number }) => {
   const rotate = useRef(new Animated.Value(0)).current;
@@ -1905,6 +1906,43 @@ const FrontScreen = ({
   const [profileView, setProfileView] = useState<'profile' | 'presentation' | 'intimidades'>('profile');
   const [chatView, setChatView] = useState<'channel' | 'channels' | 'groups' | 'groupChat'>('channel');
   const [groupsTab, setGroupsTab] = useState<'tusGrupos' | 'unidos'>('tusGrupos');
+  const [joinedGroupsRenderCount, setJoinedGroupsRenderCount] = useState(JOINED_GROUPS_RENDER_BATCH);
+
+  useEffect(() => {
+    if (groupsTab !== 'unidos') return;
+    setJoinedGroupsRenderCount(JOINED_GROUPS_RENDER_BATCH);
+  }, [groupsTab]);
+
+  useEffect(() => {
+    setJoinedGroupsRenderCount(prev => {
+      const minCount = Math.min(JOINED_GROUPS_RENDER_BATCH, visibleJoinedGroups.length);
+      return prev < minCount ? minCount : prev;
+    });
+  }, [visibleJoinedGroups.length]);
+
+  const pagedVisibleJoinedGroups = useMemo(
+    () => visibleJoinedGroups.slice(0, joinedGroupsRenderCount),
+    [visibleJoinedGroups, joinedGroupsRenderCount],
+  );
+
+  const loadMoreJoinedGroupsIfNeeded = useCallback((event: any) => {
+    if (groupsTab !== 'unidos') return;
+    if (joinedGroupsRenderCount >= visibleJoinedGroups.length) return;
+
+    const native = event?.nativeEvent;
+    if (!native) return;
+
+    const layoutHeight = Number(native.layoutMeasurement?.height ?? 0);
+    const offsetY = Number(native.contentOffset?.y ?? 0);
+    const contentHeight = Number(native.contentSize?.height ?? 0);
+    if (!Number.isFinite(layoutHeight) || !Number.isFinite(offsetY) || !Number.isFinite(contentHeight)) return;
+
+    const distanceToBottom = contentHeight - (offsetY + layoutHeight);
+    if (distanceToBottom > 220) return;
+
+    setJoinedGroupsRenderCount(prev => Math.min(prev + JOINED_GROUPS_RENDER_BATCH, visibleJoinedGroups.length));
+  }, [groupsTab, joinedGroupsRenderCount, visibleJoinedGroups.length]);
+
   const [chatInputValue, setChatInputValue] = useState('');
   const [showChannelAttachmentPanel, setShowChannelAttachmentPanel] = useState(false);
   const [showChannelImageComposer, setShowChannelImageComposer] = useState(false);
@@ -6743,8 +6781,8 @@ const FrontScreen = ({
   };
 
   const hasPresentationImage = carouselImages.length > 0;
-  const titleReady = presentationTitle.trim().length >= 10;
-  const textReady = presentationText.trim().length >= 10;
+  const titleReady = presentationTitle.trim().length >= 1;
+  const textReady = presentationText.trim().length >= 1;
   const hasUploadingCarouselImages = carouselImages.some(img => img.isUploading);
   // Con sesión, exigimos URLs remotas antes de permitir aplicar (si no, se guardaría una ruta local).
   const hasOnlyRemoteCarouselImages = !authToken || carouselImages.every(img => String(img.uri || '').startsWith('http'));
@@ -8417,8 +8455,9 @@ const FrontScreen = ({
             position: 'absolute',
             left: 20,
             right: 20,
-            bottom: 25,
-            zIndex: 9999,
+            bottom: Math.max((bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + 14, bottomSystemOffset + 24),
+            zIndex: 11000,
+            elevation: 11000,
             opacity: actionToastAnim,
             transform: [
               {
@@ -8643,7 +8682,17 @@ const FrontScreen = ({
       )}
 
       {/* Reaction Panel */}
-      <Animated.View style={[styles.reactionPanel, { transform: [{ translateY: reactionPanelAnimation }] }]}>
+      <Animated.View
+        style={[
+          styles.reactionPanel,
+          {
+            bottom: (!isKeyboardVisible && activeBottomTab !== 'notifications')
+              ? (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT)
+              : 0,
+            transform: [{ translateY: reactionPanelAnimation }],
+          },
+        ]}
+      >
         <View style={styles.reactionPanelHeader}>
           <Text style={styles.reactionPanelTitle}>{t('front.reactions' as TranslationKey)} ({selectedReactions.length}/3)</Text>
           <TouchableOpacity onPress={toggleReactionPanel}>
@@ -14438,6 +14487,8 @@ const FrontScreen = ({
                     style={{ flex: 1, width: '100%', marginTop: chatPanelsTopOffset + 12 }}
                     contentContainerStyle={{ alignItems: 'center', paddingTop: 6, paddingBottom: 2 }}
                     showsVerticalScrollIndicator={false}
+                    onScroll={loadMoreJoinedGroupsIfNeeded}
+                    scrollEventThrottle={16}
                   >
                     {(!authToken || !accountVerified) ? (
                       <View style={{ alignItems: 'center', width: '100%', paddingHorizontal: 22, paddingTop: 44 }}>
@@ -14619,7 +14670,7 @@ const FrontScreen = ({
                                 <Text style={{ color: 'rgba(255, 255, 255, 0.6)' }}>{t('chat.notJoinedAnyGroupYet' as TranslationKey)}</Text>
                               </View>
                             ) : (
-                              visibleJoinedGroups.map((group) => (
+                              pagedVisibleJoinedGroups.map((group) => (
                             <View
                               key={group.id}
                               style={{
@@ -14777,6 +14828,11 @@ const FrontScreen = ({
                               )}
                             </View>
                               ))
+                            )}
+                            {visibleJoinedGroups.length > pagedVisibleJoinedGroups.length && (
+                              <View style={{ paddingVertical: 14, alignItems: 'center' }}>
+                                <ActivityIndicator size="small" color="rgba(255,255,255,0.7)" />
+                              </View>
                             )}
                           </View>
                         )}
@@ -18264,7 +18320,8 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
     borderTopWidth: 1,
     borderTopColor: '#FFB74D',
-    zIndex: 1000,
+    zIndex: 11000,
+    elevation: 11000,
     paddingTop: 20,
     paddingHorizontal: 20,
     paddingBottom: 0,
