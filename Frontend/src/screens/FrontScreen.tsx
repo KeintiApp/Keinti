@@ -1057,6 +1057,8 @@ const FrontScreen = ({
 
   const [adsInitialized, setAdsInitialized] = useState(false);
   const [homeProfileRingBannerReady, setHomeProfileRingBannerReady] = useState(false);
+  const [homeProfileRingBannerSize, setHomeProfileRingBannerSize] = useState(BannerAdSize.ANCHORED_ADAPTIVE_BANNER);
+  const [homeProfileRingBannerRequestKey, setHomeProfileRingBannerRequestKey] = useState(0);
   const safeAreaInsets = useSafeAreaInsets();
   const bottomSystemOffset = safeAreaInsets.bottom;
 
@@ -1871,6 +1873,7 @@ const FrontScreen = ({
   const [groupInputBarHeight, setGroupInputBarHeight] = useState<number>(72);
   const [channelChatMountKey, setChannelChatMountKey] = useState(0);
   const [chatScreenMountKey, setChatScreenMountKey] = useState(0);
+  const [chatTopTabsRenderKey, setChatTopTabsRenderKey] = useState(0);
   const [joinedChannelRepaintKey, setJoinedChannelRepaintKey] = useState(0);
   const prevActiveBottomTabRef = useRef<string>('home');
   const [isHomePostsLoading, setIsHomePostsLoading] = useState(false);
@@ -2841,16 +2844,21 @@ const FrontScreen = ({
       Animated.timing(actionToastAnim, {
         toValue: 1,
         duration: 150,
-        useNativeDriver: true,
+        useNativeDriver: false,
       }),
       Animated.delay(1700),
       Animated.timing(actionToastAnim, {
         toValue: 0,
         duration: 150,
-        useNativeDriver: true,
+        useNativeDriver: false,
       }),
     ]).start(({ finished }) => {
-      if (finished) setActionToast(null);
+      if (finished) {
+        setActionToast(null);
+        requestAnimationFrame(() => {
+          setChatTopTabsRenderKey(k => k + 1);
+        });
+      }
     });
   };
 
@@ -4035,6 +4043,7 @@ const FrontScreen = ({
   const closeProfileRingViewerPanelAndThen = useCallback((afterClose?: () => void) => {
     if (!showProfileRingViewerPanel) {
       setHomeProfileRingBannerReady(false);
+      setHomeProfileRingBannerSize(BannerAdSize.ANCHORED_ADAPTIVE_BANNER);
       afterClose?.();
       return;
     }
@@ -4049,6 +4058,7 @@ const FrontScreen = ({
       if (!finished) return;
       setShowProfileRingViewerPanel(false);
       setHomeProfileRingBannerReady(false);
+      setHomeProfileRingBannerSize(BannerAdSize.ANCHORED_ADAPTIVE_BANNER);
       setViewingProfileRingId(null);
       setViewingProfileRingSource('profile');
       setViewingProfileRingHomePostId(null);
@@ -4113,6 +4123,8 @@ const FrontScreen = ({
   const openProfileRingViewerPanel = useCallback((ringId: string) => {
     setViewingProfileRingId(ringId);
     setHomeProfileRingBannerReady(false);
+    setHomeProfileRingBannerSize(BannerAdSize.ANCHORED_ADAPTIVE_BANNER);
+    setHomeProfileRingBannerRequestKey(k => k + 1);
 
     if (showProfileRingColorPanel) {
       closeProfileRingColorPanelAndThen();
@@ -4482,6 +4494,7 @@ const FrontScreen = ({
   useEffect(() => {
     if (activeBottomTab !== 'home') {
       setHomeProfileRingBannerReady(false);
+      setHomeProfileRingBannerSize(BannerAdSize.ANCHORED_ADAPTIVE_BANNER);
     }
   }, [activeBottomTab]);
 
@@ -8449,37 +8462,39 @@ const FrontScreen = ({
       />
 
       {actionToast && (
-        <Animated.View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            left: 20,
-            right: 20,
-            bottom: Math.max((bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + 14, bottomSystemOffset + 24),
-            zIndex: 11000,
-            elevation: 11000,
-            opacity: actionToastAnim,
-            transform: [
-              {
-                translateY: actionToastAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [30, 0],
-                }),
-              },
-            ],
-          }}
-        >
-          <View
-            style={{
-              backgroundColor: 'rgba(50,50,50,0.95)',
-              borderRadius: 14,
-              paddingVertical: 12,
-              paddingHorizontal: 14,
-            }}
-          >
-            <Text style={{ color: '#FFFFFF', fontSize: 13, textAlign: 'center' }}>{actionToast}</Text>
+        <Modal transparent visible animationType="none" onRequestClose={() => { }}>
+          <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
+            <Animated.View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                left: 20,
+                right: 20,
+                bottom: Math.max((bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + 14, bottomSystemOffset + 24),
+                opacity: actionToastAnim,
+                transform: [
+                  {
+                    translateY: actionToastAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [30, 0],
+                    }),
+                  },
+                ],
+              }}
+            >
+              <View
+                style={{
+                  backgroundColor: 'rgba(50,50,50,0.95)',
+                  borderRadius: 14,
+                  paddingVertical: 12,
+                  paddingHorizontal: 14,
+                }}
+              >
+                <Text style={{ color: '#FFFFFF', fontSize: 13, textAlign: 'center' }}>{actionToast}</Text>
+              </View>
+            </Animated.View>
           </View>
-        </Animated.View>
+        </Modal>
       )}
       {/* Header superior izquierdo - Perfil */}
       {activeBottomTab !== 'notifications' && activeBottomTab !== 'home' && activeBottomTab !== 'chat' && (
@@ -9083,9 +9098,9 @@ const FrontScreen = ({
           {(viewingProfileRingSource === 'home' || activeBottomTab === 'home') && adsInitialized && (
             <View style={[styles.profileRingViewerAdContainer, !homeProfileRingBannerReady && { minHeight: 0, marginTop: 0 }]}>
               <BannerAd
-                key={`ring-banner-${viewingProfileRingId || 'none'}`}
+                key={`ring-banner-${viewingProfileRingId || 'none'}-${homeProfileRingBannerSize}-${homeProfileRingBannerRequestKey}`}
                 unitId={BANNER_AD_UNIT_ID}
-                size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
+                size={homeProfileRingBannerSize}
                 requestOptions={{ requestNonPersonalizedAdsOnly: true }}
                 onPaid={(event) => {
                   trackAdPaidEvent({
@@ -9097,8 +9112,16 @@ const FrontScreen = ({
                 onAdLoaded={() => setHomeProfileRingBannerReady(true)}
                 onAdFailedToLoad={(error) => {
                   setHomeProfileRingBannerReady(false);
+
+                  if (homeProfileRingBannerSize === BannerAdSize.ANCHORED_ADAPTIVE_BANNER) {
+                    setHomeProfileRingBannerSize(BannerAdSize.BANNER);
+                    setHomeProfileRingBannerRequestKey(k => k + 1);
+                    return;
+                  }
+
                   console.warn('[AdMob] Home profile ring banner failed to load', {
                     unitId: BANNER_AD_UNIT_ID,
+                    size: homeProfileRingBannerSize,
                     isDev: typeof __DEV__ !== 'undefined' ? __DEV__ : undefined,
                     error,
                   });
@@ -9348,8 +9371,9 @@ const FrontScreen = ({
 
       {/* Header superior derecho - Canal (visible cuando Chat está activo) */}
       {
-        activeBottomTab === 'chat' && !selectedChannel && chatView !== 'groupChat' && (
+        activeBottomTab === 'chat' && chatView !== 'groupChat' && !(chatView === 'channel' && !!selectedChannel) && (
           <View
+            key={`chat-top-tabs-${chatTopTabsRenderKey}-${chatView}-${groupsTab}-${channelTab}`}
             style={[styles.topCenterContainer, { top: ANDROID_SAFE_TOP + CHAT_TABS_TOP }]}
             onLayout={(e) => {
               const { height } = e.nativeEvent.layout;
@@ -9362,6 +9386,8 @@ const FrontScreen = ({
               <View style={{ flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', width: '90%' }}>
                 <TouchableOpacity
                   onPress={() => {
+                    setSelectedChannel(null);
+                    setChatView('groups');
                     setGroupsTab('tusGrupos');
                     if (!authToken || !accountVerified) {
                       showActionToast(t('chat.lockedYourGroupsMessage' as TranslationKey));
@@ -9406,6 +9432,8 @@ const FrontScreen = ({
 
                 <TouchableOpacity
                   onPress={() => {
+                    setSelectedChannel(null);
+                    setChatView('groups');
                     setGroupsTab('unidos');
                     if (!authToken || !accountVerified) {
                       showActionToast(t('chat.lockedJoinedGroupsMessage' as TranslationKey));

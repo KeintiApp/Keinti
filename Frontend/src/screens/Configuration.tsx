@@ -216,6 +216,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   const [showImportantNoticePanel, setShowImportantNoticePanel] = useState(false);
   const [verifyBottomBarHeight, setVerifyBottomBarHeight] = useState(0);
   const accountAuthScrollRef = useRef<ScrollView | null>(null);
+  const changePasswordScrollRef = useRef<ScrollView | null>(null);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   // Merge static content padding with the dynamic bottom safe-area inset so
@@ -229,6 +230,19 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
     () => [styles.content, { paddingBottom: 24 + safeAreaInsets.bottom + (keyboardHeight > 0 ? keyboardHeight + 24 : 0) }],
     [keyboardHeight, safeAreaInsets.bottom],
   );
+
+  const changePasswordContentStyle = useMemo(
+    () => [styles.content, { paddingBottom: 24 + safeAreaInsets.bottom + (keyboardHeight > 0 ? keyboardHeight + 28 : 0) }],
+    [keyboardHeight, safeAreaInsets.bottom],
+  );
+
+  const ensureChangePasswordInputVisible = () => {
+    if (screen !== 'changePassword') return;
+
+    setTimeout(() => {
+      changePasswordScrollRef.current?.scrollToEnd({ animated: true });
+    }, Platform.OS === 'ios' ? 60 : 100);
+  };
 
   const verifyKeintiScrollBottomPadding = useMemo(
     () => Math.max(100, verifyBottomBarHeight + 20),
@@ -2953,7 +2967,12 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           </View>
         </ScrollView>
       ) : screen === 'changePassword' ? (
-        <ScrollView contentContainerStyle={contentStyle} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          ref={changePasswordScrollRef}
+          contentContainerStyle={changePasswordContentStyle}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+        >
           <Text style={styles.appLine}>
             {(myUsername || '@usuario').startsWith('@') ? (myUsername || '@usuario') : `@${myUsername || 'usuario'}`} - Keinti
           </Text>
@@ -3086,6 +3105,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                   placeholderTextColor="#FFFFFF"
                   value={newPassword}
                   onChangeText={setNewPassword}
+                  onFocus={ensureChangePasswordInputVisible}
                   secureTextEntry={!showNewPassword}
                   autoCapitalize="none"
                   editable={canUseNewPasswordFields && !isChangingPassword}
@@ -3117,6 +3137,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                   placeholderTextColor="#FFFFFF"
                   value={repeatNewPassword}
                   onChangeText={setRepeatNewPassword}
+                  onFocus={ensureChangePasswordInputVisible}
                   secureTextEntry={!showRepeatNewPassword}
                   autoCapitalize="none"
                   editable={canUseNewPasswordFields && !isChangingPassword}
