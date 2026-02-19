@@ -1893,7 +1893,7 @@ const FrontScreen = ({
   const homeSwipeTutorialLoopRef = useRef<Animated.CompositeAnimation | null>(null);
   const homeLoaderStartedAtRef = useRef<number>(0);
   const [showSidePanel, setShowSidePanel] = useState(false);
-  const [sidePanelAnimation] = useState(new Animated.Value(-SCREEN_WIDTH * 0.6));
+  const [sidePanelAnimation] = useState(new Animated.Value(0));
   const [isProfileAvatarPulsing, setIsProfileAvatarPulsing] = useState(false);
   const profileAvatarPulseAnim = useRef(new Animated.Value(0)).current;
   const profileAvatarOpenTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -7462,10 +7462,12 @@ const FrontScreen = ({
   };
 
   const openSidePanel = () => {
+    sidePanelAnimation.setValue(0);
     setShowSidePanel(true);
-    Animated.timing(sidePanelAnimation, {
-      toValue: 0,
-      duration: 300,
+    Animated.spring(sidePanelAnimation, {
+      toValue: 1,
+      damping: 18,
+      stiffness: 200,
       useNativeDriver: true,
     }).start();
   };
@@ -7504,8 +7506,8 @@ const FrontScreen = ({
 
   const closeSidePanel = () => {
     Animated.timing(sidePanelAnimation, {
-      toValue: -SCREEN_WIDTH * 0.6,
-      duration: 300,
+      toValue: 0,
+      duration: 200,
       useNativeDriver: true,
     }).start(() => {
       setShowSidePanel(false);
@@ -9040,6 +9042,7 @@ const FrontScreen = ({
           </View>
 
           <ScrollView
+            style={{ flex: 1 }}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.profileRingViewerScrollContent}
@@ -9096,7 +9099,7 @@ const FrontScreen = ({
             )}
           </ScrollView>
           {(viewingProfileRingSource === 'home' || activeBottomTab === 'home') && adsInitialized && (
-            <View style={[styles.profileRingViewerAdContainer, !homeProfileRingBannerReady && { minHeight: 0, marginTop: 0 }]}>
+            <View style={[styles.profileRingViewerAdContainer, !homeProfileRingBannerReady && { opacity: 0 }]}>
               <BannerAd
                 key={`ring-banner-${viewingProfileRingId || 'none'}-${homeProfileRingBannerSize}-${homeProfileRingBannerRequestKey}`}
                 unitId={BANNER_AD_UNIT_ID}
@@ -13705,7 +13708,7 @@ const FrontScreen = ({
                         })()
                     )
                   ) : (
-                    <ScrollView style={[styles.scrollContainer, { flex: 1, paddingTop: 0, paddingBottom: bottomNavHeight + 16, marginTop: chatPanelsTopOffset }]}>
+                    <ScrollView style={[styles.scrollContainer, { flex: 1, paddingTop: 0, marginTop: chatPanelsTopOffset }]} contentContainerStyle={{ paddingBottom: bottomNavHeight + 16 }}>
                       <View style={styles.chatContainer}>
                         {myChannels.filter(c => getRemainingTime(c.post_created_at) !== 'Tiempo agotado').length === 0 ? (
                           <View style={styles.emptyStateContainer}>
@@ -14518,10 +14521,10 @@ const FrontScreen = ({
 
                 </View>
               ) : (
-                <View style={{ flex: 1, position: 'relative', paddingBottom: bottomNavHeight + 16 }}>
+                <View style={{ flex: 1, position: 'relative' }}>
                   <ScrollView
                     style={{ flex: 1, width: '100%', marginTop: chatPanelsTopOffset + 12 }}
-                    contentContainerStyle={{ alignItems: 'center', paddingTop: 6, paddingBottom: 2 }}
+                    contentContainerStyle={{ alignItems: 'center', paddingTop: 6, paddingBottom: bottomNavHeight + 16 }}
                     showsVerticalScrollIndicator={false}
                     onScroll={loadMoreJoinedGroupsIfNeeded}
                     scrollEventThrottle={16}
@@ -15331,102 +15334,137 @@ const FrontScreen = ({
         </TouchableWithoutFeedback>
       </Modal >
 
-      {/* Panel lateral de opciones */}
-      < Modal
+      {/* Panel de opciones del perfil */}
+      <Modal
         visible={showSidePanel}
         transparent
         animationType="none"
-        onRequestClose={closeSidePanel} >
+        statusBarTranslucent
+        onRequestClose={closeSidePanel}>
         <TouchableWithoutFeedback onPress={closeSidePanel}>
-          <View style={styles.sidePanelOverlay}>
+          <Animated.View
+            style={[
+              styles.sidePanelOverlay,
+              {
+                opacity: sidePanelAnimation.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 1],
+                }),
+              },
+            ]}>
             <TouchableWithoutFeedback>
               <Animated.View
                 style={[
                   styles.sidePanel,
                   {
-                    transform: [{ translateX: sidePanelAnimation }],
+                    opacity: sidePanelAnimation,
+                    transform: [
+                      {
+                        scale: sidePanelAnimation.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.92, 1],
+                        }),
+                      },
+                    ],
                   },
                 ]}>
-                {/* Header del panel */}
+                {/* Avatar + Username */}
                 <View style={styles.sidePanelHeader}>
-                  <TouchableOpacity
-                    style={[styles.profileIconCircleLarge, profilePhotoUri ? { shadowOpacity: 0, elevation: 0, borderWidth: 0 } : null]}
-                    activeOpacity={0.7}>
-                    {profilePhotoUri ? (
-                      <Image
-                        source={{ uri: getServerResourceUrl(profilePhotoUri) }}
-                        style={styles.profileImageLarge}
-                      />
-                    ) : (
-                      <MaterialIcons name="person" size={40} color="#FFFFFF" />
-                    )}
-                  </TouchableOpacity>
+                  <View style={styles.sidePanelAvatarRing}>
+                    <View style={[styles.profileIconCircleLarge, profilePhotoUri ? { borderWidth: 0 } : null]}>
+                      {profilePhotoUri ? (
+                        <Image
+                          source={{ uri: getServerResourceUrl(profilePhotoUri) }}
+                          style={styles.profileImageLarge}
+                        />
+                      ) : (
+                        <MaterialIcons name="person" size={36} color="#FFFFFF" />
+                      )}
+                    </View>
+                  </View>
                   <Text style={styles.sidePanelUsername}>
-                    {username || t('front.userPlaceholder')}
+                    {username ? `@${username.replace(/^@/, '')}` : t('front.userPlaceholder')}
                   </Text>
                 </View>
 
-                {/* Opciones del panel */}
+                {/* Divider */}
+                <View style={styles.sidePanelDivider} />
+
+                {/* Menu options */}
                 <View style={styles.sidePanelOptions}>
                   <TouchableOpacity
                     style={styles.sidePanelOption}
-                    onPress={() => {
-                      handleSelectProfilePhoto();
-                    }}>
-                    <MaterialIcons name="photo-camera" size={24} color="#FFB74D" />
+                    activeOpacity={0.6}
+                    onPress={() => handleSelectProfilePhoto()}>
+                    <View style={styles.sidePanelOptionIconWrap}>
+                      <MaterialIcons name="photo-camera" size={20} color="#FFB74D" />
+                    </View>
                     <Text style={styles.sidePanelOptionText}>
                       {t('front.editProfilePhoto')}
                     </Text>
+                    <MaterialIcons name="chevron-right" size={18} color="rgba(255,255,255,0.2)" />
                   </TouchableOpacity>
 
                   <TouchableOpacity
                     style={styles.sidePanelOption}
+                    activeOpacity={0.6}
                     onPress={() => {
                       closeSidePanel();
                       onNavigateToConfiguration?.();
                     }}>
-                    <MaterialIcons name="settings" size={24} color="#FFB74D" />
+                    <View style={styles.sidePanelOptionIconWrap}>
+                      <MaterialIcons name="settings" size={20} color="#FFB74D" />
+                    </View>
                     <Text style={styles.sidePanelOptionText}>
                       {t('config.title')}
                     </Text>
+                    <MaterialIcons name="chevron-right" size={18} color="rgba(255,255,255,0.2)" />
                   </TouchableOpacity>
 
                   <TouchableOpacity
                     style={styles.sidePanelOption}
+                    activeOpacity={0.6}
                     onPress={() => {
                       closeSidePanel();
                       setActiveBottomTab('notifications');
                     }}>
-                    <View style={{ position: 'relative' }}>
-                      <MaterialIcons name="notifications" size={24} color="#FFB74D" />
+                    <View style={[styles.sidePanelOptionIconWrap, { position: 'relative' }]}>
+                      <MaterialIcons name="notifications" size={20} color="#FFB74D" />
                       {unreadNotificationsCount > 0 && (
-                        <View pointerEvents="none" style={styles.unreadCountBadge}>
-                          <Text style={styles.unreadCountBadgeText}>{unreadNotificationsCount}</Text>
+                        <View pointerEvents="none" style={styles.sidePanelBadge}>
+                          <Text style={styles.sidePanelBadgeText}>
+                            {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                          </Text>
                         </View>
                       )}
                     </View>
                     <Text style={styles.sidePanelOptionText}>
                       {t('common.notifications')}
                     </Text>
+                    <MaterialIcons name="chevron-right" size={18} color="rgba(255,255,255,0.2)" />
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    style={styles.sidePanelOption}
+                    style={[styles.sidePanelOption, { borderBottomWidth: 0 }]}
+                    activeOpacity={0.6}
                     onPress={() => {
                       closeSidePanel();
                       toggleSocialPanel();
                     }}>
-                    <MaterialIcons name="link" size={24} color="#FFB74D" />
+                    <View style={styles.sidePanelOptionIconWrap}>
+                      <MaterialIcons name="link" size={20} color="#FFB74D" />
+                    </View>
                     <Text style={styles.sidePanelOptionText}>
                       {t('front.yourSocialNetworks')}
                     </Text>
+                    <MaterialIcons name="chevron-right" size={18} color="rgba(255,255,255,0.2)" />
                   </TouchableOpacity>
                 </View>
               </Animated.View>
             </TouchableWithoutFeedback>
-          </View>
+          </Animated.View>
         </TouchableWithoutFeedback>
-      </Modal >
+      </Modal>
 
       {/* Barra de navegación inferior */}
       {activeBottomTab !== 'notifications' && !isKeyboardVisible && (
@@ -17256,62 +17294,59 @@ const styles = StyleSheet.create({
   },
   sidePanelOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 28,
   },
   sidePanel: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: '60%',
-    backgroundColor: '#000000',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 2,
-      height: 0,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 5,
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: '#141414',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.12)',
+    overflow: 'hidden',
   },
   sidePanelHeader: {
-    paddingTop: 60,
-    paddingHorizontal: 20,
-    paddingBottom: 30,
-    borderBottomWidth: 1,
-    borderBottomColor: '#2D1B0E',
     alignItems: 'center',
+    paddingTop: 28,
+    paddingBottom: 16,
   },
-  profileIconCircleLarge: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#2D1B0E',
-    borderWidth: 2,
-    borderColor: '#2D1B0E',
+  sidePanelAvatarRing: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    borderWidth: 2.5,
+    borderColor: '#FFB74D',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 16,
+    marginBottom: 14,
+  },
+  profileIconCircleLarge: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: '#1E1E1E',
+    alignItems: 'center',
+    justifyContent: 'center',
     overflow: 'hidden',
-    shadowColor: '#FFB74D',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
   },
   profileImageLarge: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
   },
   sidePanelUsername: {
     color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 4,
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+  },
+  sidePanelDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    marginHorizontal: 20,
   },
   sidePanelEmail: {
     color: '#FFB74D',
@@ -17319,22 +17354,48 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
   sidePanelOptions: {
-    flex: 1,
-    paddingTop: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
   },
   sidePanelOption: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderBottomWidth: 0,
+  },
+  sidePanelOptionIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 183, 77, 0.10)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sidePanelOptionText: {
+    flex: 1,
     color: '#FFFFFF',
-    fontSize: 16,
-    marginLeft: 16,
+    fontSize: 15,
+    marginLeft: 14,
     fontWeight: '500',
+  },
+  sidePanelBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#FF5252',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  sidePanelBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '700',
   },
   sidePanelFooter: {
     paddingHorizontal: 20,
@@ -18463,12 +18524,12 @@ const styles = StyleSheet.create({
   },
   profileRingViewerAdContainer: {
     width: '100%',
-    marginTop: 14,
+    marginTop: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 52,
-    marginHorizontal: -20,
-    paddingHorizontal: 0,
+    minHeight: 60,
+    flexShrink: 0,
+    overflow: 'hidden',
   },
   profileRingViewerName: {
     color: '#FFFFFF',
