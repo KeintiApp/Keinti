@@ -9114,6 +9114,12 @@ const FrontScreen = ({
                   setHomeProfileRingBannerReady(false);
 
                   if (homeProfileRingBannerSize === BannerAdSize.ANCHORED_ADAPTIVE_BANNER) {
+                    setHomeProfileRingBannerSize(BannerAdSize.INLINE_ADAPTIVE_BANNER);
+                    setHomeProfileRingBannerRequestKey(k => k + 1);
+                    return;
+                  }
+
+                  if (homeProfileRingBannerSize === BannerAdSize.INLINE_ADAPTIVE_BANNER) {
                     setHomeProfileRingBannerSize(BannerAdSize.BANNER);
                     setHomeProfileRingBannerRequestKey(k => k + 1);
                     return;
@@ -9123,6 +9129,8 @@ const FrontScreen = ({
                     unitId: BANNER_AD_UNIT_ID,
                     size: homeProfileRingBannerSize,
                     isDev: typeof __DEV__ !== 'undefined' ? __DEV__ : undefined,
+                    code: (error as any)?.code,
+                    message: (error as any)?.message,
                     error,
                   });
                 }}
@@ -18459,6 +18467,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 52,
+    marginHorizontal: -20,
+    paddingHorizontal: 0,
   },
   profileRingViewerName: {
     color: '#FFFFFF',
