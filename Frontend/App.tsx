@@ -10,7 +10,7 @@ import { I18nProvider } from './src/i18n/I18nProvider';
 import { type Language } from './src/i18n/translations';
 import mobileAds from 'react-native-google-mobile-ads';
 import { clearKeintiAuthSession, loadKeintiAuthSession, saveKeintiAuthSession } from './src/services/authSessionStorage';
-import { completeSupabaseProfile, exchangeSupabaseSession, getAccountAuthStatus, getMyPersonalData, getUserByUsername } from './src/services/userService';
+import { completeSupabaseProfile, exchangeSupabaseSession, getAccountAuthStatus, getMyPersonalData, getUserByUsername, updatePreferredLanguage } from './src/services/userService';
 import { isSupabaseConfigured, supabase } from './src/config/supabase';
 
 interface SocialNetwork {
@@ -527,6 +527,7 @@ function App() {
     userNationality?: string,
     preferredLanguage?: string,
     isAccountVerified?: boolean,
+    selectedLoginLanguage?: string,
   ) {
     setLoginNotice(null);
     setUserEmail(email);
@@ -536,9 +537,17 @@ function App() {
     setNationality(userNationality || '');
     setAccountVerified(!!isAccountVerified);
 
-    const normalized = (preferredLanguage || '').toString().trim().toLowerCase();
-    if (normalized === 'es' || normalized === 'en') {
-      setLanguage(normalized as Language);
+    const normalizedPreferredLanguage = (preferredLanguage || '').toString().trim().toLowerCase();
+    const normalizedSelectedLoginLanguage = (selectedLoginLanguage || '').toString().trim().toLowerCase();
+    const targetLanguage =
+      normalizedSelectedLoginLanguage === 'es' || normalizedSelectedLoginLanguage === 'en'
+        ? (normalizedSelectedLoginLanguage as Language)
+        : normalizedPreferredLanguage === 'es' || normalizedPreferredLanguage === 'en'
+          ? (normalizedPreferredLanguage as Language)
+          : undefined;
+
+    if (targetLanguage) {
+      setLanguage(targetLanguage);
     }
     
     if (token) {
@@ -548,7 +557,16 @@ function App() {
     }
 
     if (token) {
-      const normalized = (preferredLanguage || '').toString().trim().toLowerCase();
+      const shouldSyncPreferredLanguage =
+        !!targetLanguage &&
+        targetLanguage !== (normalizedPreferredLanguage === 'es' || normalizedPreferredLanguage === 'en'
+          ? (normalizedPreferredLanguage as Language)
+          : undefined);
+
+      if (shouldSyncPreferredLanguage) {
+        updatePreferredLanguage({ token, language: targetLanguage! }).catch(() => {});
+      }
+
       saveKeintiAuthSession({
         token,
         user: {
@@ -557,7 +575,7 @@ function App() {
           profilePhotoUri: photoUri,
           socialNetworks: socials || [],
           nationality: userNationality || undefined,
-          preferredLanguage: normalized === 'es' || normalized === 'en' ? (normalized as any) : undefined,
+          preferredLanguage: targetLanguage,
           accountVerified: !!isAccountVerified,
         },
       }).catch(() => {});

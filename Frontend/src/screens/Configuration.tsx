@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, GestureResponderEvent, Image, Keyboard, Linking, Modal, PermissionsAndroid, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
@@ -10,7 +11,7 @@ import { POLICY_URLS, type PolicyUrlKey } from '../config/policies';
 import { useI18n } from '../i18n/I18nProvider';
 import type { TranslationKey } from '../i18n/translations';
 import { adminReviewAccountSelfie, changeMyPassword, deleteMyAccount, getAccountAuthStatus, getAdminBlockedAccountSelfies, getAdminPendingAccountSelfies, getMyChannelJoinsProgress, getMyDevicePermissions, getMyGroupsActiveMembersProgress, getMyIntimidadesOpensProgress, getMyPersonalData, getMyProfilePublishesProgress, getTotpSetup, setMyDevicePermissions, updateMyNationality, updatePreferredLanguage, uploadAccountSelfie, verifyKeintiAccount, verifyMyPassword, verifyTotpCode } from '../services/userService';
-import PasswordResetModal from '../components/PasswordResetModal';
+import PasswordResetModal, { PASSWORD_RESET_DRAFT_STORAGE_KEY } from '../components/PasswordResetModal';
 import HighlightedI18nText from '../components/HighlightedI18nText';
 import { COUNTRIES } from '../constants/countries';
 
@@ -973,6 +974,36 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
     ensureUsernameLoaded();
   }, [screen, authToken, myUsername]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (screen !== 'changePassword') {
+      return;
+    }
+
+    const restorePasswordResetDraft = async () => {
+      const raw = await AsyncStorage.getItem(PASSWORD_RESET_DRAFT_STORAGE_KEY).catch(() => null);
+      if (!raw || cancelled) {
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(raw) as { active?: boolean } | null;
+        if (parsed?.active && !cancelled) {
+          setPasswordResetVisible(true);
+        }
+      } catch {
+        // ignore invalid persisted state
+      }
+    };
+
+    restorePasswordResetDraft();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [screen]);
 
   useEffect(() => {
     const fetchAdminSelfies = async () => {

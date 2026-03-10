@@ -9,6 +9,7 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useI18n } from '../i18n/I18nProvider';
 import {
@@ -24,6 +25,19 @@ type PasswordResetModalProps = {
   initialEmail?: string;
   disabled?: boolean;
 };
+
+type PasswordResetStep = 'email' | 'code' | 'newPassword';
+
+type PasswordResetDraft = {
+  active: boolean;
+  step: PasswordResetStep;
+  email: string;
+  code?: string;
+  resetToken?: string;
+  updatedAt: number;
+};
+
+export const PASSWORD_RESET_DRAFT_STORAGE_KEY = 'keinti:passwordResetDraft';
 
 const isValidEmailFormat = (value: string) => {
   const v = String(value || '').trim();
@@ -41,10 +55,18 @@ const isStrongPassword = (pass: string) => {
   return letterRegex.test(value) && numberRegex.test(value) && specialCharRegex.test(value);
 };
 
+const isValidPasswordResetStep = (value: unknown): value is PasswordResetStep => {
+  return value === 'email' || value === 'code' || value === 'newPassword';
+};
+
+const clearPasswordResetDraft = async () => {
+  await AsyncStorage.removeItem(PASSWORD_RESET_DRAFT_STORAGE_KEY).catch(() => {});
+};
+
 const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: PasswordResetModalProps) => {
   const { t } = useI18n();
 
-  const [step, setStep] = useState<'email' | 'code' | 'newPassword'>('email');
+  const [step, setStep] = useState<PasswordResetStep>('email');
   const [email, setEmail] = useState('');
   const [emailRegistered, setEmailRegistered] = useState<boolean | null>(null);
   const [emailChecking, setEmailChecking] = useState(false);
@@ -64,6 +86,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
 
   const emailDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [stateHydrated, setStateHydrated] = useState(false);
 
   const resetInternalState = () => {
     setStep('email');
@@ -83,12 +106,88 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
     setChangeError('');
   };
 
-  useEffect(() => {
-    if (!visible) return;
+  const restoreInternalState = (draft: PasswordResetDraft | null) => {
+    const trimmedInitialEmail = String(initialEmail || '').trim();
+    const nextEmail = String(draft?.email || trimmedInitialEmail).trim();
+    const nextStep = isValidPasswordResetStep(draft?.step) ? draft.step : 'email';
 
-    resetInternalState();
+    setStep(nextStep);
+    setEmail(nextEmail);
+    setEmailRegistered(null);
+    setEmailChecking(false);
+    setEmailError('');
+    setSending(false);
+    setInfo('');
+    setCode(String(draft?.code || '').trim().toUpperCase());
+    setCodeError('');
+    setVerifying(false);
+    setResetToken(String(draft?.resetToken || '').trim());
+    setNewPassword1('');
+    setNewPassword2('');
+    setChanging(false);
+    setChangeError('');
+  };
+
+  const handleClose = () => {
+    if (sending || verifying || changing) return;
+
+    clearPasswordResetDraft()
+      .catch(() => {})
+      .finally(() => {
+        onClose();
+      });
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!visible) {
+      setStateHydrated(false);
+      return;
+    }
+
+    setStateHydrated(false);
+
+    const hydrate = async () => {
+      const raw = await AsyncStorage.getItem(PASSWORD_RESET_DRAFT_STORAGE_KEY).catch(() => null);
+
+      if (cancelled) {
+        return;
+      }
+
+      if (!raw) {
+        resetInternalState();
+        setStateHydrated(true);
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(raw) as Partial<PasswordResetDraft> | null;
+        if (parsed?.active) {
+          restoreInternalState({
+            active: true,
+            step: isValidPasswordResetStep(parsed.step) ? parsed.step : 'email',
+            email: String(parsed.email || '').trim(),
+            code: String(parsed.code || '').trim(),
+            resetToken: String(parsed.resetToken || '').trim(),
+            updatedAt: Number(parsed.updatedAt || Date.now()),
+          });
+        } else {
+          resetInternalState();
+        }
+      } catch {
+        resetInternalState();
+      }
+
+      if (!cancelled) {
+        setStateHydrated(true);
+      }
+    };
+
+    hydrate();
 
     return () => {
+      cancelled = true;
       if (emailDebounceRef.current) {
         clearTimeout(emailDebounceRef.current);
         emailDebounceRef.current = null;
@@ -99,10 +198,34 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible]);
+  }, [visible, initialEmail]);
+
+  useEffect(() => {
+    if (!visible || !stateHydrated) return;
+
+    const trimmedEmail = String(email || '').trim();
+    const shouldPersist = step !== 'email' || !!trimmedEmail;
+
+    if (!shouldPersist) {
+      clearPasswordResetDraft().catch(() => {});
+      return;
+    }
+
+    const draft: PasswordResetDraft = {
+      active: true,
+      step,
+      email: trimmedEmail,
+      code: step === 'code' ? String(code || '').trim().toUpperCase() : '',
+      resetToken: step === 'newPassword' ? String(resetToken || '').trim() : '',
+      updatedAt: Date.now(),
+    };
+
+    AsyncStorage.setItem(PASSWORD_RESET_DRAFT_STORAGE_KEY, JSON.stringify(draft)).catch(() => {});
+  }, [visible, stateHydrated, step, email, code, resetToken]);
 
   useEffect(() => {
     if (!visible) return;
+    if (!stateHydrated) return;
     if (step !== 'email') return;
 
     if (emailDebounceRef.current) {
@@ -144,11 +267,10 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
         emailDebounceRef.current = null;
       }
     };
-  }, [visible, step, email, t]);
+  }, [visible, stateHydrated, step, email, t]);
 
   const safeClose = () => {
-    if (sending || verifying || changing) return;
-    onClose();
+    handleClose();
   };
 
   const getNewPasswordError = () => {
@@ -232,7 +354,13 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
                           await requestPasswordResetCode(trimmed);
                           setStep('code');
                         } catch (e: any) {
-                          setEmailError(e?.message || 'No se pudo enviar el código');
+                          const apiCode = e?.code || e?.details?.code;
+                          if (apiCode === 'EMAIL_NOT_REGISTERED') {
+                            setEmailRegistered(false);
+                            setEmailError(t('login.resetEmailNotRegistered'));
+                          } else {
+                            setEmailError(e?.message || 'No se pudo enviar el código');
+                          }
                         } finally {
                           setSending(false);
                         }
@@ -396,6 +524,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
                             resetToken: resetToken,
                             newPassword: newPassword1,
                           });
+                          await clearPasswordResetDraft();
                           setInfo(t('login.resetPasswordChanged'));
 
                           if (closeTimeoutRef.current) {

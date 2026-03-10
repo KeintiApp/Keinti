@@ -70,6 +70,7 @@ const normalizeEmailKey = (raw?: string | null) => String(raw || '').trim().toLo
 const CHANNEL_IMAGE_MESSAGE_PREFIX = '__KIMG__';
 
 const CHANNEL_IMAGE_UNLOCKS_STORAGE_KEY_PREFIX = 'keinti.channel_image_unlocks.';
+const JOINED_CHANNEL_THREAD_READS_STORAGE_KEY_PREFIX = 'keinti.joined_channel_thread_reads.';
 const CHANNEL_IMAGE_LOCK_OVERLAY_TEXT_TOP = 'Visualizar imagen';
 const CHANNEL_IMAGE_LOCK_OVERLAY_TEXT_BOTTOM = '(ver anuncio)';
 // RN Image blurRadius is a platform-specific numeric value; this approximates ~80% blur.
@@ -85,6 +86,11 @@ const hashString = (input: string) => {
     hash = (hash * 31 + input.charCodeAt(i)) | 0;
   }
   return String(hash >>> 0);
+};
+
+const makeJoinedChannelThreadReadsStorageKey = (email?: string | null) => {
+  const safeEmail = normalizeEmailKey(email) || 'anon';
+  return `${JOINED_CHANNEL_THREAD_READS_STORAGE_KEY_PREFIX}${hashString(safeEmail)}`;
 };
 
 const makeChannelImageUnlockKey = (postId: string, messageKey: string, mediaUri: string) => {
@@ -276,6 +282,10 @@ const CarouselPaginationDot = ({ active }: { active: boolean }) => {
     </Svg>
   );
 };
+
+const HOME_PROFILE_RING_DEFAULT_BANNER_SIZE = Platform.OS === 'android'
+  ? BannerAdSize.BANNER
+  : BannerAdSize.ANCHORED_ADAPTIVE_BANNER;
 
 interface GradientIconProps {
   name: string;
@@ -1057,7 +1067,7 @@ const FrontScreen = ({
 
   const [adsInitialized, setAdsInitialized] = useState(false);
   const [homeProfileRingBannerReady, setHomeProfileRingBannerReady] = useState(false);
-  const [homeProfileRingBannerSize, setHomeProfileRingBannerSize] = useState(BannerAdSize.ANCHORED_ADAPTIVE_BANNER);
+  const [homeProfileRingBannerSize, setHomeProfileRingBannerSize] = useState(HOME_PROFILE_RING_DEFAULT_BANNER_SIZE);
   const [homeProfileRingBannerRequestKey, setHomeProfileRingBannerRequestKey] = useState(0);
   const safeAreaInsets = useSafeAreaInsets();
   const bottomSystemOffset = safeAreaInsets.bottom;
@@ -1983,6 +1993,8 @@ const FrontScreen = ({
   const [groupMessageOptions, setGroupMessageOptions] = useState<{ messageIndex: number; memberEmail: string; username: string } | null>(null);
   const [groupLimitedMemberEmails, setGroupLimitedMemberEmails] = useState<string[]>([]);
   const [myChannels, setMyChannels] = useState<any[]>([]);
+  const [joinedChannelUnreadReplyCounts, setJoinedChannelUnreadReplyCounts] = useState<Record<string, number>>({});
+  const [joinedChannelLastSeenReplySortByPostId, setJoinedChannelLastSeenReplySortByPostId] = useState<Record<string, number>>({});
   const [channelInteractions, setChannelInteractions] = useState<any[]>([]);
   const [channelTab, setChannelTab] = useState<'Tu canal' | 'tusCanales'>('Tu canal');
   const [activeJoinedChannelOptionsKey, setActiveJoinedChannelOptionsKey] = useState<string | null>(null);
@@ -1995,6 +2007,10 @@ const FrontScreen = ({
   const [channelMessagesTab, setChannelMessagesTab] = useState<'General' | 'Respuestas'>('General');
 
   const [selectedChannel, setSelectedChannel] = useState<any | null>(null);
+  const joinedChannelThreadReadsStorageKey = useMemo(
+    () => makeJoinedChannelThreadReadsStorageKey(userEmail),
+    [userEmail],
+  );
 
   const normalizeChannelMessageUsername = useCallback((msg: any) => {
     if (typeof msg === 'string') return '';
@@ -2014,6 +2030,108 @@ const FrontScreen = ({
     const t = Date.parse(String(createdAt ?? ''));
     return Number.isFinite(t) ? t : 0;
   }, []);
+
+  const computeJoinedChannelUnreadReplyCountFromMessages = useCallback((
+    rawMessages: any[],
+    ownerEmailForThisChat?: string | null,
+    viewerEmailForThisChat?: string | null,
+    lastSeenReplySortKey: number = 0,
+  ) => {
+    const ownerEmailValue = String(ownerEmailForThisChat ?? '').trim();
+    const viewerEmailValue = String(viewerEmailForThisChat ?? '').trim();
+    if (!ownerEmailValue || !viewerEmailValue || !Array.isArray(rawMessages) || rawMessages.length === 0) {
+      return 0;
+    }
+
+    type InlineReply = {
+      id?: any;
+      created_at?: any;
+      content: string;
+      author: 'publisher' | 'viewer';
+    };
+
+    const repliesByMessageKey: Record<string, InlineReply[]> = {};
+    const processedMessages: any[] = [];
+    const lastMessageKeyByUsername: Record<string, string> = {};
+    const activeThreadKeyByUsername: Record<string, string> = {};
+
+    const sortedMessages = [...rawMessages].sort((a: any, b: any) => {
+      const ta = getChannelMessageSortKey(a?.created_at, a?.id);
+      const tb = getChannelMessageSortKey(b?.created_at, b?.id);
+      if (ta !== tb) return ta - tb;
+      return String(a?.id ?? '').localeCompare(String(b?.id ?? ''));
+    });
+
+    sortedMessages.forEach((msg: any, rawIndex: number) => {
+      const isOwnerMessage = String(msg?.sender_email ?? '') === ownerEmailValue;
+      const messageText = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
+
+      if (!isOwnerMessage) {
+        const senderHandle = normalizeChannelMessageUsername(msg);
+        const activeKey = senderHandle ? activeThreadKeyByUsername[senderHandle] : '';
+        if (activeKey) {
+          if (!repliesByMessageKey[activeKey]) repliesByMessageKey[activeKey] = [];
+          repliesByMessageKey[activeKey].push({
+            id: msg?.id,
+            created_at: msg?.created_at,
+            content: messageText,
+            author: 'viewer',
+          });
+          return;
+        }
+      }
+
+      if (isOwnerMessage && messageText.startsWith('@')) {
+        const firstSpaceIndex = messageText.indexOf(' ');
+        if (firstSpaceIndex > 0) {
+          const targetUsername = messageText.substring(0, firstSpaceIndex);
+          const content = messageText.substring(firstSpaceIndex + 1);
+          const targetMessageKey = activeThreadKeyByUsername[targetUsername] || lastMessageKeyByUsername[targetUsername];
+          if (targetMessageKey) {
+            if (!repliesByMessageKey[targetMessageKey]) repliesByMessageKey[targetMessageKey] = [];
+            repliesByMessageKey[targetMessageKey].push({
+              id: msg?.id,
+              created_at: msg?.created_at,
+              content,
+              author: 'publisher',
+            });
+            activeThreadKeyByUsername[targetUsername] = targetMessageKey;
+            return;
+          }
+        }
+      }
+
+      const key = String(msg?.id ?? `idx-${rawIndex}`);
+      const decorated = (typeof msg === 'string') ? msg : { ...msg, __key: key };
+      processedMessages.push(decorated);
+
+      if (!isOwnerMessage) {
+        const senderHandle = normalizeChannelMessageUsername(msg);
+        if (senderHandle) {
+          lastMessageKeyByUsername[senderHandle] = key;
+        }
+      }
+    });
+
+    processedMessages.sort((a: any, b: any) => {
+      const ta = getChannelMessageSortKey(a?.created_at, a?.id);
+      const tb = getChannelMessageSortKey(b?.created_at, b?.id);
+      if (ta !== tb) return ta - tb;
+      const ka = String(a?.__key ?? a?.id ?? '');
+      const kb = String(b?.__key ?? b?.id ?? '');
+      return ka.localeCompare(kb);
+    });
+
+    return processedMessages.reduce((total: number, msg: any, index: number) => {
+      if (String(msg?.sender_email ?? '') !== viewerEmailValue) return total;
+      const key = String(msg?.__key ?? msg?.id ?? `idx-${index}`);
+      const replies = repliesByMessageKey[key] || [];
+      const unreadPublisherReplies = replies.filter(reply => (
+        reply.author === 'publisher' && getChannelMessageSortKey(reply?.created_at, reply?.id) > lastSeenReplySortKey
+      ));
+      return total + unreadPublisherReplies.length;
+    }, 0);
+  }, [getChannelMessageSortKey, normalizeChannelMessageUsername]);
 
   const channelChatRenderModel = useMemo(() => {
     type InlineReply = {
@@ -2155,12 +2273,22 @@ const FrontScreen = ({
     }
 
     const isChannelHostForThisView = !!userEmail && !!ownerEmailForThisChat && String(userEmail) === String(ownerEmailForThisChat);
-    const baseMessagesToRender = (channelMessagesTab === 'Respuestas' && isChannelHostForThisView)
+    const isJoinedChannelViewerForThisView = !!selectedChannel && !!userEmail && !!ownerEmailForThisChat && !isChannelHostForThisView;
+    const baseMessagesToRender = (channelMessagesTab === 'Respuestas')
       ? processedMessages.filter((msg: any) => {
         const key = String(msg?.__key ?? msg?.id ?? '');
         if (!key) return false;
-        const replies = repliesByMessageKey[key] || [];
-        return replies.some(r => r.author === 'publisher');
+
+        if (isChannelHostForThisView) {
+          const replies = repliesByMessageKey[key] || [];
+          return replies.some(r => r.author === 'publisher');
+        }
+
+        if (isJoinedChannelViewerForThisView) {
+          return String(msg?.sender_email ?? '') === String(userEmail);
+        }
+
+        return true;
       })
       : processedMessages;
 
@@ -2176,6 +2304,54 @@ const FrontScreen = ({
     getChannelMessageSortKey,
     normalizeChannelMessageUsername,
   ]);
+
+  const markSelectedJoinedChannelThreadsAsRead = useCallback(() => {
+    const selectedPostId = String(
+      (selectedChannel as any)?.post_id ??
+      (selectedChannel as any)?.postId ??
+      (selectedChannel as any)?.id ??
+      ''
+    ).trim();
+
+    if (!selectedPostId) return;
+    if (!userEmail || !channelOwnerEmail || String(userEmail) === String(channelOwnerEmail)) return;
+
+    let maxPublisherReplySortKey = 0;
+    Object.values(channelChatRenderModel.repliesByMessageKey).forEach((replies: any) => {
+      (Array.isArray(replies) ? replies : []).forEach((reply: any) => {
+        if (reply?.author !== 'publisher') return;
+        maxPublisherReplySortKey = Math.max(
+          maxPublisherReplySortKey,
+          getChannelMessageSortKey(reply?.created_at, reply?.id),
+        );
+      });
+    });
+
+    setJoinedChannelUnreadReplyCounts(prev => {
+      if (!prev[selectedPostId]) return prev;
+      const next = { ...prev };
+      delete next[selectedPostId];
+      return next;
+    });
+
+    if (maxPublisherReplySortKey <= 0) return;
+
+    setJoinedChannelLastSeenReplySortByPostId(prev => {
+      if ((prev[selectedPostId] ?? 0) >= maxPublisherReplySortKey) return prev;
+      return {
+        ...prev,
+        [selectedPostId]: maxPublisherReplySortKey,
+      };
+    });
+  }, [selectedChannel, userEmail, channelOwnerEmail, channelChatRenderModel.repliesByMessageKey, getChannelMessageSortKey]);
+
+  useEffect(() => {
+    if (!selectedChannel) return;
+    if (channelMessagesTab !== 'Respuestas') return;
+    if (!userEmail || !channelOwnerEmail || String(userEmail) === String(channelOwnerEmail)) return;
+
+    markSelectedJoinedChannelThreadsAsRead();
+  }, [selectedChannel, channelMessagesTab, userEmail, channelOwnerEmail, markSelectedJoinedChannelThreadsAsRead]);
 
   const setHomeCarouselGestureActive = (active: boolean) => {
     isHomeCarouselGestureActiveRef.current = active;
@@ -3106,6 +3282,7 @@ const FrontScreen = ({
   const channelChatLoadingPostIdRef = useRef<string | null>(null);
   const channelChatFetchSeqRef = useRef(0);
   const channelInteractionsFetchSeqRef = useRef(0);
+  const joinedChannelUnreadRefreshSeqRef = useRef(0);
   const channelChatLastSigRef = useRef<string>('');
   const channelOldestMessageIdRef = useRef<number | null>(null);
   const channelOldestFetchInFlightRef = useRef<number | null>(null);
@@ -3174,6 +3351,131 @@ const FrontScreen = ({
       console.error('Error fetching channels:', error);
     }
   };
+
+  const fetchJoinedChannelUnreadReplyCountForChannel = useCallback(async (
+    channel: any,
+    lastSeenMapOverride?: Record<string, number>,
+  ) => {
+    if (!authToken || !userEmail) {
+      return { postId: '', count: 0 };
+    }
+
+    const postId = String(channel?.post_id ?? channel?.postId ?? channel?.id ?? '').trim();
+    const ownerEmail = String(channel?.publisher_email ?? '').trim();
+    if (!postId || !ownerEmail || String(ownerEmail) === String(userEmail)) {
+      return { postId, count: 0 };
+    }
+
+    const lastSeenReplySortKey = Number((lastSeenMapOverride ?? joinedChannelLastSeenReplySortByPostId)[postId] ?? 0) || 0;
+    const collectedMessages: any[] = [];
+    let beforeId: number | null = null;
+
+    while (true) {
+      const params = new URLSearchParams();
+      params.set('limit', String(CHANNEL_CHAT_PAGE_SIZE));
+      if (beforeId && Number.isFinite(beforeId)) {
+        params.set('beforeId', String(beforeId));
+      }
+
+      const response = await fetch(`${API_URL}/api/channels/messages/${postId}?${params.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        break;
+      }
+
+      const data = await response.json().catch(() => ([] as any));
+      const pageMessages = Array.isArray(data)
+        ? data
+        : (Array.isArray((data as any)?.messages) ? (data as any).messages : []);
+
+      if (!pageMessages.length) {
+        break;
+      }
+
+      collectedMessages.push(...pageMessages);
+
+      const hasMore = Array.isArray(data)
+        ? pageMessages.length >= CHANNEL_CHAT_PAGE_SIZE
+        : Boolean((data as any)?.hasMore);
+      const oldestId = Number((pageMessages[0] as any)?.id);
+      const oldestSortKey = getChannelMessageSortKey((pageMessages[0] as any)?.created_at, (pageMessages[0] as any)?.id);
+
+      if (!hasMore || !Number.isFinite(oldestId)) {
+        break;
+      }
+
+      if (lastSeenReplySortKey > 0 && oldestSortKey <= lastSeenReplySortKey) {
+        break;
+      }
+
+      beforeId = oldestId;
+    }
+
+    return {
+      postId,
+      count: computeJoinedChannelUnreadReplyCountFromMessages(
+        collectedMessages,
+        ownerEmail,
+        userEmail,
+        lastSeenReplySortKey,
+      ),
+    };
+  }, [
+    authToken,
+    userEmail,
+    joinedChannelLastSeenReplySortByPostId,
+    getChannelMessageSortKey,
+    computeJoinedChannelUnreadReplyCountFromMessages,
+  ]);
+
+  const refreshJoinedChannelUnreadReplyCounts = useCallback(async (
+    channelsOverride?: any[],
+    lastSeenMapOverride?: Record<string, number>,
+  ) => {
+    if (!authToken || !userEmail) {
+      setJoinedChannelUnreadReplyCounts({});
+      return;
+    }
+
+    const channelsToCheck = Array.isArray(channelsOverride) ? channelsOverride : myChannels;
+    if (!channelsToCheck.length) {
+      setJoinedChannelUnreadReplyCounts({});
+      return;
+    }
+
+    const refreshSeq = ++joinedChannelUnreadRefreshSeqRef.current;
+    const entries = await Promise.all(channelsToCheck.map(async (channel: any) => {
+      try {
+        return await fetchJoinedChannelUnreadReplyCountForChannel(channel, lastSeenMapOverride);
+      } catch {
+        const postId = String(channel?.post_id ?? channel?.postId ?? channel?.id ?? '').trim();
+        return { postId, count: 0 };
+      }
+    }));
+
+    if (refreshSeq !== joinedChannelUnreadRefreshSeqRef.current) return;
+
+    const next: Record<string, number> = {};
+    entries.forEach((entry) => {
+      if (!entry?.postId) return;
+      if ((entry.count || 0) > 0) {
+        next[entry.postId] = entry.count;
+      }
+    });
+
+    setJoinedChannelUnreadReplyCounts(prev => {
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(next);
+      if (prevKeys.length === nextKeys.length && prevKeys.every(key => prev[key] === next[key])) {
+        return prev;
+      }
+      return next;
+    });
+  }, [authToken, userEmail, myChannels, fetchJoinedChannelUnreadReplyCountForChannel]);
 
   const fetchChannelInteractions = async (postId?: string) => {
     if (!authToken) return;
@@ -4043,7 +4345,7 @@ const FrontScreen = ({
   const closeProfileRingViewerPanelAndThen = useCallback((afterClose?: () => void) => {
     if (!showProfileRingViewerPanel) {
       setHomeProfileRingBannerReady(false);
-      setHomeProfileRingBannerSize(BannerAdSize.ANCHORED_ADAPTIVE_BANNER);
+      setHomeProfileRingBannerSize(HOME_PROFILE_RING_DEFAULT_BANNER_SIZE);
       afterClose?.();
       return;
     }
@@ -4058,7 +4360,7 @@ const FrontScreen = ({
       if (!finished) return;
       setShowProfileRingViewerPanel(false);
       setHomeProfileRingBannerReady(false);
-      setHomeProfileRingBannerSize(BannerAdSize.ANCHORED_ADAPTIVE_BANNER);
+      setHomeProfileRingBannerSize(HOME_PROFILE_RING_DEFAULT_BANNER_SIZE);
       setViewingProfileRingId(null);
       setViewingProfileRingSource('profile');
       setViewingProfileRingHomePostId(null);
@@ -4123,7 +4425,7 @@ const FrontScreen = ({
   const openProfileRingViewerPanel = useCallback((ringId: string) => {
     setViewingProfileRingId(ringId);
     setHomeProfileRingBannerReady(false);
-    setHomeProfileRingBannerSize(BannerAdSize.ANCHORED_ADAPTIVE_BANNER);
+    setHomeProfileRingBannerSize(HOME_PROFILE_RING_DEFAULT_BANNER_SIZE);
     setHomeProfileRingBannerRequestKey(k => k + 1);
 
     if (showProfileRingColorPanel) {
@@ -4494,7 +4796,7 @@ const FrontScreen = ({
   useEffect(() => {
     if (activeBottomTab !== 'home') {
       setHomeProfileRingBannerReady(false);
-      setHomeProfileRingBannerSize(BannerAdSize.ANCHORED_ADAPTIVE_BANNER);
+      setHomeProfileRingBannerSize(HOME_PROFILE_RING_DEFAULT_BANNER_SIZE);
     }
   }, [activeBottomTab]);
 
@@ -5640,6 +5942,96 @@ const FrontScreen = ({
       fetchMyChannels();
     }
   }, [authToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const AsyncStorage = getAsyncStorageSafe();
+
+    if (!userEmail) {
+      setJoinedChannelLastSeenReplySortByPostId({});
+      return;
+    }
+
+    if (!AsyncStorage) {
+      setJoinedChannelLastSeenReplySortByPostId({});
+      return;
+    }
+
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(joinedChannelThreadReadsStorageKey);
+        if (cancelled) return;
+
+        if (!raw) {
+          setJoinedChannelLastSeenReplySortByPostId({});
+          return;
+        }
+
+        const parsed = JSON.parse(raw);
+        const next: Record<string, number> = {};
+        Object.entries(parsed ?? {}).forEach(([postId, value]) => {
+          const numericValue = Number(value);
+          if (!postId) return;
+          if (!Number.isFinite(numericValue) || numericValue <= 0) return;
+          next[String(postId)] = numericValue;
+        });
+        setJoinedChannelLastSeenReplySortByPostId(next);
+      } catch {
+        if (!cancelled) {
+          setJoinedChannelLastSeenReplySortByPostId({});
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [joinedChannelThreadReadsStorageKey, userEmail]);
+
+  useEffect(() => {
+    if (!userEmail) return;
+    const AsyncStorage = getAsyncStorageSafe();
+    if (!AsyncStorage) return;
+
+    AsyncStorage.setItem(
+      joinedChannelThreadReadsStorageKey,
+      JSON.stringify(joinedChannelLastSeenReplySortByPostId),
+    ).catch(() => {});
+  }, [joinedChannelLastSeenReplySortByPostId, joinedChannelThreadReadsStorageKey, userEmail]);
+
+  useEffect(() => {
+    const shouldRefreshUnreadCounts =
+      activeBottomTab === 'chat' &&
+      chatView === 'channel' &&
+      channelTab === 'tusCanales' &&
+      !!authToken &&
+      !!userEmail;
+
+    if (!shouldRefreshUnreadCounts) {
+      if (!authToken || !userEmail || myChannels.length === 0) {
+        setJoinedChannelUnreadReplyCounts({});
+      }
+      return;
+    }
+
+    refreshJoinedChannelUnreadReplyCounts();
+    const timer = setInterval(() => {
+      refreshJoinedChannelUnreadReplyCounts();
+    }, 6000);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [
+    activeBottomTab,
+    chatView,
+    channelTab,
+    authToken,
+    userEmail,
+    myChannels,
+    joinedChannelLastSeenReplySortByPostId,
+    refreshJoinedChannelUnreadReplyCounts,
+  ]);
 
   useEffect(() => {
     // Keep host-side request status up to date when viewing "Canal"
@@ -9042,7 +9434,6 @@ const FrontScreen = ({
           </View>
 
           <ScrollView
-            style={{ flex: 1 }}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.profileRingViewerScrollContent}
@@ -9099,7 +9490,13 @@ const FrontScreen = ({
             )}
           </ScrollView>
           {(viewingProfileRingSource === 'home' || activeBottomTab === 'home') && adsInitialized && (
-            <View style={[styles.profileRingViewerAdContainer, !homeProfileRingBannerReady && { opacity: 0 }]}>
+            <View
+              collapsable={false}
+              style={[
+                styles.profileRingViewerAdContainer,
+                !homeProfileRingBannerReady && { minHeight: 0, marginTop: 0 },
+              ]}
+            >
               <BannerAd
                 key={`ring-banner-${viewingProfileRingId || 'none'}-${homeProfileRingBannerSize}-${homeProfileRingBannerRequestKey}`}
                 unitId={BANNER_AD_UNIT_ID}
@@ -9116,13 +9513,7 @@ const FrontScreen = ({
                 onAdFailedToLoad={(error) => {
                   setHomeProfileRingBannerReady(false);
 
-                  if (homeProfileRingBannerSize === BannerAdSize.ANCHORED_ADAPTIVE_BANNER) {
-                    setHomeProfileRingBannerSize(BannerAdSize.INLINE_ADAPTIVE_BANNER);
-                    setHomeProfileRingBannerRequestKey(k => k + 1);
-                    return;
-                  }
-
-                  if (homeProfileRingBannerSize === BannerAdSize.INLINE_ADAPTIVE_BANNER) {
+                  if (homeProfileRingBannerSize !== BannerAdSize.BANNER) {
                     setHomeProfileRingBannerSize(BannerAdSize.BANNER);
                     setHomeProfileRingBannerRequestKey(k => k + 1);
                     return;
@@ -9659,6 +10050,9 @@ const FrontScreen = ({
                     }
                     const pubAnims = publicationAnimations.current[pub.id];
                     const pubDoubleTap = publicationDoubleTapState[pub.id] || { visible: false, emoji: '' };
+                    const joinedStateKey = isJoined ? 'joined' : 'not_joined';
+                    const homeCarouselLoadedMap = homePresentationImagesLoaded[String(pub.id)] || {};
+                    const homeCarouselExtraData = `${JSON.stringify(homeCarouselLoadedMap)}|joined:${joinedStateKey}|rings:${ringsVisible ? 1 : 0}|overlay:${isOverlayVisible ? 1 : 0}|doubleTap:${pubDoubleTap.visible ? pubDoubleTap.emoji || 'visible' : 'hidden'}`;
 
                     return (
                       <Animated.View
@@ -9794,7 +10188,7 @@ const FrontScreen = ({
                             <View style={styles.profilePresentationCarousel}>
                               {(() => {
                                 const total = pub.presentation.images.length;
-                                const loadedMap = homePresentationImagesLoaded[String(pub.id)] || {};
+                                const loadedMap = homeCarouselLoadedMap;
                                 const loadedCount = Math.min(total, Object.values(loadedMap).filter(Boolean).length);
                                 const isLoading = loadedCount < total;
 
@@ -9811,10 +10205,13 @@ const FrontScreen = ({
                                 );
                               })()}
                               <FlatList
-                                key={`home-carousel-${String(pub.id)}-${homeCarouselMountKeysByPubId[String(pub.id)] || 0}-${pub.presentation.images.length}`}
+                                key={`home-carousel-${String(pub.id)}-${homeCarouselMountKeysByPubId[String(pub.id)] || 0}-${pub.presentation.images.length}-${joinedStateKey}`}
                                 data={pub.presentation.images}
                                 keyExtractor={(_, index) => `pub-${pub.id}-image-${index}`}
-                                extraData={homePresentationImagesLoaded[String(pub.id)]}
+                                // Home carousel cells also depend on external state like joined-channel,
+                                // rings visibility and overlay state. Exposing them through `extraData`
+                                // prevents stale Android image surfaces after joining a channel.
+                                extraData={homeCarouselExtraData}
                                 horizontal
                                 pagingEnabled
                                 bounces={false}
@@ -9844,8 +10241,12 @@ const FrontScreen = ({
                                   );
                                   setHomeCarouselGestureActive(false);
                                 }}
-                                renderItem={({ item, index }) => (
-                                  <View style={styles.profilePresentationSlide}>
+                                renderItem={({ item, index }) => {
+                                  const imageUri = getServerResourceUrl(item.uri);
+                                  const imageRenderKey = `pub-${pub.id}-image-${index}-${joinedStateKey}-${String(imageUri || '')}`;
+
+                                  return (
+                                  <View key={imageRenderKey} style={styles.profilePresentationSlide}>
                                     <TouchableWithoutFeedback onPress={() => handlePublicationDoubleTap(pub.id, pub.reactions)}>
                                       <View style={[
                                         styles.carouselImageFrame,
@@ -9858,9 +10259,11 @@ const FrontScreen = ({
                                         }}
                                       >
                                         <Image
-                                          source={{ uri: getServerResourceUrl(item.uri) }}
+                                          key={imageRenderKey}
+                                          source={{ uri: imageUri }}
                                           style={styles.carouselImage}
                                           resizeMode="cover"
+                                          fadeDuration={0}
                                           onLoadEnd={() => markHomePresentationImageLoaded(pub.id, index)}
                                           onError={() => markHomePresentationImageLoaded(pub.id, index)}
                                         />
@@ -9935,7 +10338,7 @@ const FrontScreen = ({
                                       </View>
                                     </TouchableWithoutFeedback>
                                   </View>
-                                )}
+                                );}}
                               />
 
                               <View style={styles.profilePresentationOverlay} pointerEvents="box-none">
@@ -13721,12 +14124,14 @@ const FrontScreen = ({
                           myChannels
                             .filter(c => getRemainingTime(c.post_created_at) !== 'Tiempo agotado')
                             .map((channel, index) => {
+                              const joinedChannelPostId = String(channel.post_id ?? channel.postId ?? channel.id ?? '').trim();
                               const channelKey = String(
                                 channel.post_id ??
                                 channel.postId ??
                                 channel.id ??
                                 `${channel.publisher_email ?? 'unknown'}-${channel.post_created_at ?? index}`
                               );
+                              const unreadRepliesCount = Number(joinedChannelUnreadReplyCounts[joinedChannelPostId] ?? 0) || 0;
 
                               const socials = Array.isArray(channel.social_networks) ? channel.social_networks : [];
                               const visibleSocials = socials
@@ -13767,6 +14172,30 @@ const FrontScreen = ({
                                     borderColor: '#ffbe73ff'
                                   }}
                                 >
+                                  {unreadRepliesCount > 0 && (
+                                    <View
+                                      pointerEvents="none"
+                                      style={{
+                                        position: 'absolute',
+                                        top: -10,
+                                        right: -10,
+                                        minWidth: 24,
+                                        height: 24,
+                                        borderRadius: 12,
+                                        paddingHorizontal: 6,
+                                        backgroundColor: 'rgba(255,255,255,0.8)',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        zIndex: 250,
+                                        elevation: 18,
+                                      }}
+                                    >
+                                      <Text style={{ color: '#000000', fontSize: 12, fontWeight: '900' }}>
+                                        {unreadRepliesCount > 99 ? '99+' : unreadRepliesCount}
+                                      </Text>
+                                    </View>
+                                  )}
+
                                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                                     <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 1 }}>
                                       <Pressable
@@ -14334,14 +14763,8 @@ const FrontScreen = ({
                               </View>
                             ) : null}
 
-                            {(userPublication || selectedChannel) && channelTab === 'Tu canal' && userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail) && (
+                            {(userPublication || selectedChannel) && channelTab === 'Tu canal' && userEmail && channelOwnerEmail && (String(userEmail) === String(channelOwnerEmail) || !!selectedChannel) && (
                               <View style={{ position: 'absolute', right: 0, flexDirection: 'row', alignItems: 'center' }}>
-                                {(userEmail && channelOwnerEmail && userEmail !== channelOwnerEmail) && (
-                                  <Text style={{ color: '#6e6e6eff', fontSize: 12, marginRight: 10 }}>
-                                    ({chatInputValue.length}/280)
-                                  </Text>
-                                )}
-
                                 <TouchableOpacity
                                   activeOpacity={0.85}
                                   onPress={() => {
@@ -14355,11 +14778,11 @@ const FrontScreen = ({
                                   <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' }}>
                                     {channelMessagesTab === 'General'
                                       ? 'General'
-                                      : ((userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) ? 'Tus hilos' : 'Respuesta')}
+                                      : 'Tus hilos'}
                                   </Text>
                                   <Svg
                                     height="3"
-                                    width={channelMessagesTab === 'General' ? 26 : ((userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) ? 60 : 30)}
+                                    width={channelMessagesTab === 'General' ? 26 : 60}
                                     style={{ marginTop: 3 }}
                                   >
                                     <Defs>
@@ -14371,7 +14794,7 @@ const FrontScreen = ({
                                     <Rect
                                       x="0"
                                       y="0"
-                                      width={channelMessagesTab === 'General' ? 26 : ((userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) ? 60 : 30)}
+                                      width={channelMessagesTab === 'General' ? 26 : 60}
                                       height="3"
                                       fill="url(#grad_line_channel_toggle)"
                                       rx="1.5"

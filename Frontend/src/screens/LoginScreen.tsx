@@ -21,7 +21,7 @@ import InAppBrowser from 'react-native-inappbrowser-reborn';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { completeSupabaseProfile, exchangeSupabaseSession } from '../services/userService';
 import { useI18n } from '../i18n/I18nProvider';
-import PasswordResetModal from '../components/PasswordResetModal';
+import PasswordResetModal, { PASSWORD_RESET_DRAFT_STORAGE_KEY } from '../components/PasswordResetModal';
 import { SUPABASE_REDIRECT_URL, isSupabaseConfigured, supabase } from '../config/supabase';
 
 type MarkedSegment = { text: string; kind: 'normal' | 'highlight' };
@@ -204,7 +204,8 @@ interface LoginScreenProps {
     token?: string,
     nationality?: string,
     preferredLanguage?: string,
-    accountVerified?: boolean
+    accountVerified?: boolean,
+    selectedLoginLanguage?: 'es' | 'en'
   ) => void;
   onNavigateToRegister: () => void;
   noticeMessage?: string;
@@ -235,6 +236,32 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
   );
 
   const screenDisabled = isLoading || isGoogleLoading;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const restorePasswordResetDraft = async () => {
+      const raw = await AsyncStorage.getItem(PASSWORD_RESET_DRAFT_STORAGE_KEY).catch(() => null);
+      if (!raw || cancelled) {
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(raw) as { active?: boolean } | null;
+        if (parsed?.active && !cancelled) {
+          setResetVisible(true);
+        }
+      } catch {
+        // ignore invalid persisted state
+      }
+    };
+
+    restorePasswordResetDraft();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!noticeMessage || !noticeToken) {
@@ -353,7 +380,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           exchanged.token,
           exchanged.user.nationality,
           exchanged.user.preferred_language,
-          !!exchanged.user.account_verified
+          !!exchanged.user.account_verified,
+          language
         );
       } catch (err: any) {
         const apiCode = err?.code || err?.details?.code;
@@ -368,7 +396,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
               completed.token,
               completed.user.nationality,
               completed.user.preferred_language,
-              !!completed.user.account_verified
+              !!completed.user.account_verified,
+              language
             );
             return;
           }

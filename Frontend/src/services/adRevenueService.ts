@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import analytics from '@react-native-firebase/analytics';
+import { getAnalytics, logEvent } from '@react-native-firebase/analytics';
 import type { PaidEvent } from 'react-native-google-mobile-ads';
 
 export type AdRevenueFormat = 'interstitial' | 'rewarded' | 'banner' | 'native' | 'app_open';
@@ -31,7 +31,7 @@ const toPlatform = (): AdRevenueRecord['platform'] => {
 
 const logAdRevenueToAnalytics = async (record: AdRevenueRecord) => {
   try {
-    await analytics().logEvent(AD_REVENUE_EVENT_NAME, {
+    await logEvent(getAnalytics(), AD_REVENUE_EVENT_NAME, {
       ad_format: record.format,
       ad_placement: record.placement,
       ad_currency: record.currency,
@@ -44,7 +44,7 @@ const logAdRevenueToAnalytics = async (record: AdRevenueRecord) => {
     });
   } catch (error) {
     if (__DEV__) {
-      console.warn('[AdRevenue][Analytics] Failed to log event', error);
+      console.log('[AdRevenue][Analytics] Failed to log event');
     }
   }
 };
