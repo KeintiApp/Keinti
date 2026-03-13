@@ -25,7 +25,7 @@ import {
   InteractionManager,
   AppState,
 } from 'react-native';
-import type { ImageSourcePropType, ViewToken } from 'react-native';
+import type { ImageSourcePropType } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import MapView, { PROVIDER_GOOGLE, type PoiClickEvent } from 'react-native-maps';
 import Geolocation from '@react-native-community/geolocation';
@@ -516,10 +516,20 @@ const FireworkChatIcon = ({ size, onPress, style }: { size: number, onPress: () 
 const ICON_KEITIN = require('../../assets/images/iconkeitin.png');
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const HOME_CARD_WIDTH = Math.max(1, SCREEN_WIDTH - 4);
+const PROFILE_SCREEN_SIDE_PADDING = 2;
+const PROFILE_CONTENT_WIDTH = Math.max(1, SCREEN_WIDTH - (PROFILE_SCREEN_SIDE_PADDING * 2));
 const REACTION_ITEM_SIZE = (SCREEN_WIDTH - 40) * 0.16 - 6;
 const CHAT_TABS_DEFAULT_OFFSET = 90;
 const CHAT_TABS_TOP = 20;
 const CHAT_TABS_GAP = 10;
+
+// Keep a static Android top inset fallback for styles defined outside the
+// component. Dynamic safe-area handling still happens inside the screen logic.
+const ANDROID_STATUS_BAR_HEIGHT = Platform.OS === 'android' ? 24 : 0;
+const ANDROID_SAFE_TOP = Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT : 0;
+const SOCIAL_PANEL_BASE_HEIGHT = 280;
+const SOCIAL_PANEL_HEIGHT = SOCIAL_PANEL_BASE_HEIGHT + ANDROID_SAFE_TOP;
 
 // Extra spacing above the keyboard so the chat input doesn't feel glued/clipped to it.
 const CHAT_INPUT_KEYBOARD_GAP = Platform.OS === 'ios' ? 18 : 10;
@@ -3792,6 +3802,8 @@ const FrontScreen = ({
   const [carouselImages, setCarouselImages] = useState<CarouselImageData[]>([]);
   const [activeCarouselImageIndex, setActiveCarouselImageIndex] = useState(0);
   const [activeProfileImageIndex, setActiveProfileImageIndex] = useState(0);
+  const editablePresentationActiveIndexRef = useRef(0);
+  const profilePresentationActiveIndexRef = useRef(0);
   const [profileViewMountKey, setProfileViewMountKey] = useState(0);
   const [profileCarouselMountKey, setProfileCarouselMountKey] = useState(0);
   const [profilePresentation, setProfilePresentation] = useState<PresentationContent | null>(null);
@@ -6829,15 +6841,26 @@ const FrontScreen = ({
     const total = Math.max(0, Number(imagesCount) || 0);
     if (total <= 1) {
       homePresentationActiveIndexRef.current[key] = 0;
-      if ((activePresentationIndices[key] || 0) !== 0) {
-        setActivePresentationIndices(prev => ({ ...prev, [key]: 0 }));
-      }
+      setActivePresentationIndices(prev => {
+        const current = prev[key] ?? 0;
+        if (current === 0) return prev;
+        return { ...prev, [key]: 0 };
+      });
       return;
     }
 
-    const w = Math.max(1, Number(layoutWidth) || (SCREEN_WIDTH - 4));
+    const w = Math.max(1, Number(layoutWidth) || HOME_CARD_WIDTH);
     const x = Math.max(0, Number(contentOffsetX) || 0);
-    const nextIndex = Math.max(0, Math.min(total - 1, Math.floor((x + w / 2) / w)));
+    const progress = x / w;
+    const threshold = 0.12;
+
+    let nextIndex = homePresentationActiveIndexRef.current[key] ?? 0;
+    while (nextIndex < total - 1 && progress > nextIndex + threshold) {
+      nextIndex += 1;
+    }
+    while (nextIndex > 0 && progress < nextIndex - threshold) {
+      nextIndex -= 1;
+    }
 
     const prevIndex = homePresentationActiveIndexRef.current[key];
     if (prevIndex === nextIndex) return;
@@ -6848,7 +6871,67 @@ const FrontScreen = ({
       if (current === nextIndex) return prev;
       return { ...prev, [key]: nextIndex };
     });
-  }, [activePresentationIndices]);
+  }, []);
+
+  const updateProfilePresentationActiveIndexFromScroll = useCallback((
+    contentOffsetX: number,
+    layoutWidth: number,
+    imagesCount: number
+  ) => {
+    const total = Math.max(0, Number(imagesCount) || 0);
+    if (total <= 1) {
+      profilePresentationActiveIndexRef.current = 0;
+      setActiveProfileImageIndex(prev => (prev === 0 ? prev : 0));
+      return;
+    }
+
+    const w = Math.max(1, Number(layoutWidth) || PROFILE_CONTENT_WIDTH);
+    const x = Math.max(0, Number(contentOffsetX) || 0);
+    const progress = x / w;
+    const threshold = 0.12;
+
+    let nextIndex = profilePresentationActiveIndexRef.current;
+    while (nextIndex < total - 1 && progress > nextIndex + threshold) {
+      nextIndex += 1;
+    }
+    while (nextIndex > 0 && progress < nextIndex - threshold) {
+      nextIndex -= 1;
+    }
+
+    if (profilePresentationActiveIndexRef.current === nextIndex) return;
+    profilePresentationActiveIndexRef.current = nextIndex;
+    setActiveProfileImageIndex(prev => (prev === nextIndex ? prev : nextIndex));
+  }, []);
+
+  const updateEditablePresentationActiveIndexFromScroll = useCallback((
+    contentOffsetX: number,
+    layoutWidth: number,
+    imagesCount: number
+  ) => {
+    const total = Math.max(0, Number(imagesCount) || 0);
+    if (total <= 1) {
+      editablePresentationActiveIndexRef.current = 0;
+      setActiveCarouselImageIndex(prev => (prev === 0 ? prev : 0));
+      return;
+    }
+
+    const w = Math.max(1, Number(layoutWidth) || PROFILE_CONTENT_WIDTH);
+    const x = Math.max(0, Number(contentOffsetX) || 0);
+    const progress = x / w;
+    const threshold = 0.12;
+
+    let nextIndex = editablePresentationActiveIndexRef.current;
+    while (nextIndex < total - 1 && progress > nextIndex + threshold) {
+      nextIndex += 1;
+    }
+    while (nextIndex > 0 && progress < nextIndex - threshold) {
+      nextIndex -= 1;
+    }
+
+    if (editablePresentationActiveIndexRef.current === nextIndex) return;
+    editablePresentationActiveIndexRef.current = nextIndex;
+    setActiveCarouselImageIndex(prev => (prev === nextIndex ? prev : nextIndex));
+  }, []);
 
   const markProfilePresentationImageLoaded = useCallback((imageIndex: number) => {
     const idx = Number(imageIndex);
@@ -7995,43 +8078,19 @@ const FrontScreen = ({
     return { ...img, clientId: `${Date.now()}-${Math.random().toString(16).slice(2)}` };
   };
 
-  const carouselViewabilityConfig = useRef({ itemVisiblePercentThreshold: 70 });
-
-  const handleCarouselViewableItemsChanged = useRef(
-    ({ viewableItems }: { viewableItems: Array<ViewToken> }) => {
-      if (!viewableItems?.length) {
-        return;
-      }
-      const nextIndex = viewableItems[0]?.index ?? 0;
-      if (typeof nextIndex === 'number') {
-        setActiveCarouselImageIndex(nextIndex);
-      }
-    },
-  );
-
-  const handleProfileViewableItemsChanged = useRef(
-    ({ viewableItems }: { viewableItems: Array<ViewToken> }) => {
-      if (!viewableItems?.length) {
-        return;
-      }
-      const nextIndex = viewableItems[0]?.index ?? 0;
-      if (typeof nextIndex === 'number') {
-        setActiveProfileImageIndex(nextIndex);
-      }
-    },
-  );
-
   useEffect(() => {
     setProfilePhotoUri(initialProfilePhotoUri);
   }, [initialProfilePhotoUri]);
 
   useEffect(() => {
     if (carouselImages.length === 0 && activeCarouselImageIndex !== 0) {
+      editablePresentationActiveIndexRef.current = 0;
       setActiveCarouselImageIndex(0);
     } else if (
       carouselImages.length > 0 &&
       activeCarouselImageIndex >= carouselImages.length
     ) {
+      editablePresentationActiveIndexRef.current = carouselImages.length - 1;
       setActiveCarouselImageIndex(carouselImages.length - 1);
     }
   }, [activeCarouselImageIndex, carouselImages.length]);
@@ -9144,11 +9203,6 @@ const FrontScreen = ({
 
   return (
     <View style={styles.container}>
-      <StatusBar
-        backgroundColor="#000000"
-        barStyle="light-content"
-      />
-
       {actionToast && (
         <Modal transparent visible animationType="none" onRequestClose={() => { }}>
           <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
@@ -10479,7 +10533,7 @@ const FrontScreen = ({
 
                         {pub.presentation.images.length > 0 && (
                           <View>
-                            <View style={styles.profilePresentationCarousel}>
+                            <View style={[styles.profilePresentationCarousel, { width: HOME_CARD_WIDTH }]}>
                               {(() => {
                                 const total = pub.presentation.images.length;
                                 const loadedMap = homeCarouselLoadedMap;
@@ -10511,7 +10565,7 @@ const FrontScreen = ({
                                 bounces={false}
                                 showsHorizontalScrollIndicator={false}
                                 snapToAlignment="center"
-                                snapToInterval={SCREEN_WIDTH - 4}
+                                snapToInterval={HOME_CARD_WIDTH}
                                 decelerationRate="fast"
                                 scrollEventThrottle={16}
                                 removeClippedSubviews={false}
@@ -10540,7 +10594,7 @@ const FrontScreen = ({
                                   const imageRenderKey = `pub-${pub.id}-image-${index}-${joinedStateKey}-${String(imageUri || '')}`;
 
                                   return (
-                                  <View key={imageRenderKey} style={styles.profilePresentationSlide}>
+                                  <View key={imageRenderKey} style={[styles.profilePresentationSlide, { width: HOME_CARD_WIDTH }]}>
                                     <TouchableWithoutFeedback onPress={() => handlePublicationDoubleTap(pub.id, pub.reactions)}>
                                       <View style={[
                                         styles.carouselImageFrame,
@@ -10739,7 +10793,7 @@ const FrontScreen = ({
                             {/* Intimidades Container */}
                             {pub.intimidades.length > 0 && intimidadesVisible[pub.id] && (
                               <View style={{
-                                width: SCREEN_WIDTH - 4,
+                                width: HOME_CARD_WIDTH,
                                 alignSelf: 'center',
                                 backgroundColor: '#000000',
                                 borderRadius: 10,
@@ -11368,7 +11422,7 @@ const FrontScreen = ({
                       </View>
                       {profilePresentation.images.length > 0 && (
                         <View>
-                          <View style={styles.profilePresentationCarousel}>
+                          <View style={[styles.profilePresentationCarousel, { width: PROFILE_CONTENT_WIDTH }]}>
                             {(() => {
                               const total = profilePresentation.images.length;
                               const loadedCount = Math.min(total, profilePresentationLoadedCount);
@@ -11395,13 +11449,26 @@ const FrontScreen = ({
                               bounces={false}
                               decelerationRate="fast"
                               snapToAlignment="center"
-                              snapToInterval={SCREEN_WIDTH - 4}
+                              snapToInterval={PROFILE_CONTENT_WIDTH}
+                              scrollEventThrottle={16}
                               showsHorizontalScrollIndicator={false}
                               removeClippedSubviews={false}
-                              onViewableItemsChanged={handleProfileViewableItemsChanged.current}
-                              viewabilityConfig={carouselViewabilityConfig.current}
+                              onScroll={(event) => {
+                                updateProfilePresentationActiveIndexFromScroll(
+                                  event.nativeEvent.contentOffset.x,
+                                  event.nativeEvent.layoutMeasurement.width,
+                                  profilePresentation.images.length
+                                );
+                              }}
+                              onMomentumScrollEnd={(event) => {
+                                updateProfilePresentationActiveIndexFromScroll(
+                                  event.nativeEvent.contentOffset.x,
+                                  event.nativeEvent.layoutMeasurement.width,
+                                  profilePresentation.images.length
+                                );
+                              }}
                               renderItem={({ item, index }) => (
-                                <View style={styles.profilePresentationSlide}>
+                                <View style={[styles.profilePresentationSlide, { width: PROFILE_CONTENT_WIDTH }]}>
                                   <View
                                     style={[
                                       styles.carouselImageFrame,
@@ -11587,7 +11654,7 @@ const FrontScreen = ({
 
                             return (
                               <View style={{
-                                width: SCREEN_WIDTH - 4,
+                                width: PROFILE_CONTENT_WIDTH,
                                 alignSelf: 'center',
                                 marginTop: 20,
                                 position: 'relative'
@@ -11938,11 +12005,24 @@ const FrontScreen = ({
                         bounces={false}
                         decelerationRate="fast"
                         snapToAlignment="center"
-                        snapToInterval={SCREEN_WIDTH}
+                        snapToInterval={PROFILE_CONTENT_WIDTH}
+                        scrollEventThrottle={16}
                         showsHorizontalScrollIndicator={false}
                         removeClippedSubviews={false}
-                        onViewableItemsChanged={handleCarouselViewableItemsChanged.current}
-                        viewabilityConfig={carouselViewabilityConfig.current}
+                        onScroll={(event) => {
+                          updateEditablePresentationActiveIndexFromScroll(
+                            event.nativeEvent.contentOffset.x,
+                            event.nativeEvent.layoutMeasurement.width,
+                            carouselImages.length
+                          );
+                        }}
+                        onMomentumScrollEnd={(event) => {
+                          updateEditablePresentationActiveIndexFromScroll(
+                            event.nativeEvent.contentOffset.x,
+                            event.nativeEvent.layoutMeasurement.width,
+                            carouselImages.length
+                          );
+                        }}
                         renderItem={({ item, index }) => (
                           <View style={styles.carouselImageSlide}>
                             <View
@@ -15121,8 +15201,6 @@ const FrontScreen = ({
                           onRequestClose={handleCloseChannelImageComposer}
                         >
                           <View style={{ flex: 1, backgroundColor: '#000' }}>
-                            <StatusBar barStyle="light-content" />
-
                             <View
                               style={{
                                 height: 56,
@@ -15207,7 +15285,6 @@ const FrontScreen = ({
                           onRequestClose={closeChannelImageViewer}
                         >
                           <View style={{ flex: 1, backgroundColor: '#000' }}>
-                            <StatusBar barStyle="light-content" />
                             <View
                               style={{
                                 height: 56,
@@ -16056,7 +16133,6 @@ const FrontScreen = ({
         visible={showSidePanel}
         transparent
         animationType="none"
-        statusBarTranslucent
         onRequestClose={closeSidePanel}>
         <TouchableWithoutFeedback onPress={closeSidePanel}>
           <Animated.View
@@ -18182,16 +18258,16 @@ const styles = StyleSheet.create({
     marginBottom: 32,
   },
   carouselFlatList: {
-    width: SCREEN_WIDTH,
+    width: PROFILE_CONTENT_WIDTH,
     alignSelf: 'center',
   },
   carouselImageSlide: {
-    width: SCREEN_WIDTH,
+    width: PROFILE_CONTENT_WIDTH,
     alignItems: 'center',
     justifyContent: 'center',
   },
   carouselImageFrame: {
-    width: SCREEN_WIDTH,
+    width: PROFILE_CONTENT_WIDTH,
     borderRadius: 0,
     overflow: 'hidden',
     borderWidth: 0,
@@ -18448,12 +18524,12 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   profilePresentationCarousel: {
-    width: SCREEN_WIDTH - 4,
+    width: '100%',
     alignSelf: 'center',
     marginBottom: 8,
   },
   profilePresentationSlide: {
-    width: SCREEN_WIDTH - 4,
+    width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -18807,7 +18883,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   bottomPanel: {
-    width: SCREEN_WIDTH - 6,
+    width: '100%',
     minHeight: 46,
     paddingVertical: 4,
     backgroundColor: 'transparent',

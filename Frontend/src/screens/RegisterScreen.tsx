@@ -12,7 +12,7 @@ import {
   Animated,
   Easing,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
@@ -100,6 +100,7 @@ const GradientLoader = () => {
 const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenProps) => {
   const PENDING_SIGNUP_PREFIX = 'keinti:pendingSignup:';
   const { t } = useI18n();
+  const safeAreaInsets = useSafeAreaInsets();
   const USERNAME_MAX_LENGTH = 22; // Incluye el '@'
   const RECTIFICATION_MAX_LENGTH = 220;
   const EMAIL_CODE_MAX_SENDS = 5;
@@ -308,6 +309,9 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
   const isUiBlocked =
     isSubmitting || isVerifyingCode || isCheckingEmail || isCheckingUsername || isSendingRectification;
+
+  const topInset = Math.max(safeAreaInsets.top, Platform.OS === 'android' ? 24 : 0);
+  const bottomInset = Math.max(safeAreaInsets.bottom, Platform.OS === 'android' ? 12 : 0);
 
   const getActivePolicyMd = () => {
     if (activePolicy === 'privacy') return PRIVACY_POLICY_MD;
@@ -1062,13 +1066,16 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   if (activePolicy) {
     return (
       <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-        <View style={styles.policyHeader}>
+        <View style={[styles.policyHeader, { paddingTop: topInset + 8 }]}>
           <TouchableOpacity style={styles.policyBackButton} onPress={() => setActivePolicy(null)} activeOpacity={0.7}>
             <Icon name="arrow-back-ios" size={22} color="#ffffffff" />
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.policyScroll} contentContainerStyle={styles.policyContent}>
+        <ScrollView
+          style={styles.policyScroll}
+          contentContainerStyle={[styles.policyContent, { paddingBottom: bottomInset + 40 }]}
+        >
           <Text style={styles.policyText}>{formatPolicyText(getActivePolicyMd())}</Text>
         </ScrollView>
       </SafeAreaView>
@@ -1079,7 +1086,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* Botón de retroceso */}
       <TouchableOpacity
-        style={styles.backButton}
+        style={[styles.backButton, { top: topInset + 8 }]}
         onPress={handleBack}
         activeOpacity={0.7}
         disabled={isUiBlocked}>
@@ -1092,7 +1099,13 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
           style={styles.keyboardView}>
           <ScrollView
             style={styles.scrollView}
-            contentContainerStyle={styles.scrollViewContent}
+            contentContainerStyle={[
+              styles.scrollViewContent,
+              {
+                paddingTop: topInset + 56,
+                paddingBottom: bottomInset + 40,
+              },
+            ]}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}>
             <View style={styles.content}>
