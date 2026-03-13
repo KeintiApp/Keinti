@@ -1,4 +1,5 @@
 import { API_URL } from '../config/api';
+import type { Language } from '../i18n/translations';
 
 interface LoginPayload {
   email: string;
@@ -42,7 +43,7 @@ interface SocialNetwork {
   link: string;
 }
 
-export const updatePreferredLanguage = async (data: { token: string; language: 'es' | 'en' }) => {
+export const updatePreferredLanguage = async (data: { token: string; language: Language }) => {
   const response = await fetch(`${API_URL}/api/users/language`, {
     method: 'PUT',
     headers: {

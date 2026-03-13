@@ -7,7 +7,7 @@ import RegisterScreen from './src/screens/RegisterScreen';
 import FrontScreen from './src/screens/FrontScreen';
 import Configuration from './src/screens/Configuration';
 import { I18nProvider } from './src/i18n/I18nProvider';
-import { type Language } from './src/i18n/translations';
+import { type Language, isSupportedLanguage } from './src/i18n/translations';
 import mobileAds from 'react-native-google-mobile-ads';
 import { clearKeintiAuthSession, loadKeintiAuthSession, saveKeintiAuthSession } from './src/services/authSessionStorage';
 import { completeSupabaseProfile, exchangeSupabaseSession, getAccountAuthStatus, getMyPersonalData, getUserByUsername, updatePreferredLanguage } from './src/services/userService';
@@ -239,7 +239,11 @@ function App() {
           setLoginNotice({
             message: language === 'es'
               ? 'Email confirmado. Ahora inicia sesión.'
-              : 'Email confirmed. Please sign in.',
+              : language === 'fr'
+                ? 'E-mail confirmé. Connectez-vous maintenant.'
+                : language === 'pt'
+                  ? 'E-mail confirmado. Agora entre na sua conta.'
+                  : 'Email confirmed. Please sign in.',
             token: Date.now(),
           });
         }
@@ -319,7 +323,7 @@ function App() {
       setAccountVerified(!!input.accountVerified);
 
       const normalized = String(input.preferredLanguage || '').trim().toLowerCase();
-      if (normalized === 'es' || normalized === 'en') {
+      if (isSupportedLanguage(normalized)) {
         setLanguage(normalized as Language);
       }
 
@@ -361,7 +365,7 @@ function App() {
     };
 
     const hydrateFromBackendToken = async (token: string, fallback?: {
-      preferredLanguage?: 'es' | 'en';
+      preferredLanguage?: Language;
       nationality?: string;
       username?: string;
       profilePhotoUri?: string;
@@ -446,7 +450,15 @@ function App() {
           accountVerified: stored.user?.accountVerified,
         }).catch(async (err) => {
           if (isLikelyAuthError(err)) {
-            await forceToLogin(language === 'es' ? 'Sesión expirada. Inicia sesión de nuevo.' : 'Session expired. Please sign in again.');
+            await forceToLogin(
+              language === 'es'
+                ? 'Sesión expirada. Inicia sesión de nuevo.'
+                : language === 'fr'
+                  ? 'Session expirée. Connectez-vous à nouveau.'
+                  : language === 'pt'
+                    ? 'Sessão expirada. Entre novamente.'
+                    : 'Session expired. Please sign in again.'
+            );
           }
         });
         return;
@@ -479,7 +491,7 @@ function App() {
 
             const preferredLanguage = String(exchanged.user?.preferred_language || '').trim().toLowerCase();
             const normalizedPreferredLanguage =
-              preferredLanguage === 'es' || preferredLanguage === 'en' ? (preferredLanguage as 'es' | 'en') : undefined;
+              isSupportedLanguage(preferredLanguage) ? preferredLanguage as Language : undefined;
 
             applySessionToState({
               token: exchanged.token,
@@ -540,9 +552,9 @@ function App() {
     const normalizedPreferredLanguage = (preferredLanguage || '').toString().trim().toLowerCase();
     const normalizedSelectedLoginLanguage = (selectedLoginLanguage || '').toString().trim().toLowerCase();
     const targetLanguage =
-      normalizedSelectedLoginLanguage === 'es' || normalizedSelectedLoginLanguage === 'en'
+      isSupportedLanguage(normalizedSelectedLoginLanguage)
         ? (normalizedSelectedLoginLanguage as Language)
-        : normalizedPreferredLanguage === 'es' || normalizedPreferredLanguage === 'en'
+        : isSupportedLanguage(normalizedPreferredLanguage)
           ? (normalizedPreferredLanguage as Language)
           : undefined;
 
@@ -559,7 +571,7 @@ function App() {
     if (token) {
       const shouldSyncPreferredLanguage =
         !!targetLanguage &&
-        targetLanguage !== (normalizedPreferredLanguage === 'es' || normalizedPreferredLanguage === 'en'
+        targetLanguage !== (isSupportedLanguage(normalizedPreferredLanguage)
           ? (normalizedPreferredLanguage as Language)
           : undefined);
 

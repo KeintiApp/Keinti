@@ -1064,6 +1064,12 @@ const FrontScreen = ({
   authToken,
 }: FrontScreenProps) => {
   const { t, language } = useI18n();
+  const localize = (messages: Record<Language, string>) => messages[language] || messages.es;
+  const errorTitle = localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' });
+  const warningTitle = localize({ es: 'Aviso', en: 'Notice', fr: 'Avis', pt: 'Aviso' });
+  const sessionRequiredTitle = localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória' });
+  const permissionRequiredTitle = localize({ es: 'Permiso requerido', en: 'Permission required', fr: 'Autorisation requise', pt: 'Permissão obrigatória' });
+  const adUnavailableTitle = localize({ es: 'Anuncio no disponible', en: 'Ad unavailable', fr: 'Annonce indisponible', pt: 'Anúncio indisponível' });
 
   const [adsInitialized, setAdsInitialized] = useState(false);
   const [homeProfileRingBannerReady, setHomeProfileRingBannerReady] = useState(false);
@@ -1178,7 +1184,12 @@ const FrontScreen = ({
             // If showing fails, don't block the user from seeing the content.
             revealIntimidadesForPub(pubId);
           } else if (unlockKey) {
-            Alert.alert('Anuncio no disponible', 'No se pudo mostrar el anuncio en este momento.');
+            Alert.alert(adUnavailableTitle, localize({
+              es: 'No se pudo mostrar el anuncio en este momento.',
+              en: 'The ad could not be shown right now.',
+              fr: "Impossible d'afficher l'annonce pour le moment.",
+              pt: 'Não foi possível mostrar o anúncio neste momento.',
+            }));
           }
         }
       }
@@ -1233,7 +1244,12 @@ const FrontScreen = ({
         // If the ad fails, allow continuing without blocking.
         revealIntimidadesForPub(pubId);
       } else if (unlockKey) {
-        Alert.alert('Anuncio no disponible', 'No hay anuncios disponibles en este momento.');
+        Alert.alert(adUnavailableTitle, localize({
+          es: 'No hay anuncios disponibles en este momento.',
+          en: 'There are no ads available right now.',
+          fr: "Aucune annonce n'est disponible pour le moment.",
+          pt: 'Não há anúncios disponíveis neste momento.',
+        }));
       }
     });
 
@@ -1307,7 +1323,12 @@ const FrontScreen = ({
 
     const rewarded = rewardedAdRef.current;
     if (!rewarded) {
-      Alert.alert('Anuncio no disponible', 'No se encontró el módulo de anuncios.');
+      Alert.alert(adUnavailableTitle, localize({
+        es: 'No se encontró el módulo de anuncios.',
+        en: 'The ad module was not found.',
+        fr: "Le module d'annonces est introuvable.",
+        pt: 'O módulo de anúncios não foi encontrado.',
+      }));
       return;
     }
 
@@ -1320,7 +1341,12 @@ const FrontScreen = ({
         rewarded.show();
       } catch {
         resetRewardedGateState();
-        Alert.alert('Anuncio no disponible', 'No se pudo mostrar el anuncio en este momento.');
+        Alert.alert(adUnavailableTitle, localize({
+          es: 'No se pudo mostrar el anuncio en este momento.',
+          en: 'The ad could not be shown right now.',
+          fr: "Impossible d'afficher l'annonce pour le moment.",
+          pt: 'Não foi possível mostrar o anúncio neste momento.',
+        }));
       }
       return;
     }
@@ -1337,7 +1363,12 @@ const FrontScreen = ({
       rewarded.load();
 
       if (pendingKey) {
-        Alert.alert('Anuncio no disponible', 'No se pudo mostrar el anuncio en este momento.');
+        Alert.alert(adUnavailableTitle, localize({
+          es: 'No se pudo mostrar el anuncio en este momento.',
+          en: 'The ad could not be shown right now.',
+          fr: "Impossible d'afficher l'annonce pour le moment.",
+          pt: 'Não foi possível mostrar o anúncio neste momento.',
+        }));
       }
     }, 7000);
 
@@ -1525,7 +1556,12 @@ const FrontScreen = ({
 
   const openGroupMembersPanel = (group: Group) => {
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para ver los miembros.');
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para ver los miembros.',
+        en: 'Sign in to view the members.',
+        fr: 'Connectez-vous pour voir les membres.',
+        pt: 'Entre para ver os membros.',
+      }));
       return;
     }
 
@@ -1679,7 +1715,12 @@ const FrontScreen = ({
 
   const triggerGroupMembersPulseAndOpen = (group: Group) => {
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para ver los miembros.');
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para ver los miembros.',
+        en: 'Sign in to view the members.',
+        fr: 'Connectez-vous pour voir les membres.',
+        pt: 'Entre para ver os membros.',
+      }));
       return;
     }
 
@@ -1785,7 +1826,12 @@ const FrontScreen = ({
       const isRemoteImage = trimmedUri.startsWith('http') || trimmedUri.startsWith('/api/');
 
       if (!editingGroupId && isRemoteImage) {
-        throw new Error('Selecciona una imagen para crear el grupo.');
+        throw new Error(localize({
+          es: 'Selecciona una imagen para crear el grupo.',
+          en: 'Select an image to create the group.',
+          fr: 'Sélectionnez une image pour créer le groupe.',
+          pt: 'Selecione uma imagem para criar o grupo.',
+        }));
       }
 
       const formData = new FormData();
@@ -1811,7 +1857,12 @@ const FrontScreen = ({
 
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
-          throw new Error(err?.error || 'Error al actualizar grupo');
+          throw new Error(err?.error || localize({
+            es: 'No se pudo actualizar el grupo.',
+            en: 'The group could not be updated.',
+            fr: 'Impossible de mettre à jour le groupe.',
+            pt: 'Não foi possível atualizar o grupo.',
+          }));
         }
 
         const updated = await resp.json();
@@ -1836,7 +1887,12 @@ const FrontScreen = ({
 
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
-          throw new Error(err?.error || 'Error al crear grupo');
+          throw new Error(err?.error || localize({
+            es: 'No se pudo crear el grupo.',
+            en: 'The group could not be created.',
+            fr: 'Impossible de créer le groupe.',
+            pt: 'Não foi possível criar o grupo.',
+          }));
         }
 
         const created = await resp.json();
@@ -1853,7 +1909,12 @@ const FrontScreen = ({
       setShowCreateGroupPanel(false);
     } catch (e: any) {
       console.error('Error creating/updating group:', e);
-      Alert.alert('Error', e?.message || 'No se pudo guardar el grupo');
+      Alert.alert(errorTitle, e?.message || localize({
+        es: 'No se pudo guardar el grupo.',
+        en: 'The group could not be saved.',
+        fr: 'Impossible d’enregistrer le groupe.',
+        pt: 'Não foi possível salvar o grupo.',
+      }));
     } finally {
       setIsSavingGroup(false);
     }
@@ -2312,9 +2373,10 @@ const FrontScreen = ({
       (selectedChannel as any)?.id ??
       ''
     ).trim();
+    const selectedChannelOwnerEmail = String((selectedChannel as any)?.publisher_email ?? '').trim();
 
     if (!selectedPostId) return;
-    if (!userEmail || !channelOwnerEmail || String(userEmail) === String(channelOwnerEmail)) return;
+    if (!userEmail || !selectedChannelOwnerEmail || String(userEmail) === selectedChannelOwnerEmail) return;
 
     let maxPublisherReplySortKey = 0;
     Object.values(channelChatRenderModel.repliesByMessageKey).forEach((replies: any) => {
@@ -2343,15 +2405,17 @@ const FrontScreen = ({
         [selectedPostId]: maxPublisherReplySortKey,
       };
     });
-  }, [selectedChannel, userEmail, channelOwnerEmail, channelChatRenderModel.repliesByMessageKey, getChannelMessageSortKey]);
+  }, [selectedChannel, userEmail, channelChatRenderModel.repliesByMessageKey, getChannelMessageSortKey]);
 
   useEffect(() => {
+    const selectedChannelOwnerEmail = String((selectedChannel as any)?.publisher_email ?? '').trim();
+
     if (!selectedChannel) return;
     if (channelMessagesTab !== 'Respuestas') return;
-    if (!userEmail || !channelOwnerEmail || String(userEmail) === String(channelOwnerEmail)) return;
+    if (!userEmail || !selectedChannelOwnerEmail || String(userEmail) === selectedChannelOwnerEmail) return;
 
     markSelectedJoinedChannelThreadsAsRead();
-  }, [selectedChannel, channelMessagesTab, userEmail, channelOwnerEmail, markSelectedJoinedChannelThreadsAsRead]);
+  }, [selectedChannel, channelMessagesTab, userEmail, markSelectedJoinedChannelThreadsAsRead]);
 
   const setHomeCarouselGestureActive = (active: boolean) => {
     isHomeCarouselGestureActiveRef.current = active;
@@ -2442,7 +2506,12 @@ const FrontScreen = ({
 
   const handlePickGroupImage = async () => {
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para enviar imágenes.');
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para enviar imágenes.',
+        en: 'Sign in to send images.',
+        fr: 'Connectez-vous pour envoyer des images.',
+        pt: 'Entre para enviar imagens.',
+      }));
       return;
     }
 
@@ -2472,7 +2541,12 @@ const FrontScreen = ({
     } catch (error: any) {
       if (error?.code !== 'E_PICKER_CANCELLED') {
         console.error('Error al seleccionar imagen del grupo:', error);
-        Alert.alert('Error', 'No se pudo seleccionar la imagen. Intenta de nuevo.');
+        Alert.alert(errorTitle, localize({
+          es: 'No se pudo seleccionar la imagen. Intenta de nuevo.',
+          en: 'The image could not be selected. Please try again.',
+          fr: "Impossible de sélectionner l'image. Réessayez.",
+          pt: 'Não foi possível selecionar a imagem. Tente novamente.',
+        }));
       }
     }
   };
@@ -2488,7 +2562,12 @@ const FrontScreen = ({
   const handleApplyGroupImage = async () => {
     if (isSendingGroupImage) return;
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para enviar imágenes.');
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para enviar imágenes.',
+        en: 'Sign in to send images.',
+        fr: 'Connectez-vous pour envoyer des images.',
+        pt: 'Entre para enviar imagens.',
+      }));
       return;
     }
     if (!selectedGroup?.id) return;
@@ -2533,12 +2612,22 @@ const FrontScreen = ({
           const host = groupOwnerUsername || 'anfitrión';
           showActionToast(formatHostLimitedInteractions(host));
         } else {
-          Alert.alert('Aviso', errorMessage || 'No se pudo enviar la imagen');
+          Alert.alert(warningTitle, errorMessage || localize({
+            es: 'No se pudo enviar la imagen.',
+            en: 'The image could not be sent.',
+            fr: "Impossible d'envoyer l'image.",
+            pt: 'Não foi possível enviar a imagem.',
+          }));
         }
       }
     } catch (e) {
       console.error('Error sending group image:', e);
-      Alert.alert('Error', 'Error de conexión al enviar la imagen');
+      Alert.alert(errorTitle, localize({
+        es: 'Error de conexión al enviar la imagen.',
+        en: 'Connection error while sending the image.',
+        fr: "Erreur de connexion lors de l'envoi de l'image.",
+        pt: 'Erro de conexão ao enviar a imagem.',
+      }));
     } finally {
       setIsSendingGroupImage(false);
     }
@@ -2558,7 +2647,12 @@ const FrontScreen = ({
 
   const handlePickChannelImage = async () => {
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para enviar imágenes.');
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para enviar imágenes.',
+        en: 'Sign in to send images.',
+        fr: 'Connectez-vous pour envoyer des images.',
+        pt: 'Entre para enviar imagens.',
+      }));
       return;
     }
 
@@ -2591,7 +2685,12 @@ const FrontScreen = ({
     } catch (error: any) {
       if (error?.code !== 'E_PICKER_CANCELLED') {
         console.error('Error al seleccionar imagen del canal:', error);
-        Alert.alert('Error', 'No se pudo seleccionar la imagen. Intenta de nuevo.');
+        Alert.alert(errorTitle, localize({
+          es: 'No se pudo seleccionar la imagen. Intenta de nuevo.',
+          en: 'The image could not be selected. Please try again.',
+          fr: "Impossible de sélectionner l'image. Réessayez.",
+          pt: 'Não foi possível selecionar a imagem. Tente novamente.',
+        }));
       }
     }
   };
@@ -2607,7 +2706,12 @@ const FrontScreen = ({
   const handleApplyChannelImage = async () => {
     if (isSendingChannelImage) return;
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para enviar imágenes.');
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para enviar imágenes.',
+        en: 'Sign in to send images.',
+        fr: 'Connectez-vous pour envoyer des images.',
+        pt: 'Entre para enviar imagens.',
+      }));
       return;
     }
     if (!channelDraftImageUri) return;
@@ -2655,7 +2759,12 @@ const FrontScreen = ({
         const errorMessage = String((errorData as any)?.error || '').trim();
 
         if ((errorData as any)?.code === 'WAIT_FOR_PUBLISHER_REPLY') {
-          showActionToast('Espera la respuesta del creador para poder responder de nuevo');
+          showActionToast(localize({
+            es: 'Espera la respuesta del creador para poder responder de nuevo',
+            en: 'Wait for the creator response before replying again',
+            fr: 'Attendez la réponse du créateur avant de répondre à nouveau',
+            pt: 'Espere a resposta do criador antes de responder novamente',
+          }));
           return;
         }
 
@@ -2672,13 +2781,23 @@ const FrontScreen = ({
             const publisherName = selectedChannel ? selectedChannel.username : (userPublication?.user?.username || 'usuario');
             showHostLimitWarning(publisherName);
           } else {
-            Alert.alert('Aviso', errorMessage || 'No se pudo enviar la imagen');
+            Alert.alert(warningTitle, errorMessage || localize({
+              es: 'No se pudo enviar la imagen.',
+              en: 'The image could not be sent.',
+              fr: "Impossible d'envoyer l'image.",
+              pt: 'Não foi possível enviar a imagem.',
+            }));
           }
         }
       }
     } catch (error) {
       console.error('Error sending image message:', error);
-      Alert.alert('Error', 'Error de conexión al enviar la imagen');
+      Alert.alert(errorTitle, localize({
+        es: 'Error de conexión al enviar la imagen.',
+        en: 'Connection error while sending the image.',
+        fr: "Erreur de connexion lors de l'envoi de l'image.",
+        pt: 'Erro de conexão ao enviar a imagem.',
+      }));
     } finally {
       setIsSendingChannelImage(false);
     }
@@ -2873,7 +2992,12 @@ const FrontScreen = ({
     } catch (error: any) {
       if (error?.code !== 'E_PICKER_CANCELLED') {
         console.error('Error al seleccionar imagen del grupo:', error);
-        Alert.alert('Error', 'No se pudo seleccionar la imagen. Intenta de nuevo.');
+        Alert.alert(errorTitle, localize({
+          es: 'No se pudo seleccionar la imagen. Intenta de nuevo.',
+          en: 'The image could not be selected. Please try again.',
+          fr: "Impossible de sélectionner l'image. Réessayez.",
+          pt: 'Não foi possível selecionar a imagem. Tente novamente.',
+        }));
       }
 
       // Cancelación o error: restaurar UI.
@@ -3147,13 +3271,28 @@ const FrontScreen = ({
 
       const canOpen = await Linking.canOpenURL(safeUrl);
       if (!canOpen) {
-        Alert.alert('Enlace no soportado', 'No se puede abrir este enlace en tu dispositivo.');
+        Alert.alert(localize({
+          es: 'Enlace no soportado',
+          en: 'Unsupported link',
+          fr: 'Lien non pris en charge',
+          pt: 'Link não suportado',
+        }), localize({
+          es: 'No se puede abrir este enlace en tu dispositivo.',
+          en: 'This link cannot be opened on your device.',
+          fr: 'Ce lien ne peut pas être ouvert sur votre appareil.',
+          pt: 'Este link não pode ser aberto no seu dispositivo.',
+        }));
         return;
       }
       await Linking.openURL(safeUrl);
     } catch (err) {
       console.error("Couldn't load page", err);
-      Alert.alert('Error', 'No se pudo abrir el enlace');
+      Alert.alert(errorTitle, localize({
+        es: 'No se pudo abrir el enlace.',
+        en: 'The link could not be opened.',
+        fr: 'Impossible d’ouvrir le lien.',
+        pt: 'Não foi possível abrir o link.',
+      }));
     }
   };
 
@@ -4026,7 +4165,12 @@ const FrontScreen = ({
   const openProfileRingLocationPicker = useCallback(async () => {
     const ok = await requestLocationPermissionIfNeeded();
     if (!ok) {
-      Alert.alert('Permiso requerido', 'Activa el permiso de ubicación para seleccionar una ubicación.');
+      Alert.alert(permissionRequiredTitle, localize({
+        es: 'Activa el permiso de ubicación para seleccionar una ubicación.',
+        en: 'Enable location permission to select a location.',
+        fr: 'Activez l’autorisation de localisation pour sélectionner un lieu.',
+        pt: 'Ative a permissão de localização para selecionar um local.',
+      }));
       return;
     }
 
@@ -4094,7 +4238,7 @@ const FrontScreen = ({
       setProfileRingLocationSearchError('');
       try {
         const resp = await fetch(
-          `${API_URL}/api/places/autocomplete?q=${encodeURIComponent(q)}&language=es`,
+          `${API_URL}/api/places/autocomplete?q=${encodeURIComponent(q)}&language=${encodeURIComponent(language)}`,
           {
             headers: {
               Authorization: `Bearer ${authToken}`,
@@ -4105,11 +4249,26 @@ const FrontScreen = ({
 
         if (!resp.ok) {
           if (resp.status === 401 || resp.status === 403) {
-            if (isActive) setProfileRingLocationSearchError('Inicia sesión para buscar ubicaciones.');
+            if (isActive) setProfileRingLocationSearchError(localize({
+              es: 'Inicia sesión para buscar ubicaciones.',
+              en: 'Sign in to search for locations.',
+              fr: 'Connectez-vous pour rechercher des lieux.',
+              pt: 'Entre para pesquisar locais.',
+            }));
           } else if (resp.status === 503) {
-            if (isActive) setProfileRingLocationSearchError('Búsqueda de ubicación no configurada en el servidor.');
+            if (isActive) setProfileRingLocationSearchError(localize({
+              es: 'La búsqueda de ubicación no está configurada en el servidor.',
+              en: 'Location search is not configured on the server.',
+              fr: 'La recherche de lieux n’est pas configurée sur le serveur.',
+              pt: 'A busca de locais não está configurada no servidor.',
+            }));
           } else {
-            if (isActive) setProfileRingLocationSearchError('No se pudo buscar la ubicación.');
+            if (isActive) setProfileRingLocationSearchError(localize({
+              es: 'No se pudo buscar la ubicación.',
+              en: 'The location could not be searched.',
+              fr: 'Impossible de rechercher ce lieu.',
+              pt: 'Não foi possível pesquisar o local.',
+            }));
           }
           if (isActive) setProfileRingLocationPredictions([]);
           return;
@@ -4128,7 +4287,12 @@ const FrontScreen = ({
       } catch {
         if (isActive) {
           setProfileRingLocationPredictions([]);
-          setProfileRingLocationSearchError('No se pudo buscar la ubicación.');
+          setProfileRingLocationSearchError(localize({
+            es: 'No se pudo buscar la ubicación.',
+            en: 'The location could not be searched.',
+            fr: 'Impossible de rechercher ce lieu.',
+            pt: 'Não foi possível pesquisar o local.',
+          }));
         }
       } finally {
         if (isActive) setIsProfileRingLocationSearching(false);
@@ -4139,7 +4303,7 @@ const FrontScreen = ({
       isActive = false;
       clearTimeout(timeout);
     };
-  }, [profileRingLocationSearchQuery, showProfileRingLocationPicker, isPlacesSearchEnabled, authToken, API_URL]);
+  }, [profileRingLocationSearchQuery, showProfileRingLocationPicker, isPlacesSearchEnabled, authToken, API_URL, language]);
 
   const moveProfileRingLocationMapTo = useCallback((lat: number, lng: number) => {
     const region = {
@@ -4165,7 +4329,7 @@ const FrontScreen = ({
     setProfileRingLocationSearchError('');
     try {
       const resp = await fetch(
-        `${API_URL}/api/places/details?placeId=${encodeURIComponent(safePlaceId)}&language=es`,
+        `${API_URL}/api/places/details?placeId=${encodeURIComponent(safePlaceId)}&language=${encodeURIComponent(language)}`,
         {
           headers: {
             Authorization: `Bearer ${authToken}`,
@@ -4175,14 +4339,24 @@ const FrontScreen = ({
 
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        setProfileRingLocationSearchError('No se pudo obtener detalles del lugar.');
+        setProfileRingLocationSearchError(localize({
+          es: 'No se pudieron obtener los detalles del lugar.',
+          en: 'The place details could not be loaded.',
+          fr: 'Impossible de charger les détails du lieu.',
+          pt: 'Não foi possível carregar os detalhes do local.',
+        }));
         return;
       }
 
       const lat = Number((data as any)?.lat);
       const lng = Number((data as any)?.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-        setProfileRingLocationSearchError('Ubicación inválida.');
+        setProfileRingLocationSearchError(localize({
+          es: 'La ubicación no es válida.',
+          en: 'The location is invalid.',
+          fr: 'Le lieu sélectionné n’est pas valide.',
+          pt: 'O local selecionado não é válido.',
+        }));
         return;
       }
 
@@ -4194,11 +4368,16 @@ const FrontScreen = ({
       moveProfileRingLocationMapTo(lat, lng);
       Keyboard.dismiss();
     } catch {
-      setProfileRingLocationSearchError('No se pudo obtener detalles del lugar.');
+      setProfileRingLocationSearchError(localize({
+        es: 'No se pudieron obtener los detalles del lugar.',
+        en: 'The place details could not be loaded.',
+        fr: 'Impossible de charger les détails du lieu.',
+        pt: 'Não foi possível carregar os detalhes do local.',
+      }));
     } finally {
       setIsProfileRingLocationSearching(false);
     }
-  }, [isPlacesSearchEnabled, moveProfileRingLocationMapTo, authToken, API_URL]);
+  }, [isPlacesSearchEnabled, moveProfileRingLocationMapTo, authToken, API_URL, language]);
 
   const closeProfileRingLocationPicker = useCallback(() => {
     setShowProfileRingLocationPicker(false);
@@ -5255,7 +5434,12 @@ const FrontScreen = ({
 
   const openGroupRequestPanel = async (targetUsername: string) => {
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para solicitar.');
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para solicitar.',
+        en: 'Sign in to make a request.',
+        fr: 'Connectez-vous pour faire une demande.',
+        pt: 'Entre para fazer uma solicitação.',
+      }));
       return;
     }
 
@@ -5285,7 +5469,12 @@ const FrontScreen = ({
     if (isSubmittingGroupRequest) return;
 
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para solicitar.');
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para solicitar.',
+        en: 'Sign in to make a request.',
+        fr: 'Connectez-vous pour faire une demande.',
+        pt: 'Entre para fazer uma solicitação.',
+      }));
       return;
     }
 
@@ -5312,12 +5501,22 @@ const FrontScreen = ({
 
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
-        throw new Error(err?.error || 'No se pudo enviar la solicitud');
+        throw new Error(err?.error || localize({
+          es: 'No se pudo enviar la solicitud.',
+          en: 'The request could not be sent.',
+          fr: 'Impossible d’envoyer la demande.',
+          pt: 'Não foi possível enviar a solicitação.',
+        }));
       }
 
       const safeTarget = String(groupRequestTargetUsername || '').trim();
       const targetWithAt = safeTarget.startsWith('@') ? safeTarget : `@${safeTarget}`;
-      showBottomToast(`La solicitud a sido enviada a ${targetWithAt}`);
+      showBottomToast(localize({
+        es: `La solicitud ha sido enviada a ${targetWithAt}`,
+        en: `The request has been sent to ${targetWithAt}`,
+        fr: `La demande a été envoyée à ${targetWithAt}`,
+        pt: `A solicitação foi enviada para ${targetWithAt}`,
+      }));
 
       // Optimistic UI: show pending immediately
       setSentGroupRequestStatusByTarget(prev => ({
@@ -5410,7 +5609,12 @@ const FrontScreen = ({
 
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
-        throw new Error(err?.error || 'No se pudo actualizar la solicitud');
+        throw new Error(err?.error || localize({
+          es: 'No se pudo actualizar la solicitud.',
+          en: 'The request could not be updated.',
+          fr: 'Impossible de mettre à jour la demande.',
+          pt: 'Não foi possível atualizar a solicitação.',
+        }));
       }
 
       setNotifications(prev => prev.map(row => row.id === n.id ? { ...row, status: action === 'accept' ? 'accepted' : 'ignored' } : row));
@@ -5426,7 +5630,12 @@ const FrontScreen = ({
         setGroupsTab('unidos');
       }
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo actualizar la solicitud');
+      Alert.alert(errorTitle, e?.message || localize({
+        es: 'No se pudo actualizar la solicitud.',
+        en: 'The request could not be updated.',
+        fr: 'Impossible de mettre à jour la demande.',
+        pt: 'Não foi possível atualizar a solicitação.',
+      }));
     }
   };
 
@@ -5626,7 +5835,12 @@ const FrontScreen = ({
 
   const limitGroupMember = async (memberEmail: string, username: string) => {
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para gestionar el grupo.');
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para gestionar el grupo.',
+        en: 'Sign in to manage the group.',
+        fr: 'Connectez-vous pour gérer le groupe.',
+        pt: 'Entre para gerenciar o grupo.',
+      }));
       return;
     }
     if (!selectedGroup?.id) return;
@@ -5643,17 +5857,32 @@ const FrontScreen = ({
 
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
-        throw new Error(err?.error || 'No se pudo limitar');
+        throw new Error(err?.error || localize({
+          es: 'No se pudo limitar al miembro.',
+          en: 'The member could not be restricted.',
+          fr: 'Impossible de limiter ce membre.',
+          pt: 'Não foi possível limitar o membro.',
+        }));
       }
 
-      showActionToast(`Has limitado las interacciones de ${normalizeMentionUsername(username)}`);
+      showActionToast(localize({
+        es: `Has limitado las interacciones de ${normalizeMentionUsername(username)}`,
+        en: `You restricted interactions from ${normalizeMentionUsername(username)}`,
+        fr: `Vous avez limité les interactions de ${normalizeMentionUsername(username)}`,
+        pt: `Você limitou as interações de ${normalizeMentionUsername(username)}`,
+      }));
       if (selectedGroup?.id) {
         fetchGroupLimitedMembersIfOwner(selectedGroup.id);
         // Limitar no debe eliminar mensajes; refrescar asegura que se mantengan visibles.
         fetchGroupChatMessages(selectedGroup.id, 'poll');
       }
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo limitar');
+      Alert.alert(errorTitle, e?.message || localize({
+        es: 'No se pudo limitar al miembro.',
+        en: 'The member could not be restricted.',
+        fr: 'Impossible de limiter ce membre.',
+        pt: 'Não foi possível limitar o membro.',
+      }));
     } finally {
       setGroupMessageOptions(null);
     }
@@ -5661,7 +5890,12 @@ const FrontScreen = ({
 
   const unlimitGroupMember = async (memberEmail: string, username: string) => {
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para gestionar el grupo.');
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para gestionar el grupo.',
+        en: 'Sign in to manage the group.',
+        fr: 'Connectez-vous pour gérer le groupe.',
+        pt: 'Entre para gerenciar o grupo.',
+      }));
       return;
     }
     if (!selectedGroup?.id) return;
@@ -5678,7 +5912,12 @@ const FrontScreen = ({
 
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
-        throw new Error(err?.error || 'No se pudo quitar la limitación');
+        throw new Error(err?.error || localize({
+          es: 'No se pudo quitar la limitación.',
+          en: 'The restriction could not be removed.',
+          fr: 'Impossible de retirer la limitation.',
+          pt: 'Não foi possível remover a limitação.',
+        }));
       }
 
       if (selectedGroup?.id) {
@@ -5686,7 +5925,12 @@ const FrontScreen = ({
         fetchGroupChatMessages(selectedGroup.id, 'poll');
       }
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo quitar la limitación');
+      Alert.alert(errorTitle, e?.message || localize({
+        es: 'No se pudo quitar la limitación.',
+        en: 'The restriction could not be removed.',
+        fr: 'Impossible de retirer la limitation.',
+        pt: 'Não foi possível remover a limitação.',
+      }));
     } finally {
       setGroupMessageOptions(null);
     }
@@ -5699,14 +5943,24 @@ const FrontScreen = ({
     reason?: string
   ) => {
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para gestionar el grupo.');
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para gestionar el grupo.',
+        en: 'Sign in to manage the group.',
+        fr: 'Connectez-vous pour gérer le groupe.',
+        pt: 'Entre para gerenciar o grupo.',
+      }));
       return;
     }
     if (!selectedGroup?.id) return;
 
     try {
       const finalReason = shouldBlock
-        ? (String(reason ?? '').trim().slice(0, 320) || 'Sin motivo')
+        ? (String(reason ?? '').trim().slice(0, 320) || localize({
+            es: 'Sin motivo',
+            en: 'No reason provided',
+            fr: 'Sans motif',
+            pt: 'Sem motivo',
+          }))
         : undefined;
 
       const resp = await fetch(`${API_URL}/api/groups/${selectedGroup.id}/expel`, {
@@ -5720,13 +5974,28 @@ const FrontScreen = ({
 
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
-        throw new Error(err?.error || 'No se pudo expulsar');
+        throw new Error(err?.error || localize({
+          es: 'No se pudo expulsar al miembro.',
+          en: 'The member could not be removed.',
+          fr: 'Impossible d’expulser ce membre.',
+          pt: 'Não foi possível expulsar o membro.',
+        }));
       }
 
       showActionToast(
         shouldBlock
-          ? `${normalizeMentionUsername(username)} ha sido expulsado y bloqueado`
-          : `${normalizeMentionUsername(username)} ha sido expulsado`
+          ? localize({
+              es: `${normalizeMentionUsername(username)} ha sido expulsado y bloqueado`,
+              en: `${normalizeMentionUsername(username)} has been removed and blocked`,
+              fr: `${normalizeMentionUsername(username)} a été expulsé et bloqué`,
+              pt: `${normalizeMentionUsername(username)} foi expulso e bloqueado`,
+            })
+          : localize({
+              es: `${normalizeMentionUsername(username)} ha sido expulsado`,
+              en: `${normalizeMentionUsername(username)} has been removed`,
+              fr: `${normalizeMentionUsername(username)} a été expulsé`,
+              pt: `${normalizeMentionUsername(username)} foi expulso`,
+            })
       );
 
       if (selectedGroup?.id) {
@@ -5758,7 +6027,12 @@ const FrontScreen = ({
       });
       fetchSentGroupRequests().catch(() => { });
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo expulsar');
+      Alert.alert(errorTitle, e?.message || localize({
+        es: 'No se pudo expulsar al miembro.',
+        en: 'The member could not be removed.',
+        fr: 'Impossible d’expulser ce membre.',
+        pt: 'Não foi possível expulsar o membro.',
+      }));
     } finally {
       setGroupMessageOptions(null);
     }
@@ -5766,7 +6040,12 @@ const FrontScreen = ({
 
   const expelGroupMember = async (memberEmail: string, username: string, shouldBlock: boolean = false) => {
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para gestionar el grupo.');
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para gestionar el grupo.',
+        en: 'Sign in to manage the group.',
+        fr: 'Connectez-vous pour gérer le groupe.',
+        pt: 'Entre para gerenciar o grupo.',
+      }));
       return;
     }
     if (!selectedGroup?.id) return;
@@ -6293,7 +6572,12 @@ const FrontScreen = ({
           body?.error ||
           body?.message ||
           (typeof body?.text === 'string' && body.text.trim()) ||
-          'No se pudo salir del canal';
+          localize({
+            es: 'No se pudo salir del canal.',
+            en: 'The channel could not be left.',
+            fr: 'Impossible de quitter le canal.',
+            pt: 'Não foi possível sair do canal.',
+          });
         throw new Error(message);
       }
 
@@ -6303,7 +6587,12 @@ const FrontScreen = ({
       console.error('Error leaving joined channel:', e);
       // Re-sync list if leaving failed.
       fetchMyChannels();
-      Alert.alert('Error', e?.message || 'No se pudo salir del canal');
+      Alert.alert(errorTitle, e?.message || localize({
+        es: 'No se pudo salir del canal.',
+        en: 'The channel could not be left.',
+        fr: 'Impossible de quitter le canal.',
+        pt: 'Não foi possível sair do canal.',
+      }));
     }
   }, [authToken, fetchMyChannels, getJoinedChannelKey, getJoinedChannelPostId, t]);
 
@@ -6337,7 +6626,7 @@ const FrontScreen = ({
       await leaveJoinedChannel(channel);
     } catch (e: any) {
       console.error('Error leaving+blocking joined channel:', e);
-      Alert.alert('Error', e?.message || t('errors.unableToBlockUser' as TranslationKey));
+      Alert.alert(errorTitle, e?.message || t('errors.unableToBlockUser' as TranslationKey));
       fetchMyChannels();
     }
   }, [authToken, fetchMyChannels, getJoinedChannelPublisherEmail, leaveJoinedChannel, t]);
@@ -6860,7 +7149,12 @@ const FrontScreen = ({
     }
 
     if (!profilePresentation) {
-      Alert.alert("Error", "Primero debes crear tu presentación.");
+      Alert.alert(errorTitle, localize({
+        es: 'Primero debes crear tu presentación.',
+        en: 'You must create your presentation first.',
+        fr: 'Vous devez d’abord créer votre présentation.',
+        pt: 'Primeiro você precisa criar sua apresentação.',
+      }));
       return;
     }
 
@@ -6939,11 +7233,21 @@ const FrontScreen = ({
           showBottomToast(t('toast.published'));
         } else {
           console.error('Error saving post:', await response.text());
-          Alert.alert("Error", "Hubo un problema al guardar tu publicación en el servidor.");
+          Alert.alert(errorTitle, localize({
+            es: 'Hubo un problema al guardar tu publicación en el servidor.',
+            en: 'There was a problem saving your post on the server.',
+            fr: 'Un problème est survenu lors de l’enregistrement de votre publication sur le serveur.',
+            pt: 'Houve um problema ao salvar sua publicação no servidor.',
+          }));
         }
       } catch (error) {
         console.error('Error saving post:', error);
-        Alert.alert("Error", "Hubo un problema de conexión al guardar tu publicación.");
+        Alert.alert(errorTitle, localize({
+          es: 'Hubo un problema de conexión al guardar tu publicación.',
+          en: 'There was a connection problem while saving your post.',
+          fr: 'Un problème de connexion est survenu lors de l’enregistrement de votre publication.',
+          pt: 'Houve um problema de conexão ao salvar sua publicação.',
+        }));
       }
     } else {
       showBottomToast(t('toast.published'));

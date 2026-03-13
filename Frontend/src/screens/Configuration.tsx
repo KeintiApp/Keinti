@@ -9,10 +9,12 @@ import Clipboard from '@react-native-clipboard/clipboard';
 import { API_URL, getServerResourceUrl } from '../config/api';
 import { POLICY_URLS, type PolicyUrlKey } from '../config/policies';
 import { useI18n } from '../i18n/I18nProvider';
-import type { TranslationKey } from '../i18n/translations';
+import type { Language, TranslationKey } from '../i18n/translations';
+import { loadKeintiAuthSession, saveKeintiAuthSession } from '../services/authSessionStorage';
 import { adminReviewAccountSelfie, changeMyPassword, deleteMyAccount, getAccountAuthStatus, getAdminBlockedAccountSelfies, getAdminPendingAccountSelfies, getMyChannelJoinsProgress, getMyDevicePermissions, getMyGroupsActiveMembersProgress, getMyIntimidadesOpensProgress, getMyPersonalData, getMyProfilePublishesProgress, getTotpSetup, setMyDevicePermissions, updateMyNationality, updatePreferredLanguage, uploadAccountSelfie, verifyKeintiAccount, verifyMyPassword, verifyTotpCode } from '../services/userService';
 import PasswordResetModal, { PASSWORD_RESET_DRAFT_STORAGE_KEY } from '../components/PasswordResetModal';
 import HighlightedI18nText from '../components/HighlightedI18nText';
+import LanguageSelector from '../components/LanguageSelector';
 import { COUNTRIES } from '../constants/countries';
 
 const ANDROID_TOP_INSET = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
@@ -24,7 +26,6 @@ interface ConfigurationProps {
   onAccountVerifiedChange?: (verified: boolean) => void;
 }
 
-type Language = 'es' | 'en';
 type Screen =
   | 'main'
   | 'accountCenter'
@@ -212,6 +213,9 @@ const PersonalDataItem = ({
 const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }: ConfigurationProps) => {
   const { language, setLanguage, t } = useI18n();
   const safeAreaInsets = useSafeAreaInsets();
+  const localize = (messages: Partial<Record<Language, string>> & { es: string }) => (
+    messages[language] || messages.pt || messages.en || messages.fr || messages.es
+  );
   const [screen, setScreen] = useState<Screen>('main');
   const [verifyTab, setVerifyTab] = useState<'objectives' | 'benefits'>('objectives');
   const [showImportantNoticePanel, setShowImportantNoticePanel] = useState(false);
@@ -271,7 +275,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
   const formatNumber = useMemo(() => {
     try {
-      const locale = language === 'es' ? 'es-ES' : 'en-US';
+      const locale = language === 'es' ? 'es-ES' : language === 'fr' ? 'fr-FR' : language === 'pt' ? 'pt-BR' : 'en-US';
       const nf = new Intl.NumberFormat(locale);
       return (n: number) => nf.format(Math.floor(Number(n) || 0));
     } catch {
@@ -282,19 +286,27 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   const openPolicyUrl = async (key: PolicyUrlKey) => {
     const url = POLICY_URLS[key];
     if (!url) {
-      Alert.alert('URL no configurada', 'Configura una URL pública para esta política.');
+      Alert.alert(
+        localize({ es: 'URL no configurada', en: 'URL not configured', fr: 'URL non configurée', pt: 'URL não configurada' }),
+        localize({
+          es: 'Configura una URL pública para esta política.',
+          en: 'Configure a public URL for this policy.',
+          fr: 'Configurez une URL publique pour cette politique.',
+          pt: 'Configure uma URL pública para esta política.',
+        }),
+      );
       return;
     }
 
     try {
       const supported = await Linking.canOpenURL(url);
       if (!supported) {
-        Alert.alert(language === 'en' ? 'Cannot open link' : 'No se puede abrir el enlace', url);
+        Alert.alert(localize({ es: 'No se puede abrir el enlace', en: 'Cannot open link', fr: 'Impossible d’ouvrir le lien', pt: 'Não é possível abrir o link' }), url);
         return;
       }
       await Linking.openURL(url);
     } catch {
-      Alert.alert(language === 'en' ? 'Cannot open link' : 'No se pudo abrir el enlace', url);
+      Alert.alert(localize({ es: 'No se pudo abrir el enlace', en: 'Could not open link', fr: 'Impossible d’ouvrir le lien', pt: 'Não foi possível abrir o link' }), url);
     }
   };
 
@@ -461,9 +473,41 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   };
 
   const languageLabel = useMemo(
-    () => (language === 'es' ? t('language.spanish') : t('language.english')),
+    () => (language === 'es' ? t('language.spanish') : language === 'fr' ? t('language.french') : language === 'pt' ? t('language.portuguese') : t('language.english')),
     [language, t]
   );
+
+  const persistPreferredLanguageLocally = async (nextLanguage: Language) => {
+    try {
+      const storedSession = await loadKeintiAuthSession();
+      if (!storedSession?.token || !storedSession?.user?.email) return;
+
+      await saveKeintiAuthSession({
+        token: storedSession.token,
+        storedAt: storedSession.storedAt,
+        user: {
+          ...storedSession.user,
+          preferredLanguage: nextLanguage,
+        },
+      });
+    } catch {
+      // ignore local cache persistence failures
+    }
+  };
+
+  const handleLanguageSelect = async (nextLanguage: Language) => {
+    if (language === nextLanguage) return;
+
+    setLanguage(nextLanguage);
+    void persistPreferredLanguageLocally(nextLanguage);
+
+    if (!authToken) return;
+    try {
+      await updatePreferredLanguage({ token: authToken, language: nextLanguage });
+    } catch {
+      // Keep the user's selected language locally even if remote persistence fails.
+    }
+  };
 
   const handleBack = () => {
     if (screen === 'devicePermissions') {
@@ -612,7 +656,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       refreshAccountAuth();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert('Error', msg || 'No se pudo verificar');
+      Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo verificar', en: 'Could not verify', fr: 'Impossible de vérifier', pt: 'Não foi possível verificar' }));
     } finally {
       setIsVerifyingKeinti(false);
     }
@@ -810,11 +854,16 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       // Si está denegado permanentemente, llevar a ajustes.
       if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
         Alert.alert(
-          'Permiso requerido',
-          'Para concederlo, abre Ajustes > Permisos y permite el acceso a Fotos.',
+          localize({ es: 'Permiso requerido', en: 'Permission required', fr: 'Autorisation requise', pt: 'Permissão obrigatória' }),
+          localize({
+            es: 'Para concederlo, abre Ajustes > Permisos y permite el acceso a Fotos.',
+            en: 'To grant it, open Settings > Permissions and allow access to Photos.',
+            fr: 'Pour l’accorder, ouvrez Réglages > Autorisations et autorisez l’accès aux photos.',
+            pt: 'Para concedê-la, abra Ajustes > Permissões e permita o acesso às Fotos.',
+          }),
           [
-            { text: 'Cancelar', style: 'cancel' },
-            { text: 'Abrir Ajustes', onPress: () => Linking.openSettings() },
+            { text: localize({ es: 'Cancelar', en: 'Cancel', fr: 'Annuler', pt: 'Cancelar' }), style: 'cancel' },
+            { text: localize({ es: 'Abrir Ajustes', en: 'Open Settings', fr: 'Ouvrir les réglages', pt: 'Abrir Ajustes' }), onPress: () => Linking.openSettings() },
           ]
         );
       }
@@ -932,7 +981,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
           return;
         }
 
-        const locale = language === 'en' ? 'en-US' : 'es-ES';
+        const locale = language === 'en' ? 'en-US' : language === 'fr' ? 'fr-FR' : language === 'pt' ? 'pt-BR' : 'es-ES';
         const formatted = new Intl.DateTimeFormat(locale, {
           day: 'numeric',
           month: 'long',
@@ -1049,7 +1098,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
         setAdminBlockedSelfies(dedupeByEmailKeepLatest(blocked.items || [], 'blocked_at'));
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        Alert.alert('Error', msg || 'No se pudo cargar');
+        Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo cargar', en: 'Could not load', fr: 'Impossible de charger', pt: 'Não foi possível carregar' }));
         setAdminPendingSelfies([]);
         setAdminBlockedSelfies([]);
       } finally {
@@ -1097,6 +1146,10 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
     const extra =
       language === 'en'
         ? ['CEO: Antonio David González Macías', 'Created in: Seville, Spain', `Creation date: ${creationDateIso}`]
+        : language === 'fr'
+          ? ['PDG : Antonio David González Macías', 'Créée à : Séville, Espagne', 'Date de création : 01/02/2026']
+          : language === 'pt'
+            ? ['CEO: Antonio David González Macías', 'Criado em: Sevilha, Espanha', 'Data de criação: 01/02/2026']
         : ['CEO: Antonio David González Macías', 'Creada en: Sevilla, España', 'Fecha de creación: 01/02/2026'];
 
     return [...base, ...extra];
@@ -1291,7 +1344,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       '15. Child safety and reporting\n\n' +
       'Keinti maintains a zero-tolerance policy for any content related to child sexual exploitation or abuse (CSEA/CSAM). Users can report content or accounts from the app and/or contact support at keintisoporte@gmail.com.';
 
-    const raw = language === 'en' ? rawEn : rawEs;
+    const raw = language === 'es' ? rawEs : rawEn;
 
     return raw
       .split(/\n\s*\n/g)
@@ -1307,7 +1360,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
   const saveNationality = async (nextNationality: string) => {
     if (!authToken) {
-      Alert.alert('Sesión requerida', 'Inicia sesión para actualizar tu nacionalidad.');
+      Alert.alert(localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória' }), localize({ es: 'Inicia sesión para actualizar tu nacionalidad.', en: 'Sign in to update your nationality.', fr: 'Connectez-vous pour mettre à jour votre nationalité.', pt: 'Entre para atualizar sua nacionalidade.' }));
       return;
     }
 
@@ -1325,7 +1378,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       setMyNationality(String(resp?.nationality || clean).trim());
     } catch (e) {
       setMyNationality(previous);
-      Alert.alert('No se pudo actualizar', e instanceof Error ? e.message : 'Inténtalo de nuevo.');
+      Alert.alert(localize({ es: 'No se pudo actualizar', en: 'Could not update', fr: 'Impossible de mettre à jour', pt: 'Não foi possível atualizar' }), e instanceof Error ? e.message : localize({ es: 'Inténtalo de nuevo.', en: 'Please try again.', fr: 'Veuillez réessayer.', pt: 'Tente novamente.' }));
     } finally {
       setIsUpdatingNationality(false);
     }
@@ -1436,7 +1489,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       'For any questions related to this policy, you may contact:\n\n' +
       'keintisoporte@gmail.com';
 
-    const raw = language === 'en' ? rawEn : rawEs;
+    const raw = language === 'es' ? rawEs : rawEn;
 
     return raw
       .split(/\n\s*\n/g)
@@ -1473,7 +1526,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       '• Generate income for every 1,000 views of ring cards.\n\n' +
       '• Get other future privileges offered by Keinti.';
 
-    const raw = language === 'en' ? rawEn : rawEs;
+    const raw = language === 'es' ? rawEs : rawEn;
 
     return raw
       .split(/\n\s*\n/g)
@@ -1608,7 +1661,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       '14. Contact\n\n' +
       'For questions about these Terms, the user may contact: keintisoporte@gmail.com';
 
-    const raw = language === 'en' ? rawEn : rawEs;
+    const raw = language === 'es' ? rawEs : rawEn;
 
     return raw
       .split(/\n\s*\n/g)
@@ -1784,55 +1837,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               </View>
 
               <View style={styles.languageRight}>
-                <View style={{ flexDirection: 'row', backgroundColor: '#1E1E1E', borderRadius: 12, padding: 2 }}>
-                  <TouchableOpacity
-                    onPress={async () => {
-                      if (language === 'es') return;
-                      const prevLanguage: Language = language;
-                      setLanguage('es');
-
-                      if (!authToken) return;
-                      try {
-                        await updatePreferredLanguage({ token: authToken, language: 'es' });
-                      } catch {
-                        setLanguage(prevLanguage);
-                      }
-                    }}
-                    activeOpacity={0.8}
-                    style={{
-                      paddingHorizontal: 12,
-                      paddingVertical: 6,
-                      borderRadius: 10,
-                      backgroundColor: language === 'es' ? '#FFB74D' : 'transparent',
-                    }}
-                  >
-                    <Text style={{ color: language === 'es' ? '#000000' : '#FFFFFF', fontWeight: '700', fontSize: 13 }}>ES</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    onPress={async () => {
-                      if (language === 'en') return;
-                      const prevLanguage: Language = language;
-                      setLanguage('en');
-
-                      if (!authToken) return;
-                      try {
-                        await updatePreferredLanguage({ token: authToken, language: 'en' });
-                      } catch {
-                        setLanguage(prevLanguage);
-                      }
-                    }}
-                    activeOpacity={0.8}
-                    style={{
-                      paddingHorizontal: 12,
-                      paddingVertical: 6,
-                      borderRadius: 10,
-                      backgroundColor: language === 'en' ? '#FFB74D' : 'transparent',
-                    }}
-                  >
-                    <Text style={{ color: language === 'en' ? '#000000' : '#FFFFFF', fontWeight: '700', fontSize: 13 }}>EN</Text>
-                  </TouchableOpacity>
-                </View>
+                <LanguageSelector value={language} onSelect={handleLanguageSelect} compact />
               </View>
             </View>
 
@@ -1999,7 +2004,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               showChevron={false}
               onPress={() => {
                 if (!authToken) {
-                  Alert.alert('Sesión requerida', 'Inicia sesión para eliminar tu cuenta.');
+                  Alert.alert(localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória' }), localize({ es: 'Inicia sesión para eliminar tu cuenta.', en: 'Sign in to delete your account.', fr: 'Connectez-vous pour supprimer votre compte.', pt: 'Entre para excluir sua conta.' }));
                   return;
                 }
                 openDeleteAccountConfirm();
@@ -2082,7 +2087,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     setAdminBlockedSelfies(dedupeByEmailKeepLatest(blocked.items || [], 'blocked_at'));
                   } catch (e) {
                     const msg = e instanceof Error ? e.message : String(e);
-                    Alert.alert('Error', msg || 'No se pudo actualizar');
+                    Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo actualizar', en: 'Could not refresh', fr: 'Impossible de mettre à jour', pt: 'Não foi possível atualizar' }));
                   } finally {
                     setIsLoadingAdminSelfies(false);
                   }
@@ -2157,7 +2162,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                                     setAdminPendingSelfies((prev) => prev.filter((p: any) => String(p?.email || '').trim() !== email));
                                   } catch (e) {
                                     const msg = e instanceof Error ? e.message : String(e);
-                                    Alert.alert('Error', msg || 'No se pudo aceptar');
+                                    Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo aceptar', en: 'Could not accept', fr: 'Impossible d’accepter', pt: 'Não foi possível aceitar' }));
                                   }
                                 }}
                               >
@@ -2173,7 +2178,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                                     setAdminPendingSelfies((prev) => prev.filter((p: any) => String(p?.email || '').trim() !== email));
                                   } catch (e) {
                                     const msg = e instanceof Error ? e.message : String(e);
-                                    Alert.alert('Error', msg || 'No se pudo rechazar');
+                                    Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo rechazar', en: 'Could not reject', fr: 'Impossible de rejeter', pt: 'Não foi possível rejeitar' }));
                                   }
                                 }}
                               >
@@ -2202,7 +2207,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                                     });
                                   } catch (e) {
                                     const msg = e instanceof Error ? e.message : String(e);
-                                    Alert.alert('Error', msg || 'No se pudo bloquear');
+                                    Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo bloquear', en: 'Could not block', fr: 'Impossible de bloquer', pt: 'Não foi possível bloquear' }));
                                   }
                                 }}
                               >
@@ -2244,7 +2249,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                                   setAdminBlockedSelfies((prev) => prev.filter((p: any) => String(p?.email || '').trim() !== email));
                                 } catch (e) {
                                   const msg = e instanceof Error ? e.message : String(e);
-                                  Alert.alert('Error', msg || 'No se pudo desbloquear');
+                                  Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo desbloquear', en: 'Could not unblock', fr: 'Impossible de débloquer', pt: 'Não foi possível desbloquear' }));
                                 }
                               }}
                             >
@@ -2821,9 +2826,9 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                           Clipboard.setString(totpSecret);
                           if (Platform.OS === 'android') {
                             const { ToastAndroid } = require('react-native');
-                            ToastAndroid.show(language === 'en' ? 'Copied!' : '¡Copiado!', ToastAndroid.SHORT);
+                            ToastAndroid.show(localize({ es: '¡Copiado!', en: 'Copied!', fr: 'Copié !', pt: 'Copiado!' }), ToastAndroid.SHORT);
                           } else {
-                            Alert.alert(language === 'en' ? 'Copied!' : '¡Copiado!');
+                            Alert.alert(localize({ es: '¡Copiado!', en: 'Copied!', fr: 'Copié !', pt: 'Copiado!' }));
                           }
                         }}
                         style={[styles.passwordRow, { minHeight: 52, height: undefined, paddingVertical: 12, alignItems: 'flex-start' }]}
@@ -2910,7 +2915,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               onPress={() => openPolicyUrl('cookiesAdPolicy')}
             >
               <Text style={styles.checkButtonText}>
-                {language === 'en' ? 'Open web version' : 'Abrir versión web'}
+                {localize({ es: 'Abrir versión web', en: 'Open web version', fr: 'Ouvrir la version web', pt: 'Abrir versão web' })}
               </Text>
             </TouchableOpacity>
           </View>
@@ -2932,7 +2937,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               onPress={() => openPolicyUrl('termsOfUse')}
             >
               <Text style={styles.checkButtonText}>
-                {language === 'en' ? 'Open web version' : 'Abrir versión web'}
+                {localize({ es: 'Abrir versión web', en: 'Open web version', fr: 'Ouvrir la version web', pt: 'Abrir versão web' })}
               </Text>
             </TouchableOpacity>
           </View>
@@ -2954,7 +2959,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               onPress={() => openPolicyUrl('privacyPolicy')}
             >
               <Text style={styles.checkButtonText}>
-                {language === 'en' ? 'Open web version' : 'Abrir versión web'}
+                {localize({ es: 'Abrir versión web', en: 'Open web version', fr: 'Ouvrir la version web', pt: 'Abrir versão web' })}
               </Text>
             </TouchableOpacity>
           </View>
@@ -2964,35 +2969,25 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               {privacyPolicyParagraphs.map((p, idx) => renderPolicyParagraph(p, idx))}
 
               <Text style={styles.letterParagraph}>
-                {language === 'en'
-                  ? (
-                    <>
-                      For more information about the use of cookies, advertising identifiers and consent management, the user
-                      can consult the{' '}
-                      <Text
-                        style={styles.letterEmail}
-                        onPress={() => setScreen('cookiesAdPolicy')}
-                        suppressHighlighting
-                      >
-                        Keinti Cookies and Advertising Policy
-                      </Text>
-                      .
-                    </>
-                  )
-                  : (
-                    <>
-                      Para más información sobre el uso de cookies, identificadores publicitarios y gestión del consentimiento, el
-                      usuario puede consultar la{' '}
-                      <Text
-                        style={styles.letterEmail}
-                        onPress={() => setScreen('cookiesAdPolicy')}
-                        suppressHighlighting
-                      >
-                        Política de Cookies y Publicidad de Keinti
-                      </Text>
-                      .
-                    </>
-                  )}
+                {localize({
+                  es: 'Para más información sobre el uso de cookies, identificadores publicitarios y gestión del consentimiento, el usuario puede consultar la ',
+                  en: 'For more information about the use of cookies, advertising identifiers and consent management, the user can consult the ',
+                  fr: 'Pour plus d’informations sur l’utilisation des cookies, des identifiants publicitaires et la gestion du consentement, l’utilisateur peut consulter la ',
+                  pt: 'Para mais informações sobre o uso de cookies, identificadores publicitários e gestão do consentimento, o usuário pode consultar a ',
+                })}
+                <Text
+                  style={styles.letterEmail}
+                  onPress={() => setScreen('cookiesAdPolicy')}
+                  suppressHighlighting
+                >
+                  {localize({
+                    es: 'Política de Cookies y Publicidad de Keinti',
+                    en: 'Keinti Cookies and Advertising Policy',
+                    fr: 'Politique de cookies et de publicité de Keinti',
+                    pt: 'Política de Cookies e Publicidade do Keinti',
+                  })}
+                </Text>
+                .
               </Text>
             </View>
           </View>
@@ -3078,7 +3073,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     }
 
                     if (result.accountLocked) {
-                      Alert.alert('Error', t('changePassword.accountLocked'));
+                      Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), t('changePassword.accountLocked'));
                       onLogout();
                       return;
                     }
@@ -3227,7 +3222,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                 setShowCurrentPasswordError(false);
                 setScreen('securityControl');
               } catch (e: any) {
-                Alert.alert('Error', e?.message || 'No se pudo cambiar la contraseña');
+                Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), e?.message || localize({ es: 'No se pudo cambiar la contraseña', en: 'Could not change the password', fr: 'Impossible de changer le mot de passe', pt: 'Não foi possível alterar a senha' }));
               } finally {
                 setIsChangingPassword(false);
               }
@@ -3405,7 +3400,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       return;
                     }
                     if (!authToken) {
-                      Alert.alert('Sesión requerida', 'Inicia sesión para desbloquear.');
+                      Alert.alert(localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória' }), localize({ es: 'Inicia sesión para desbloquear.', en: 'Sign in to unblock.', fr: 'Connectez-vous pour débloquer.', pt: 'Entre para desbloquear.' }));
                       setUserToUnlock(null);
                       setUnlockPosition(null);
                       return;
@@ -3424,7 +3419,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       .then(async (resp) => {
                         if (!resp.ok) {
                           const err = await resp.json().catch(() => ({}));
-                          throw new Error(err?.error || 'No se pudo desbloquear');
+                          throw new Error(err?.error || localize({ es: 'No se pudo desbloquear', en: 'Could not unblock', fr: 'Impossible de débloquer', pt: 'Não foi possível desbloquear' }));
                         }
                         setBlockedUsers(prev => prev.filter(u => !(u.email === target.email && u.group_id === target.group_id)));
                         setExpandedBlockedReasons(prev => {
@@ -3436,7 +3431,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                         setUnlockPosition(null);
                       })
                       .catch((e: any) => {
-                        Alert.alert('Error', e?.message || 'No se pudo desbloquear');
+                        Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), e?.message || localize({ es: 'No se pudo desbloquear', en: 'Could not unblock', fr: 'Impossible de débloquer', pt: 'Não foi possível desbloquear' }));
                         setUserToUnlock(null);
                         setUnlockPosition(null);
                       })
@@ -3502,21 +3497,22 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
                   <View style={{ flex: 1 }}>
                     <Text style={styles.logoutTitle}>
-                      {language === 'en' ? 'Log out?' : '¿Cerrar sesión?'}
+                      {localize({ es: '¿Cerrar sesión?', en: 'Log out?', fr: 'Se déconnecter ?', pt: 'Encerrar sessão?' })}
                     </Text>
                     <Text style={styles.logoutSubtitle}>
-                      {language === 'en'
-                        ? 'You’ll need to sign in again on this device.'
-                        : 'Tendrás que iniciar sesión de nuevo en este dispositivo.'}
+                      {localize({ es: 'Tendrás que iniciar sesión de nuevo en este dispositivo.', en: 'You’ll need to sign in again on this device.', fr: 'Vous devrez vous reconnecter sur cet appareil.', pt: 'Você precisará entrar novamente neste dispositivo.' })}
                     </Text>
                   </View>
                 </View>
 
                 <View style={styles.logoutInfoBox}>
                   <Text style={styles.logoutInfoText}>
-                    {language === 'en'
-                      ? `Signed in as @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`
-                      : `Has iniciado sesión como @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`}
+                    {localize({
+                      es: `Has iniciado sesión como @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`,
+                      en: `Signed in as @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`,
+                      fr: `Connecté en tant que @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`,
+                      pt: `Conectado como @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`,
+                    })}
                   </Text>
                 </View>
 
@@ -3528,7 +3524,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     onPress={closeLogoutConfirm}
                   >
                     <Text style={styles.logoutButtonSecondaryText}>
-                      {language === 'en' ? 'Stay' : 'Mantener sesión'}
+                      {localize({ es: 'Mantener sesión', en: 'Stay', fr: 'Rester connecté', pt: 'Continuar conectado' })}
                     </Text>
                   </TouchableOpacity>
 
@@ -3555,16 +3551,14 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       <ActivityIndicator color="#000000" />
                     ) : (
                       <Text style={styles.logoutButtonPrimaryText}>
-                        {language === 'en' ? 'Log out' : 'Cerrar sesión'}
+                        {localize({ es: 'Cerrar sesión', en: 'Log out', fr: 'Se déconnecter', pt: 'Sair' })}
                       </Text>
                     )}
                   </TouchableOpacity>
                 </View>
 
                 <Text style={styles.logoutFootnote}>
-                  {language === 'en'
-                    ? 'Tip: If you’re on a shared device, logging out helps protect your account.'
-                    : 'Consejo: si estás en un dispositivo compartido, cerrar sesión protege tu cuenta.'}
+                  {localize({ es: 'Consejo: si estás en un dispositivo compartido, cerrar sesión protege tu cuenta.', en: 'Tip: If you’re on a shared device, logging out helps protect your account.', fr: 'Conseil : si vous utilisez un appareil partagé, vous déconnecter aide à protéger votre compte.', pt: 'Dica: se você estiver em um dispositivo compartilhado, sair ajuda a proteger sua conta.' })}
                 </Text>
               </View>
             </TouchableWithoutFeedback>
@@ -3628,9 +3622,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
                 <View style={styles.deleteAccountWarningBox}>
                   <Text style={styles.deleteAccountWarningText}>
-                    {language === 'en'
-                      ? 'This action is irreversible. Your account and data will be permanently removed.'
-                      : 'Esta acción es irreversible. Tu cuenta y tus datos se eliminarán permanentemente.'}
+                    {localize({ es: 'Esta acción es irreversible. Tu cuenta y tus datos se eliminarán permanentemente.', en: 'This action is irreversible. Your account and data will be permanently removed.', fr: 'Cette action est irréversible. Votre compte et vos données seront supprimés définitivement.', pt: 'Esta ação é irreversível. Sua conta e seus dados serão removidos permanentemente.' })}
                   </Text>
                 </View>
 
@@ -3679,7 +3671,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                           onLogout();
                         });
                       } catch (e: any) {
-                        Alert.alert('Error', e?.message || 'No se pudo eliminar la cuenta');
+                        Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), e?.message || localize({ es: 'No se pudo eliminar la cuenta', en: 'Could not delete the account', fr: 'Impossible de supprimer le compte', pt: 'Não foi possível excluir a conta' }));
                       } finally {
                         setIsDeletingAccount(false);
                       }
@@ -3689,16 +3681,14 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       <ActivityIndicator color="#000000" />
                     ) : (
                       <Text style={styles.deleteAccountButtonDangerText}>
-                        {language === 'en' ? 'Delete' : 'Eliminar'}
+                        {localize({ es: 'Eliminar', en: 'Delete', fr: 'Supprimer', pt: 'Excluir' })}
                       </Text>
                     )}
                   </TouchableOpacity>
                 </View>
 
                 <Text style={styles.deleteAccountFootnote}>
-                  {language === 'en'
-                    ? 'If this was a mistake, cancel and review the policy first.'
-                    : 'Si esto fue un error, cancela y revisa la política primero.'}
+                  {localize({ es: 'Si esto fue un error, cancela y revisa la política primero.', en: 'If this was a mistake, cancel and review the policy first.', fr: 'Si c’était une erreur, annulez et consultez d’abord la politique.', pt: 'Se isso foi um engano, cancele e revise a política primeiro.' })}
                 </Text>
               </View>
             </TouchableWithoutFeedback>

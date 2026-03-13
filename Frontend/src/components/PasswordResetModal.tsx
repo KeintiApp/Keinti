@@ -432,13 +432,13 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
                         try {
                           const result = await verifyPasswordResetCode({ email: trimmedEmail, code: cleanCode });
                           if (!result?.resetToken) {
-                            throw new Error('No se pudo iniciar el cambio de contraseña');
+                            throw new Error(t('login.resetChangePassword'));
                           }
                           setResetToken(String(result.resetToken));
                           setInfo('');
                           setStep('newPassword');
                         } catch (e: any) {
-                          setCodeError(e?.message || 'Código incorrecto');
+                          setCodeError(e?.message || t('register.codeIncorrect'));
                         } finally {
                           setVerifying(false);
                         }

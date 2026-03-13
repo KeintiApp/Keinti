@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { Language } from '../i18n/translations';
 
 export type KeintiAuthSessionV1 = {
   version: 1;
@@ -10,7 +11,7 @@ export type KeintiAuthSessionV1 = {
     profilePhotoUri?: string;
     socialNetworks?: Array<{ id: string; link: string }>;
     nationality?: string;
-    preferredLanguage?: 'es' | 'en';
+    preferredLanguage?: Language;
     accountVerified?: boolean;
   };
 };
@@ -54,8 +55,8 @@ export const saveKeintiAuthSession = async (session: Omit<KeintiAuthSessionV1, '
       profilePhotoUri: (session as any)?.user?.profilePhotoUri ? String((session as any).user.profilePhotoUri) : undefined,
       socialNetworks: Array.isArray((session as any)?.user?.socialNetworks) ? (session as any).user.socialNetworks : undefined,
       nationality: (session as any)?.user?.nationality ? String((session as any).user.nationality) : undefined,
-      preferredLanguage: (session as any)?.user?.preferredLanguage === 'es' || (session as any)?.user?.preferredLanguage === 'en'
-        ? (session as any).user.preferredLanguage
+      preferredLanguage: ['es', 'en', 'fr', 'pt'].includes(String((session as any)?.user?.preferredLanguage || '').trim().toLowerCase())
+        ? String((session as any).user.preferredLanguage).trim().toLowerCase() as Language
         : undefined,
       accountVerified: typeof (session as any)?.user?.accountVerified === 'boolean' ? (session as any).user.accountVerified : undefined,
     },

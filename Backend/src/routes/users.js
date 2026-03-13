@@ -283,7 +283,7 @@ router.put('/social-networks', authenticateToken, async (req, res) => {
 // Actualizar preferencia de idioma
 router.put('/language', authenticateToken, async (req, res) => {
   const raw = (req.body?.language ?? '').toString().trim().toLowerCase();
-  const language = raw === 'en' ? 'en' : raw === 'es' ? 'es' : null;
+  const language = ['es', 'en', 'fr', 'pt'].includes(raw) ? raw : null;
 
   if (!language) {
     return res.status(400).json({ error: 'Idioma inválido' });

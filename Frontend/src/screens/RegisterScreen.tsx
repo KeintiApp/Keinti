@@ -965,7 +965,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
       const message = error instanceof Error ? error.message : t('register.unableToComplete');
       if (/nombre de usuario/i.test(message) || apiCode === 'USERNAME_TAKEN') {
         setUsernameAlreadyInUse(true);
-        Alert.alert(t('register.errorTitle'), 'El nombre de usuario ya está en uso');
+        Alert.alert(t('register.errorTitle'), t('register.usernameAlreadyInUse').replace('{username}', username));
         setStep(2);
         return;
       }

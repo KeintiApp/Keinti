@@ -1563,7 +1563,7 @@ router.post('/profile/complete', authenticateToken, async (req, res) => {
     }
 
     const normalizedGender = normalizeGender(gender) || 'No especificar';
-    const normalizedPreferredLanguage = ['es', 'en'].includes(preferredLanguage.toLowerCase())
+    const normalizedPreferredLanguage = ['es', 'en', 'fr', 'pt'].includes(preferredLanguage.toLowerCase())
       ? preferredLanguage.toLowerCase()
       : null;
 

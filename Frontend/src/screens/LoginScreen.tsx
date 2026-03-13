@@ -21,7 +21,9 @@ import InAppBrowser from 'react-native-inappbrowser-reborn';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { completeSupabaseProfile, exchangeSupabaseSession } from '../services/userService';
 import { useI18n } from '../i18n/I18nProvider';
+import type { Language } from '../i18n/translations';
 import PasswordResetModal, { PASSWORD_RESET_DRAFT_STORAGE_KEY } from '../components/PasswordResetModal';
+import LanguageSelector from '../components/LanguageSelector';
 import { SUPABASE_REDIRECT_URL, isSupabaseConfigured, supabase } from '../config/supabase';
 
 type MarkedSegment = { text: string; kind: 'normal' | 'highlight' };
@@ -205,7 +207,7 @@ interface LoginScreenProps {
     nationality?: string,
     preferredLanguage?: string,
     accountVerified?: boolean,
-    selectedLoginLanguage?: 'es' | 'en'
+    selectedLoginLanguage?: Language
   ) => void;
   onNavigateToRegister: () => void;
   noticeMessage?: string;
@@ -229,6 +231,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
   const lastNoticeTokenRef = useRef<number | null>(null);
 
   const [resetVisible, setResetVisible] = useState(false);
+
+  const localize = (messages: Record<Language, string>) => messages[language] || messages.es;
 
   const forgotPasswordSegments = useMemo(
     () => parseMarkedText(String(t('common.forgotPassword') || '')),
@@ -304,6 +308,10 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
 
   const openResetModal = () => setResetVisible(true);
 
+  const handleLanguageSelect = async (nextLanguage: Language) => {
+    setLanguage(nextLanguage);
+  };
+
   const handleLogin = async () => {
     if (!email || !password) {
       setErrorMessage(t('login.fillAllFields'));
@@ -312,7 +320,12 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
 
     const supabaseClient = supabase;
     if (!isSupabaseConfigured() || !supabaseClient) {
-      setErrorMessage('Falta configurar Supabase (SUPABASE_URL / SUPABASE_ANON_KEY) en el frontend');
+        setErrorMessage(localize({
+          es: 'Falta configurar Supabase (SUPABASE_URL / SUPABASE_ANON_KEY) en el frontend',
+          en: 'Supabase is not configured on the frontend (SUPABASE_URL / SUPABASE_ANON_KEY).',
+          fr: 'Supabase n’est pas configuré dans le frontend (SUPABASE_URL / SUPABASE_ANON_KEY).',
+          pt: 'O Supabase não está configurado no frontend (SUPABASE_URL / SUPABASE_ANON_KEY).',
+        }));
       return;
     }
 
@@ -327,12 +340,22 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
       });
 
       if (error) {
-        throw new Error(error.message || 'No se pudo iniciar sesión');
+        throw new Error(error.message || localize({
+          es: 'No se pudo iniciar sesión',
+          en: 'Could not sign in',
+          fr: 'Impossible de se connecter',
+          pt: 'Não foi possível entrar',
+        }));
       }
 
       const accessToken = data?.session?.access_token;
       if (!accessToken) {
-        throw new Error('No se obtuvo access_token');
+        throw new Error(localize({
+          es: 'No se obtuvo access_token',
+          en: 'No access token was returned',
+          fr: 'Aucun access token n’a été obtenu',
+          pt: 'Nenhum access token foi obtido',
+        }));
       }
 
       const pendingKeyForEmail = (e: string) => `keinti:pendingSignup:${String(e || '').trim().toLowerCase()}`;
@@ -403,9 +426,12 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           }
 
           throw new Error(
-            language === 'es'
-              ? 'Tu cuenta existe, pero el perfil no está completado. Vuelve a registrarte y confirma el email desde el móvil.'
-              : 'Your account exists, but the profile is not completed. Go back to signup and confirm the email on your phone.'
+            localize({
+              es: 'Tu cuenta existe, pero el perfil no está completado. Vuelve a registrarte y confirma el email desde el móvil.',
+              en: 'Your account exists, but the profile is not completed. Go back to signup and confirm the email on your phone.',
+              fr: 'Votre compte existe, mais le profil n\'est pas terminé. Recommencez l\'inscription et confirmez l\'e-mail depuis votre téléphone.',
+              pt: 'Sua conta existe, mas o perfil não está concluído. Volte ao cadastro e confirme o e-mail pelo celular.',
+            })
           );
         }
 
@@ -418,14 +444,27 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
       if (message && message.toLowerCase().includes('cuenta bloqueada')) {
         setErrorMessage(message);
       } else if (lower.includes('no se pudo conectar al servidor') || lower.includes('network request failed') || lower.includes('failed to fetch')) {
-        setErrorMessage(message || (language === 'es' ? 'No se pudo conectar al servidor.' : 'Could not connect to the server.'));
+        setErrorMessage(message || localize({
+          es: 'No se pudo conectar al servidor.',
+          en: 'Could not connect to the server.',
+          fr: 'Impossible de se connecter au serveur.',
+          pt: 'Não foi possível conectar ao servidor.',
+        }));
       } else if (lower.includes('email not confirmed') || (lower.includes('confirm') && lower.includes('email'))) {
-        setErrorMessage(language === 'es' ? 'Confirma tu email antes de iniciar sesión.' : 'Please confirm your email before signing in.');
+        setErrorMessage(localize({
+          es: 'Confirma tu email antes de iniciar sesión.',
+          en: 'Please confirm your email before signing in.',
+          fr: 'Confirmez votre e-mail avant de vous connecter.',
+          pt: 'Confirme seu e-mail antes de entrar.',
+        }));
       } else if (lower.includes('invalid login credentials')) {
         setErrorMessage(
-          language === 'es'
-            ? 'Credenciales inválidas. Si ya confirmaste el email, usa "¿Olvidaste tu contraseña?" para establecer una contraseña.'
-            : 'Invalid credentials. If you already confirmed the email, use "Forgot your password?" to set a password.'
+          localize({
+            es: 'Credenciales inválidas. Si ya confirmaste el email, usa "¿Olvidaste tu contraseña?" para establecer una contraseña.',
+            en: 'Invalid credentials. If you already confirmed the email, use "Forgot your password?" to set a password.',
+            fr: 'Identifiants invalides. Si vous avez déjà confirmé votre e-mail, utilisez « Mot de passe oublié ? » pour définir un mot de passe.',
+            pt: 'Credenciais inválidas. Se você já confirmou o e-mail, use "Esqueceu sua senha?" para definir uma senha.',
+          })
         );
       } else {
         setErrorMessage(t('login.invalidCredentials'));
@@ -441,7 +480,12 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
   const handleGoogleLogin = async () => {
     const supabaseClient = supabase;
     if (!isSupabaseConfigured() || !supabaseClient) {
-      setGoogleErrorMessage('Falta configurar Supabase (SUPABASE_URL / SUPABASE_ANON_KEY) en el frontend');
+        setGoogleErrorMessage(localize({
+          es: 'Falta configurar Supabase (SUPABASE_URL / SUPABASE_ANON_KEY) en el frontend',
+          en: 'Supabase is not configured on the frontend (SUPABASE_URL / SUPABASE_ANON_KEY).',
+          fr: 'Supabase n’est pas configuré dans le frontend (SUPABASE_URL / SUPABASE_ANON_KEY).',
+          pt: 'O Supabase não está configurado no frontend (SUPABASE_URL / SUPABASE_ANON_KEY).',
+        }));
       return;
     }
 
@@ -472,12 +516,22 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
       } as any);
 
       if (error) {
-        throw new Error(error.message || 'No se pudo abrir Google');
+        throw new Error(error.message || localize({
+          es: 'No se pudo abrir Google',
+          en: 'Could not open Google',
+          fr: 'Impossible d’ouvrir Google',
+          pt: 'Não foi possível abrir o Google',
+        }));
       }
 
       const authUrl = (data as any)?.url ? String((data as any).url) : '';
       if (!authUrl) {
-        throw new Error('No se pudo generar la URL de autenticación');
+        throw new Error(localize({
+          es: 'No se pudo generar la URL de autenticación',
+          en: 'Could not generate the authentication URL',
+          fr: 'Impossible de générer l’URL d’authentification',
+          pt: 'Não foi possível gerar a URL de autenticação',
+        }));
       }
 
       let callbackUrl: string | null = null;
@@ -519,9 +573,12 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
         // Fallback: open in external browser + wait for deep-link callback.
         const canOpen = await Linking.canOpenURL(authUrl).catch(() => true);
         if (!canOpen) {
-          throw new Error(language === 'es'
-            ? 'No se pudo abrir el navegador para iniciar sesión con Google.'
-            : 'Could not open a browser to sign in with Google.');
+          throw new Error(localize({
+            es: 'No se pudo abrir el navegador para iniciar sesión con Google.',
+            en: 'Could not open a browser to sign in with Google.',
+            fr: 'Impossible d\'ouvrir un navigateur pour se connecter avec Google.',
+            pt: 'Não foi possível abrir um navegador para entrar com o Google.',
+          }));
         }
 
         await Linking.openURL(authUrl);
@@ -529,7 +586,12 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
       }
 
       if (!callbackUrl) {
-        throw new Error('No se recibió callback de autenticación');
+        throw new Error(localize({
+          es: 'No se recibió callback de autenticación',
+          en: 'No authentication callback was received',
+          fr: 'Aucun callback d’authentification n’a été reçu',
+          pt: 'Nenhum callback de autenticação foi recebido',
+        }));
       }
 
       const callbackInfo = extractOAuthCallbackInfo(callbackUrl);
@@ -541,7 +603,12 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
       // Fallback: implicit hash tokens (rare, but supported).
       const code = callbackInfo.code;
       if (!code && !(callbackInfo.accessTokenFromHash && callbackInfo.refreshTokenFromHash)) {
-        throw new Error('OAuth cancelado o inválido');
+        throw new Error(localize({
+          es: 'OAuth cancelado o inválido',
+          en: 'OAuth was cancelled or is invalid',
+          fr: 'OAuth a été annulé ou est invalide',
+          pt: 'O OAuth foi cancelado ou é inválido',
+        }));
       }
 
       // IMPORTANT:
@@ -575,7 +642,12 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
       }
 
       if (!accessToken) {
-        throw new Error('No se obtuvo access_token');
+        throw new Error(localize({
+          es: 'No se obtuvo access_token',
+          en: 'No access token was returned',
+          fr: 'Aucun access token n’a été obtenu',
+          pt: 'Nenhum access token foi obtido',
+        }));
       }
 
       try {
@@ -606,7 +678,12 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
         throw err;
       }
     } catch (err) {
-      const rawMessage = err instanceof Error ? err.message : 'No se pudo iniciar sesión con Google';
+      const rawMessage = err instanceof Error ? err.message : localize({
+        es: 'No se pudo iniciar sesión con Google',
+        en: 'Could not sign in with Google',
+        fr: 'Impossible de se connecter avec Google',
+        pt: 'Não foi possível entrar com o Google',
+      });
       const lower = String(rawMessage || '').toLowerCase();
       const message = lower.includes('pkce') && lower.includes('code verifier')
         ? t('login.googlePkceMissing')
@@ -633,25 +710,12 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
         style={styles.keyboardView}>
         <View style={styles.content}>
           <View style={[styles.languageSwitcher, { top: 6 + androidTopInset }]}>
-            <View style={[styles.languagePill, screenDisabled && styles.languagePillDisabled]}>
-              <TouchableOpacity
-                onPress={() => setLanguage('en')}
-                activeOpacity={0.85}
-                disabled={screenDisabled || language === 'en'}
-                style={[styles.languagePillOption, language === 'en' && styles.languagePillOptionActive]}
-              >
-                <Text style={[styles.languagePillText, language === 'en' && styles.languagePillTextActive]}>EN</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={() => setLanguage('es')}
-                activeOpacity={0.85}
-                disabled={screenDisabled || language === 'es'}
-                style={[styles.languagePillOption, language === 'es' && styles.languagePillOptionActive]}
-              >
-                <Text style={[styles.languagePillText, language === 'es' && styles.languagePillTextActive]}>ES</Text>
-              </TouchableOpacity>
-            </View>
+            <LanguageSelector
+              value={language}
+              onSelect={handleLanguageSelect}
+              disabled={screenDisabled}
+              compact
+            />
           </View>
 
           {/* Logo o título de la app */}
@@ -768,7 +832,7 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
               ) : (
                 <View style={styles.googleButtonInner}>
                   <GradientGoogleIcon size={18} />
-                  <Text style={styles.googleButtonText}>Iniciar con Google</Text>
+                  <Text style={styles.googleButtonText}>{localize({ es: 'Iniciar con Google', en: 'Continue with Google', fr: 'Continuer avec Google', pt: 'Continuar com Google' })}</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -826,38 +890,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 6,
     right: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
     zIndex: 10,
-  },
-  languagePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#111111',
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
-    borderRadius: 999,
-    padding: 2,
-  },
-  languagePillDisabled: {
-    opacity: 0.6,
-  },
-  languagePillOption: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 999,
-  },
-  languagePillOptionActive: {
-    backgroundColor: '#1e1e1e',
-  },
-  languagePillText: {
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0.6,
-    color: '#5D4037',
-  },
-  languagePillTextActive: {
-    color: '#FFB74D',
   },
   headerContainer: {
     alignItems: 'center',
