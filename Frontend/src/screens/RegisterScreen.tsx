@@ -5,7 +5,6 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   StatusBar,
   KeyboardAvoidingView,
   Platform,
@@ -14,6 +13,7 @@ import {
   Animated,
   Easing,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
@@ -100,7 +100,6 @@ const GradientLoader = () => {
 
 const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenProps) => {
   const PENDING_SIGNUP_PREFIX = 'keinti:pendingSignup:';
-  const androidTopInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
   const { t } = useI18n();
   const USERNAME_MAX_LENGTH = 22; // Incluye el '@'
   const RECTIFICATION_MAX_LENGTH = 220;
@@ -1063,10 +1062,10 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
   if (activePolicy) {
     return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar backgroundColor="#000000" barStyle="light-content" />
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <StatusBar barStyle="light-content" />
 
-        <View style={[styles.policyHeader, { paddingTop: androidTopInset }]}>
+        <View style={styles.policyHeader}>
           <TouchableOpacity style={styles.policyBackButton} onPress={() => setActivePolicy(null)} activeOpacity={0.7}>
             <Icon name="arrow-back-ios" size={22} color="#ffffffff" />
           </TouchableOpacity>
@@ -1080,12 +1079,12 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar backgroundColor="#000000" barStyle="light-content" />
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <StatusBar barStyle="light-content" />
 
       {/* Botón de retroceso */}
       <TouchableOpacity
-        style={[styles.backButton, { top: 16 + androidTopInset }]}
+        style={styles.backButton}
         onPress={handleBack}
         activeOpacity={0.7}
         disabled={isUiBlocked}>

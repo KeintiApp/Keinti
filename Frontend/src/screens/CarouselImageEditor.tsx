@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   StyleSheet,
-  SafeAreaView,
   StatusBar,
   Text,
   TouchableOpacity,
@@ -11,8 +10,8 @@ import {
   Alert,
   Dimensions,
   ScrollView,
-  Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import ImageCropPicker from 'react-native-image-crop-picker';
 
@@ -49,8 +48,6 @@ const PREVIEW_MAX_WIDTH = Dimensions.get('window').width;
 const ASPECT_RATIO_PRESETS: Record<AspectRatioValue, { label: string; width: number; height: number; ratio: number }> = {
   '3:4': { label: '3:4', width: 900, height: 1200, ratio: 3 / 4 },
 };
-
-const ANDROID_TOP_INSET = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
 
 const CarouselImageEditor = ({
   imageUri,
@@ -226,8 +223,8 @@ const CarouselImageEditor = ({
   }, [onSelectImage]);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar backgroundColor={'#000000'} barStyle={'light-content'} translucent={false} />
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <StatusBar barStyle={'light-content'} />
       <View style={styles.header}>
         <TouchableOpacity style={styles.headerButton} onPress={onBack} activeOpacity={0.7}>
           <Icon name={'arrow-back'} size={22} color={'#FFFFFF'} />
@@ -314,7 +311,7 @@ const CarouselImageEditor = ({
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a', paddingTop: ANDROID_TOP_INSET },
+  container: { flex: 1, backgroundColor: '#0a0a0a' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

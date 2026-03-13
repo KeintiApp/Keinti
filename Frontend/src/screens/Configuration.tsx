@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, GestureResponderEvent, Image, Keyboard, Linking, Modal, PermissionsAndroid, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, GestureResponderEvent, Image, Keyboard, Linking, Modal, PermissionsAndroid, Platform, ScrollView, StatusBar, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import ImageCropPicker from 'react-native-image-crop-picker';
@@ -16,8 +16,6 @@ import PasswordResetModal, { PASSWORD_RESET_DRAFT_STORAGE_KEY } from '../compone
 import HighlightedI18nText from '../components/HighlightedI18nText';
 import LanguageSelector from '../components/LanguageSelector';
 import { COUNTRIES } from '../constants/countries';
-
-const ANDROID_TOP_INSET = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
 
 interface ConfigurationProps {
   onBack: () => void;
@@ -1790,10 +1788,10 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar backgroundColor="#000000" barStyle="light-content" />
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <StatusBar barStyle="light-content" />
 
-      <View style={styles.header}>
+      <View style={[styles.header, { height: 56 + safeAreaInsets.top, paddingTop: safeAreaInsets.top }]}>
         <TouchableOpacity style={styles.backButton} onPress={handleBack} activeOpacity={0.7}>
           <MaterialIcons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
@@ -3363,7 +3361,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                 ) : null}
 
                 <TouchableOpacity
-                  style={styles.imagePreviewClose}
+                  style={[styles.imagePreviewClose, { top: safeAreaInsets.top + 10 }]}
                   activeOpacity={0.85}
                   onPress={() => setAdminSelfiePreviewUri(null)}
                 >
@@ -3769,11 +3767,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#000000',
   },
   header: {
-    height: 56 + ANDROID_TOP_INSET,
+    height: 56,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
-    paddingTop: ANDROID_TOP_INSET,
     borderBottomWidth: 1,
     borderBottomColor: '#1E1E1E',
   },
@@ -4304,7 +4301,7 @@ const styles = StyleSheet.create({
   },
   imagePreviewClose: {
     position: 'absolute',
-    top: (StatusBar.currentHeight || 0) + 10,
+    top: 10,
     right: 12,
     width: 44,
     height: 44,

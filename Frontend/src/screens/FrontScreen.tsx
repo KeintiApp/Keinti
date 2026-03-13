@@ -12,7 +12,6 @@ import {
   TouchableWithoutFeedback,
   Keyboard,
   KeyboardAvoidingView,
-  StatusBar,
   ActivityIndicator,
   Animated,
   PanResponder,
@@ -521,15 +520,6 @@ const REACTION_ITEM_SIZE = (SCREEN_WIDTH - 40) * 0.16 - 6;
 const CHAT_TABS_DEFAULT_OFFSET = 90;
 const CHAT_TABS_TOP = 20;
 const CHAT_TABS_GAP = 10;
-
-const ANDROID_STATUS_BAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
-// Some Android devices/ROMs can report StatusBar.currentHeight as 0 even when
-// the status bar is visible. Use a small fallback so top headers don't render
-// behind the system status bar.
-const ANDROID_SAFE_TOP = Platform.OS === 'android' ? (ANDROID_STATUS_BAR_HEIGHT || 24) : 0;
-
-const SOCIAL_PANEL_BASE_HEIGHT = 280;
-const SOCIAL_PANEL_HEIGHT = SOCIAL_PANEL_BASE_HEIGHT + ANDROID_SAFE_TOP;
 
 // Extra spacing above the keyboard so the chat input doesn't feel glued/clipped to it.
 const CHAT_INPUT_KEYBOARD_GAP = Platform.OS === 'ios' ? 18 : 10;

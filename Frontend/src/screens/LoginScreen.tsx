@@ -5,7 +5,6 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   KeyboardAvoidingView,
   Platform,
   StatusBar,
@@ -13,6 +12,7 @@ import {
   Image,
   Linking,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import FontAwesome from 'react-native-vector-icons/FontAwesome';
 import MaskedView from '@react-native-masked-view/masked-view';
@@ -215,7 +215,6 @@ interface LoginScreenProps {
 }
 
 const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken }: LoginScreenProps) => {
-  const androidTopInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
   const { t, language, setLanguage } = useI18n();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -700,16 +699,13 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar
-        backgroundColor="#000000"
-        barStyle="light-content"
-      />
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <StatusBar barStyle="light-content" />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}>
         <View style={styles.content}>
-          <View style={[styles.languageSwitcher, { top: 6 + androidTopInset }]}>
+          <View style={styles.languageSwitcher}>
             <LanguageSelector
               value={language}
               onSelect={handleLanguageSelect}

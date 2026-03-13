@@ -2,7 +2,6 @@
 import {
   View,
   StyleSheet,
-  SafeAreaView,
   StatusBar,
   Text,
   TouchableOpacity,
@@ -10,8 +9,8 @@ import {
   ActivityIndicator,
   Alert,
   InteractionManager,
-  Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import ImageCropPicker, {ImageOrVideo} from 'react-native-image-crop-picker';
 
@@ -29,8 +28,6 @@ interface CroppedImageResult {
 }
 
 const PREVIEW_SIZE = 260;
-
-const ANDROID_TOP_INSET = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
 
 const ProfilePhotoEdit = ({imageUri, onBack, onSave}: ProfilePhotoEditProps) => {
   const [croppedImage, setCroppedImage] = useState<ImageOrVideo | null>(null);
@@ -167,8 +164,8 @@ const ProfilePhotoEdit = ({imageUri, onBack, onSave}: ProfilePhotoEditProps) => 
   }, [croppedImage, imageUri, toDisplayUri]);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar backgroundColor={'#000000'} barStyle={'light-content'} translucent={false} />
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <StatusBar barStyle={'light-content'} />
       <View style={styles.header}>
         <TouchableOpacity style={styles.headerButton} onPress={onBack} activeOpacity={0.7}>
           <Icon name={'arrow-back'} size={22} color={'#FFFFFF'} />
@@ -211,7 +208,7 @@ const ProfilePhotoEdit = ({imageUri, onBack, onSave}: ProfilePhotoEditProps) => 
 };
 
 const styles = StyleSheet.create({
-  container: {flex: 1, backgroundColor: '#0a0a0a', paddingTop: ANDROID_TOP_INSET},
+  container: {flex: 1, backgroundColor: '#0a0a0a'},
   header: {
     flexDirection: 'row',
     alignItems: 'center',
