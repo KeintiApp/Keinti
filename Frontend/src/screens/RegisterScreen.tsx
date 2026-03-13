@@ -5,7 +5,6 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  StatusBar,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -1063,8 +1062,6 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   if (activePolicy) {
     return (
       <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-        <StatusBar barStyle="light-content" />
-
         <View style={styles.policyHeader}>
           <TouchableOpacity style={styles.policyBackButton} onPress={() => setActivePolicy(null)} activeOpacity={0.7}>
             <Icon name="arrow-back-ios" size={22} color="#ffffffff" />
@@ -1080,8 +1077,6 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <StatusBar barStyle="light-content" />
-
       {/* Botón de retroceso */}
       <TouchableOpacity
         style={styles.backButton}

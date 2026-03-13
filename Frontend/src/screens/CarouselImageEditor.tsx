@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   StyleSheet,
-  StatusBar,
   Text,
   TouchableOpacity,
   Image,
@@ -224,7 +223,6 @@ const CarouselImageEditor = ({
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <StatusBar barStyle={'light-content'} />
       <View style={styles.header}>
         <TouchableOpacity style={styles.headerButton} onPress={onBack} activeOpacity={0.7}>
           <Icon name={'arrow-back'} size={22} color={'#FFFFFF'} />

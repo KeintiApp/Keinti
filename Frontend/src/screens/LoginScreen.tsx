@@ -7,7 +7,6 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
-  StatusBar,
   ActivityIndicator,
   Image,
   Linking,
@@ -700,7 +699,6 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <StatusBar barStyle="light-content" />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}>

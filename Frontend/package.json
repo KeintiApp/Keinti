@@ -7,7 +7,7 @@
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start --reset-cache",
-    "postinstall": "node scripts/fix-debugger-locales.js && node scripts/fix-react-native-maps-rn076-shim.js",
+    "postinstall": "node scripts/fix-debugger-locales.js && node scripts/fix-react-native-maps-rn076-shim.js && node scripts/fix-react-native-android15-edge-to-edge.js",
     "test": "jest"
   },
   "dependencies": {

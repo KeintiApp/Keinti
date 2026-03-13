@@ -2,6 +2,7 @@ package com.keintiapp.keinti
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
@@ -15,6 +16,13 @@ class MainActivity : ReactActivity() {
       // Insets are handled on the JS side by react-native-safe-area-context.
       enableEdgeToEdge()
       super.onCreate(savedInstanceState)
+
+      // Keep light system bar icons across the app so we don't need to drive
+      // status-bar appearance from JS, which routes through deprecated Android 15 APIs.
+      WindowCompat.getInsetsController(window, window.decorView)?.let { controller ->
+          controller.isAppearanceLightStatusBars = false
+          controller.isAppearanceLightNavigationBars = false
+      }
   }
 
   /**

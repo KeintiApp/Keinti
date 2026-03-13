@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, GestureResponderEvent, Image, Keyboard, Linking, Modal, PermissionsAndroid, Platform, ScrollView, StatusBar, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, GestureResponderEvent, Image, Keyboard, Linking, Modal, PermissionsAndroid, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -1789,8 +1789,6 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <StatusBar barStyle="light-content" />
-
       <View style={[styles.header, { height: 56 + safeAreaInsets.top, paddingTop: safeAreaInsets.top }]}>
         <TouchableOpacity style={styles.backButton} onPress={handleBack} activeOpacity={0.7}>
           <MaterialIcons name="arrow-back" size={24} color="#FFFFFF" />
@@ -3317,7 +3315,6 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
         visible={showAuthSuccessModal}
         transparent
         animationType="fade"
-        statusBarTranslucent
         onRequestClose={() => setShowAuthSuccessModal(false)}
       >
         <TouchableWithoutFeedback onPress={() => setShowAuthSuccessModal(false)}>
@@ -3449,7 +3446,6 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
         visible={showLogoutConfirmModal}
         transparent
         animationType="none"
-        statusBarTranslucent
         onRequestClose={closeLogoutConfirm}
       >
         <TouchableWithoutFeedback onPress={closeLogoutConfirm}>
@@ -3568,7 +3564,6 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
         visible={showDeleteAccountModal}
         transparent
         animationType="none"
-        statusBarTranslucent
         onRequestClose={closeDeleteAccountConfirm}
       >
         <TouchableWithoutFeedback onPress={closeDeleteAccountConfirm}>
