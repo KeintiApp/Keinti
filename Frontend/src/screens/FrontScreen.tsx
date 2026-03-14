@@ -807,6 +807,7 @@ interface SocialNetwork {
 
 interface Publication {
   id: string;
+  channelSubscriberCount?: number;
   user: {
     username: string;
     email?: string;
@@ -837,6 +838,12 @@ interface Group {
 
 const getGroupMemberCount = (count?: number) => {
   const n = typeof count === 'number' && Number.isFinite(count) ? count : 0;
+  return Math.max(0, n);
+};
+
+const getPublicationChannelSubscriberCount = (publication?: Publication | null) => {
+  const n = Number((publication as any)?.channelSubscriberCount ?? (publication as any)?.subscriber_count ?? 0);
+  if (!Number.isFinite(n)) return 0;
   return Math.max(0, n);
 };
 
@@ -3674,6 +3681,14 @@ const FrontScreen = ({
 
       const data = await response.json();
       if (response.ok) {
+        setPublications(prev => prev.map(existing => {
+          if (String(existing.id) !== String(pub.id)) return existing;
+          return {
+            ...existing,
+            channelSubscriberCount: getPublicationChannelSubscriberCount(existing) + 1,
+          };
+        }));
+
         // Refresh channels if we are in that view (unlikely but good practice)
         fetchMyChannels();
 
@@ -7261,6 +7276,7 @@ const FrontScreen = ({
     const tempId = Date.now().toString();
     const newPublication: Publication = {
       id: tempId,
+      channelSubscriberCount: 0,
       user: {
         username: username || 'Usuario',
         email: userEmail,
@@ -10490,13 +10506,23 @@ const FrontScreen = ({
                               </View>
                             </View>
                           </View>
-                          <View style={{ justifyContent: 'center' }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <View style={{ justifyContent: 'center', flexDirection: 'row', alignItems: 'flex-start' }}>
+                            <View style={{ alignItems: 'flex-end' }}>
                               {!!pub.user.nationality && (
                                 <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: 'bold' }}>{pub.user.nationality}</Text>
                               )}
+                              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: pub.user.nationality ? 4 : 0 }}>
+                                <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '400', marginRight: 4 }}>
+                                  {t('front.channelLabel' as TranslationKey)}
+                                </Text>
+                                <MaterialIcons name="person" size={13} color="rgba(255,255,255,0.72)" style={{ marginRight: 4 }} />
+                                <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '600' }}>
+                                  {getPublicationChannelSubscriberCount(pub)}
+                                </Text>
+                              </View>
+                            </View>
 
-                              <View style={{ position: 'relative', marginLeft: 6, zIndex: 80, elevation: 80 }}>
+                            <View style={{ position: 'relative', marginLeft: 6, zIndex: 80, elevation: 80 }}>
                                 <TouchableOpacity
                                   onPress={() => togglePublicationOptions(pub.id)}
                                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -10529,7 +10555,6 @@ const FrontScreen = ({
                               </View>
                             </View>
                           </View>
-                        </View>
 
                         {pub.presentation.images.length > 0 && (
                           <View>

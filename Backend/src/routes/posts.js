@@ -63,6 +63,11 @@ router.get('/', async (req, res) => {
             p.presentation,
             p.intimidades,
             p.reactions,
+            (
+              SELECT COUNT(*)::int
+              FROM channel_subscriptions cs
+              WHERE cs.post_id = p.id
+            ) AS subscriber_count,
             (p.created_at AT TIME ZONE 'UTC') AS created_at,
             (p.updated_at AT TIME ZONE 'UTC') AS updated_at,
             (p.deleted_at AT TIME ZONE 'UTC') AS deleted_at,
@@ -219,6 +224,7 @@ router.get('/', async (req, res) => {
 
       return {
         id: row.id.toString(),
+        channelSubscriberCount: Number.isFinite(Number(row.subscriber_count)) ? Number(row.subscriber_count) : 0,
         user: {
           username: row.username,
           email: row.user_email,

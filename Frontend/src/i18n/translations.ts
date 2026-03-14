@@ -209,6 +209,7 @@ export type TranslationKey =
   | 'front.draftIntimacyPlaceholder'
   | 'front.intimaciesPublishBlocked'
   | 'front.homeSwipeTutorialHint'
+  | 'front.channelLabel'
 
   | 'chat.tabYourChannel'
   | 'chat.tabChannel'
@@ -622,6 +623,7 @@ const es: Record<TranslationKey, string> = {
   'front.draftIntimacyPlaceholder': 'Redacta alguna intimidad...',
   'front.intimaciesPublishBlocked': "Aún no puedes publicar intimidades. Primero crea 'Tu presentación'.",
   'front.homeSwipeTutorialHint': 'Desliza a un lado u otro para visualizar otra publicación',
+  'front.channelLabel': 'Canal:',
 
   'chat.tabYourChannel': 'Tu canal',
   'chat.tabChannel': 'Canal',
@@ -1069,6 +1071,7 @@ const en: Record<TranslationKey, string> = {
   'front.draftIntimacyPlaceholder': 'Write an intimacy...',
   'front.intimaciesPublishBlocked': "You can't post intimacies yet. First create 'Your presentation'.",
   'front.homeSwipeTutorialHint': 'Swipe left or right to view another post',
+  'front.channelLabel': 'Channel:',
 
   'chat.tabYourChannel': 'Your channel',
   'chat.tabChannel': 'Channel',
@@ -1487,6 +1490,7 @@ export const translations: Record<Language, Record<TranslationKey, string>> = {
     'front.draftIntimacyPlaceholder': 'Écrivez une intimité...',
     'front.intimaciesPublishBlocked': 'Vous ne pouvez pas encore publier d’intimités. Créez d’abord « Votre présentation ».',
     'front.homeSwipeTutorialHint': 'Balayez vers la gauche ou la droite pour voir une autre publication',
+    'front.channelLabel': 'Canal :',
     'chat.tabYourChannel': 'Votre canal',
     'chat.tabChannel': 'Canal',
     'chat.tabJoined': 'Rejoints',
@@ -1871,6 +1875,7 @@ L’équipe Keinti`,
     'front.draftIntimacyPlaceholder': 'Rascunhe uma intimidade...',
     'front.intimaciesPublishBlocked': 'Você ainda não pode publicar intimidades. Primeiro crie "Sua apresentação".',
     'front.homeSwipeTutorialHint': 'Deslize para um lado ou outro para ver outra publicação',
+    'front.channelLabel': 'Canal:',
     'chat.tabYourChannel': 'Seu canal',
     'chat.tabChannel': 'Canal',
     'chat.tabJoined': 'Entrados',
