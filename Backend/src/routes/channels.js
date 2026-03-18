@@ -103,23 +103,33 @@ router.post('/enter', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'No autorizado' });
     }
 
-    // Verificar si ya existe la suscripción
-    const check = await pool.query(
-      'SELECT * FROM channel_subscriptions WHERE viewer_email = $1 AND post_id = $2',
-      [viewerEmail, numericPostId]
-    );
-
-    if (check.rows.length > 0) {
-      return res.json({ message: 'Ya estás en este canal', subscription: check.rows[0] });
-    }
-
-    // Crear suscripción
-    const result = await pool.query(
-      'INSERT INTO channel_subscriptions (viewer_email, publisher_email, post_id) VALUES ($1, $2, $3) RETURNING *',
+    // Crear suscripción de forma idempotente para tolerar taps/reintentos duplicados.
+    const insertResult = await pool.query(
+      `INSERT INTO channel_subscriptions (viewer_email, publisher_email, post_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (viewer_email, post_id) DO NOTHING
+       RETURNING *`,
       [viewerEmail, publisherEmail, numericPostId]
     );
 
-    res.status(201).json({ message: 'Has entrado al canal', subscription: result.rows[0] });
+    if (insertResult.rows.length > 0) {
+      return res.status(201).json({
+        message: 'Has entrado al canal',
+        joined: true,
+        subscription: insertResult.rows[0],
+      });
+    }
+
+    const existing = await pool.query(
+      'SELECT * FROM channel_subscriptions WHERE viewer_email = $1 AND post_id = $2 LIMIT 1',
+      [viewerEmail, numericPostId]
+    );
+
+    return res.json({
+      message: 'Ya estás en este canal',
+      joined: false,
+      subscription: existing.rows[0] || null,
+    });
   } catch (error) {
     console.error('Error al entrar al canal:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
@@ -172,6 +182,7 @@ router.get('/my-channels', authenticateToken, async (req, res) => {
       LEFT JOIN account_auth aa ON aa.user_email = u.email
       JOIN Post_users p ON cs.post_id = p.id
       WHERE cs.viewer_email = $1
+        AND p.deleted_at IS NULL
         AND p.created_at >= NOW() - ($2 * INTERVAL '1 minute')
         AND NOT EXISTS (
           SELECT 1

@@ -14,7 +14,6 @@ import {
   KeyboardAvoidingView,
   ActivityIndicator,
   Animated,
-  PanResponder,
   Dimensions,
   Alert,
   Platform,
@@ -28,8 +27,9 @@ import {
 import type { ImageSourcePropType } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import MapView, { PROVIDER_GOOGLE, type PoiClickEvent } from 'react-native-maps';
+import PagerView from 'react-native-pager-view';
 import Geolocation from '@react-native-community/geolocation';
-import mobileAds, {
+import {
   AdEventType,
   BannerAd,
   BannerAdSize,
@@ -48,6 +48,7 @@ import { BANNER_AD_UNIT_ID, INTERSTITIAL_AD_UNIT_ID, REWARDED_AD_UNIT_ID } from 
 import { POST_TTL_MS } from '../config/postTtl';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Language, TranslationKey } from '../i18n/translations';
+import { ensureAdsConsentForAccount, getStoredAdsRuntimeConfig } from '../services/adsConsent';
 
 import Svg, { Defs, LinearGradient, Stop, Rect, Circle, Path, Text as SvgText } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -58,6 +59,8 @@ const HOME_INTIMIDADES_UNLOCKS_STORAGE_KEY_PREFIX = 'keinti.home_intimidades_unl
 const HOME_LOADER_MIN_MS = 1000;
 const HOME_INTERSTITIAL_MIN_VIEWS = 16;
 const HOME_INTERSTITIAL_MAX_VIEWS = 18;
+const HOME_DISCOVER_RECENT_POOL_SIZE = 5;
+const HOME_DISCOVER_RECENT_WEIGHT = 0.7;
 
 // In-memory fallback so the tutorial can still appear once even if
 // the backend ui-hints endpoint is temporarily unavailable.
@@ -144,6 +147,34 @@ const withHexAlpha = (color: string, alpha: number) => {
 
   // Fallback (named colors / existing rgba): keep as-is.
   return raw;
+};
+
+const getPublicationCreatedAtMs = (publication?: { createdAt?: unknown } | null) => {
+  const raw = publication?.createdAt;
+  if (raw instanceof Date) {
+    return Number.isNaN(raw.getTime()) ? 0 : raw.getTime();
+  }
+
+  const parsed = new Date(String(raw ?? ''));
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+};
+
+const buildHomePublicationSequence = <T extends { createdAt?: unknown }>(items: T[]) => {
+  const remaining = [...items].sort((left, right) => getPublicationCreatedAtMs(right) - getPublicationCreatedAtMs(left));
+  const ordered: T[] = [];
+
+  while (remaining.length > 0) {
+    const recentPoolSize = Math.min(HOME_DISCOVER_RECENT_POOL_SIZE, remaining.length);
+    const shouldPickFromRecent = recentPoolSize === remaining.length || Math.random() < HOME_DISCOVER_RECENT_WEIGHT;
+    const poolSize = shouldPickFromRecent ? recentPoolSize : remaining.length;
+    const pickedIndex = Math.floor(Math.random() * poolSize);
+    const [pickedItem] = remaining.splice(pickedIndex, 1);
+    if (pickedItem) {
+      ordered.push(pickedItem);
+    }
+  }
+
+  return ordered;
 };
 
 const GROUP_MEMBERS_VISIBLE_CARDS = 5;
@@ -861,8 +892,6 @@ interface FrontScreenProps {
   onNavigateToNotifications?: () => void;
   onNavigateToRecompensa?: () => void;
   onNavigateToConfiguration?: () => void;
-  onReloadGiveAways?: () => void;
-  onReloadApp?: () => void;
   onLogout?: () => void;
   giveAways?: GiveAway[];
   onOpenFilter?: () => void;
@@ -1078,7 +1107,6 @@ const FrontScreen = ({
   const permissionRequiredTitle = localize({ es: 'Permiso requerido', en: 'Permission required', fr: 'Autorisation requise', pt: 'Permissão obrigatória' });
   const adUnavailableTitle = localize({ es: 'Anuncio no disponible', en: 'Ad unavailable', fr: 'Annonce indisponible', pt: 'Anúncio indisponível' });
 
-  const [adsInitialized, setAdsInitialized] = useState(false);
   const [homeProfileRingBannerReady, setHomeProfileRingBannerReady] = useState(false);
   const [homeProfileRingBannerSize, setHomeProfileRingBannerSize] = useState(HOME_PROFILE_RING_DEFAULT_BANNER_SIZE);
   const [homeProfileRingBannerRequestKey, setHomeProfileRingBannerRequestKey] = useState(0);
@@ -1087,21 +1115,67 @@ const FrontScreen = ({
 
   const [keintiVerified, setKeintiVerified] = useState(false);
 
+  // Ads consent/runtime config.
+  // Consent is resolved once per authenticated account when entering the app.
+  const [adsSdkReady, setAdsSdkReady] = useState(false);
+  const [requestNonPersonalizedAdsOnly, setRequestNonPersonalizedAdsOnly] = useState(false);
+
+  const isFrontScreenMountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      isFrontScreenMountedRef.current = false;
+    };
+  }, []);
+
+  const consentInFlightRef = useRef<Promise<{ adsSdkReady: boolean; requestNonPersonalizedAdsOnly: boolean; gdprApplies: boolean | null }> | null>(null);
+
+  const syncAdsRuntimeForCurrentAccount = useCallback(async () => {
+    if (consentInFlightRef.current) return consentInFlightRef.current;
+
+    const p = ensureAdsConsentForAccount(userEmail)
+      .then((cfg) => {
+        if (isFrontScreenMountedRef.current) {
+          setAdsSdkReady(!!cfg.adsSdkReady);
+          setRequestNonPersonalizedAdsOnly(!!cfg.requestNonPersonalizedAdsOnly);
+        }
+        return cfg;
+      })
+      .catch(() => {
+        const fallback = { adsSdkReady: false, requestNonPersonalizedAdsOnly: false, gdprApplies: null };
+        if (isFrontScreenMountedRef.current) {
+          setAdsSdkReady(false);
+          setRequestNonPersonalizedAdsOnly(false);
+        }
+        return fallback;
+      })
+      .finally(() => {
+        consentInFlightRef.current = null;
+      });
+
+    consentInFlightRef.current = p;
+    return p;
+  }, [userEmail]);
+
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        await mobileAds().initialize();
-      } catch {
-        // ignore
-      }
-      if (!cancelled) setAdsInitialized(true);
-    })();
+
+    syncAdsRuntimeForCurrentAccount()
+      .then((cfg) => {
+        if (cancelled || !isFrontScreenMountedRef.current) return;
+        setAdsSdkReady(!!cfg.adsSdkReady);
+        setRequestNonPersonalizedAdsOnly(!!cfg.requestNonPersonalizedAdsOnly);
+      })
+      .catch(async () => {
+        const fallback = await getStoredAdsRuntimeConfig().catch(() => null);
+        if (cancelled || !isFrontScreenMountedRef.current || !fallback) return;
+        setAdsSdkReady(!!fallback.adsSdkReady);
+        setRequestNonPersonalizedAdsOnly(!!fallback.requestNonPersonalizedAdsOnly);
+      });
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [syncAdsRuntimeForCurrentAccount]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1166,8 +1240,15 @@ const FrontScreen = ({
   };
 
   useEffect(() => {
+    if (!adsSdkReady) return;
+
+    // If consent settings changed, we're recreating the ad instance.
+    // Reset local loaded state so UI doesn't assume the new instance is ready.
+    setIsRewardedLoaded(false);
+    resetRewardedGateState();
+
     const rewarded = RewardedAd.createForAdRequest(REWARDED_AD_UNIT_ID, {
-      requestNonPersonalizedAdsOnly: true,
+      requestNonPersonalizedAdsOnly,
     });
     rewardedAdRef.current = rewarded;
 
@@ -1271,40 +1352,78 @@ const FrontScreen = ({
       unsubscribeClosed();
       unsubscribeError();
     };
-  }, []);
+  }, [adsSdkReady, requestNonPersonalizedAdsOnly]);
 
   // Preload the first rewarded ad only after the SDK has fully initialized.
   useEffect(() => {
-    if (!adsInitialized) return;
+    if (!adsSdkReady) return;
     const rewarded = rewardedAdRef.current;
     if (rewarded && !isRewardedLoaded) {
       rewarded.load();
     }
-  }, [adsInitialized]);
+  }, [adsSdkReady, isRewardedLoaded]);
 
-  const showRewardedToRevealIntimidades = (pubId: string) => {
-    const rewarded = rewardedAdRef.current;
-    if (!rewarded) {
-      revealIntimidadesForPub(pubId);
+  const showRewardedToRevealIntimidades = async (pubId: string) => {
+    const safePubId = String(pubId || '').trim();
+    if (!safePubId) return;
+
+    // Record intent first so the LOADED handler can auto-show.
+    pendingIntimidadesPubIdRef.current = safePubId;
+    pendingChannelImageUnlockKeyRef.current = null;
+    rewardedEarnedRef.current = false;
+    rewardedShowRequestedRef.current = true;
+
+    if (!adsSdkReady && consentInFlightRef.current) {
+      const cfg = await consentInFlightRef.current;
+      if (!cfg.adsSdkReady) {
+        resetRewardedGateState();
+        revealIntimidadesForPub(safePubId);
+        return;
+      }
+    }
+
+    if (!adsSdkReady && !consentInFlightRef.current) {
+      // Consent is no longer opened from this interaction.
+      // If ads are still unavailable here, continue without blocking the user.
+      resetRewardedGateState();
+      revealIntimidadesForPub(safePubId);
       return;
     }
 
-    pendingIntimidadesPubIdRef.current = pubId;
-    pendingChannelImageUnlockKeyRef.current = null;
-    rewardedEarnedRef.current = false;
+    const rewarded = rewardedAdRef.current;
+    if (!rewarded) {
+      // The ad instance is created by the adsSdkReady effect after consent.
+      // Keep the pending request alive long enough for that effect + first load cycle.
+      if (rewardedShowTimeoutRef.current) clearTimeout(rewardedShowTimeoutRef.current);
+      rewardedShowTimeoutRef.current = setTimeout(() => {
+        const pendingPubId = pendingIntimidadesPubIdRef.current;
+        const currentRewarded = rewardedAdRef.current;
+        if (currentRewarded) {
+          try {
+            currentRewarded.load();
+          } catch {
+            // ignore
+          }
+          return;
+        }
+
+        resetRewardedGateState();
+        if (pendingPubId) revealIntimidadesForPub(pendingPubId);
+      }, 7000);
+      return;
+    }
 
     // If already loaded, show immediately. Otherwise request show once loaded.
     if (isRewardedLoaded) {
+      rewardedShowRequestedRef.current = false;
       try {
         rewarded.show();
       } catch {
         resetRewardedGateState();
-        revealIntimidadesForPub(pubId);
+        revealIntimidadesForPub(safePubId);
       }
       return;
     }
-
-    rewardedShowRequestedRef.current = true;
 
     // Safety: avoid getting stuck if the SDK never resolves LOADED/ERROR.
     if (rewardedShowTimeoutRef.current) clearTimeout(rewardedShowTimeoutRef.current);
@@ -1314,19 +1433,50 @@ const FrontScreen = ({
       const pendingPubId = pendingIntimidadesPubIdRef.current;
       resetRewardedGateState();
       setIsRewardedLoaded(false);
-      rewarded.load();
+      try {
+        rewarded.load();
+      } catch {
+        // ignore
+      }
 
       // Don't block the user if the ad can't be shown right now.
       if (pendingPubId) revealIntimidadesForPub(pendingPubId);
     }, 7000);
 
-    rewarded.load();
+    try {
+      rewarded.load();
+    } catch {
+      // ignore
+    }
   };
 
-  const showRewardedToUnlockChannelImage = (unlockKey: string) => {
+  const showRewardedToUnlockChannelImage = async (unlockKey: string) => {
     const key = String(unlockKey || '').trim();
     if (!key) return;
     if (unlockedChannelImageKeys[key]) return;
+
+    if (!adsSdkReady && consentInFlightRef.current) {
+      const cfg = await consentInFlightRef.current;
+      if (!cfg.adsSdkReady) {
+        Alert.alert(adUnavailableTitle, localize({
+          es: 'No hay anuncios disponibles en este momento.',
+          en: 'There are no ads available right now.',
+          fr: "Aucune annonce n'est disponible pour le moment.",
+          pt: 'Não há anúncios disponíveis neste momento.',
+        }));
+        return;
+      }
+    }
+
+    if (!adsSdkReady && !consentInFlightRef.current) {
+      Alert.alert(adUnavailableTitle, localize({
+        es: 'No hay anuncios disponibles en este momento.',
+        en: 'There are no ads available right now.',
+        fr: "Aucune annonce n'est disponible pour le moment.",
+        pt: 'Não há anúncios disponíveis neste momento.',
+      }));
+      return;
+    }
 
     const rewarded = rewardedAdRef.current;
     if (!rewarded) {
@@ -1958,6 +2108,9 @@ const FrontScreen = ({
   const [hasHomePostsLoadedOnce, setHasHomePostsLoadedOnce] = useState(false);
   const [isHomeMainScrollEnabled, setIsHomeMainScrollEnabled] = useState(true);
   const isHomeCarouselGestureActiveRef = useRef(false);
+  const homePagerRef = useRef<PagerView | null>(null);
+  const homePagerIndexRef = useRef(0);
+  const prevHomeAnimatedIndexRef = useRef(0);
   const homeTabDidMountRef = useRef(false);
   const homeLoaderPulseAnim = useRef(new Animated.Value(0)).current;
   const homeLoaderPulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
@@ -3432,6 +3585,7 @@ const FrontScreen = ({
   const channelChatLastSigRef = useRef<string>('');
   const channelOldestMessageIdRef = useRef<number | null>(null);
   const channelOldestFetchInFlightRef = useRef<number | null>(null);
+  const enteringChannelPostIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     channelChatLoadingPostIdRef.current = channelChatLoadingPostId;
@@ -3665,6 +3819,11 @@ const FrontScreen = ({
   };
 
   const handleEnterChannel = async (pub: Publication) => {
+    const postId = String(pub?.id ?? '').trim();
+    if (!postId) return;
+    if (enteringChannelPostIdsRef.current.has(postId)) return;
+
+    enteringChannelPostIdsRef.current.add(postId);
     console.log('Entering channel:', pub.id, pub.user.email);
     try {
       const response = await fetch(`${API_URL}/api/channels/enter`, {
@@ -3681,11 +3840,14 @@ const FrontScreen = ({
 
       const data = await response.json();
       if (response.ok) {
+        const joinedNow = data?.joined === true || response.status === 201;
         setPublications(prev => prev.map(existing => {
           if (String(existing.id) !== String(pub.id)) return existing;
           return {
             ...existing,
-            channelSubscriberCount: getPublicationChannelSubscriberCount(existing) + 1,
+            channelSubscriberCount: joinedNow
+              ? (getPublicationChannelSubscriberCount(existing) + 1)
+              : getPublicationChannelSubscriberCount(existing),
           };
         }));
 
@@ -3699,6 +3861,8 @@ const FrontScreen = ({
       }
     } catch (error) {
       console.error('Error entering channel:', error);
+    } finally {
+      enteringChannelPostIdsRef.current.delete(postId);
     }
   };
 
@@ -4975,6 +5139,8 @@ const FrontScreen = ({
   const nextPublicationIconAppearAnimRef = useRef<Animated.CompositeAnimation | null>(null);
   const nextPublicationIconScale = useRef(new Animated.Value(1)).current;
   const nextPublicationIconOpacity = useRef(new Animated.Value(1)).current;
+  const publicationTransitionOpacity = useRef(new Animated.Value(1)).current;
+  const publicationTransitionTranslateY = useRef(new Animated.Value(0)).current;
   const prevIsNextPublicationAnimatingRef = useRef(false);
   const seenPublicationIdsRef = useRef<Set<string>>(new Set());
   const [myPublication, setMyPublication] = useState<Publication | undefined>(undefined);
@@ -4996,19 +5162,14 @@ const FrontScreen = ({
     }
   }, [activeBottomTab]);
 
-  const homeSwipeTutorialArrowOpacity = homeSwipeTutorialAnim.interpolate({
+  const homeSwipeTutorialIconOpacity = homeSwipeTutorialAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [1, 0.45],
   });
 
-  const homeSwipeTutorialLeftArrowOffset = homeSwipeTutorialAnim.interpolate({
+  const homeSwipeTutorialIconScale = homeSwipeTutorialAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, -10],
-  });
-
-  const homeSwipeTutorialRightArrowOffset = homeSwipeTutorialAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 10],
+    outputRange: [1, 1.08],
   });
 
   useEffect(() => {
@@ -5056,6 +5217,31 @@ const FrontScreen = ({
       }
     };
   }, [shouldShowHomeSwipeTutorial, homeSwipeTutorialAnim]);
+
+  useEffect(() => {
+    if (prevHomeAnimatedIndexRef.current === currentPostIndex) return;
+    prevHomeAnimatedIndexRef.current = currentPostIndex;
+
+    publicationTransitionOpacity.stopAnimation();
+    publicationTransitionTranslateY.stopAnimation();
+    publicationTransitionOpacity.setValue(0.84);
+    publicationTransitionTranslateY.setValue(14);
+
+    Animated.parallel([
+      Animated.timing(publicationTransitionOpacity, {
+        toValue: 1,
+        duration: 210,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(publicationTransitionTranslateY, {
+        toValue: 0,
+        duration: 210,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [currentPostIndex, publicationTransitionOpacity, publicationTransitionTranslateY]);
 
   useEffect(() => {
     const wasAnimating = prevIsNextPublicationAnimatingRef.current;
@@ -5134,6 +5320,23 @@ const FrontScreen = ({
   useEffect(() => {
     setActivePublicationOptionsId(null);
   }, [currentPostIndex, activeBottomTab]);
+
+  const handleHomePageSelected = useCallback((nextIndex: number) => {
+    homePagerIndexRef.current = nextIndex;
+    if (nextIndex === currentPostIndex) return;
+
+    if (hasSeenHomeSwipeTutorial === false) {
+      markHomeSwipeTutorialSeen();
+    }
+
+    setCurrentPostIndex(nextIndex);
+    const nextPublication = publications[nextIndex];
+    const nextPublicationId = nextPublication?.id != null ? String(nextPublication.id) : '';
+    if (nextPublicationId) {
+      seenPublicationIdsRef.current.add(nextPublicationId);
+    }
+    trackHomePublicationAdvanceForAds();
+  }, [currentPostIndex, hasSeenHomeSwipeTutorial, markHomeSwipeTutorialSeen, publications]);
 
   const startNextPublicationProgressAnimation = () => {
     if (nextPublicationAnimRef.current) {
@@ -5249,8 +5452,13 @@ const FrontScreen = ({
   };
 
   useEffect(() => {
+    if (!adsSdkReady) return;
+
+    isHomeInterstitialLoadedRef.current = false;
+    isHomeInterstitialShowingRef.current = false;
+
     const interstitial = InterstitialAd.createForAdRequest(INTERSTITIAL_AD_UNIT_ID, {
-      requestNonPersonalizedAdsOnly: true,
+      requestNonPersonalizedAdsOnly,
     });
 
     homeInterstitialRef.current = interstitial;
@@ -5290,7 +5498,7 @@ const FrontScreen = ({
       unsubscribeError();
       unsubscribePaid();
     };
-  }, []);
+  }, [adsSdkReady, requestNonPersonalizedAdsOnly]);
 
   const handleNextRandomPublication = (options?: { animate?: boolean }) => {
     const shouldAnimate = options?.animate !== false;
@@ -5300,16 +5508,29 @@ const FrontScreen = ({
 
     const seen = seenPublicationIdsRef.current;
 
-    const candidateIndices = publications
+    const pickCandidateIndex = (
+      entries: Array<{ index: number; idStr: string; createdAtMs: number }>,
+    ) => {
+      if (entries.length === 0) return -1;
+
+      const sortedEntries = [...entries].sort((left, right) => right.createdAtMs - left.createdAtMs);
+      const recentPool = sortedEntries.slice(0, Math.min(HOME_DISCOVER_RECENT_POOL_SIZE, sortedEntries.length));
+      const shouldPickFromRecent = recentPool.length > 0 && (sortedEntries.length === recentPool.length || Math.random() < HOME_DISCOVER_RECENT_WEIGHT);
+      const pool = shouldPickFromRecent ? recentPool : sortedEntries;
+      return pool[Math.floor(Math.random() * pool.length)]?.index ?? -1;
+    };
+
+    const candidateEntries = publications
       .map((p, index) => ({
         index,
-        idStr: p?.id != null ? String(p.id) : ''
+        idStr: p?.id != null ? String(p.id) : '',
+        createdAtMs: getPublicationCreatedAtMs(p),
       }))
       .filter(({ index, idStr }) => index !== currentPostIndex && idStr && !seen.has(idStr))
-      .map(({ index }) => index);
+    ;
 
     // Si ya se vieron todas, reiniciamos el ciclo de vistos manteniendo la actual como vista.
-    if (candidateIndices.length === 0) {
+    if (candidateEntries.length === 0) {
       const currentIdStr = publications[currentPostIndex]?.id != null ? String(publications[currentPostIndex].id) : '';
       seen.clear();
       if (currentIdStr) {
@@ -5319,13 +5540,14 @@ const FrontScreen = ({
       const resetCandidates = publications
         .map((p, index) => ({
           index,
-          idStr: p?.id != null ? String(p.id) : ''
+          idStr: p?.id != null ? String(p.id) : '',
+          createdAtMs: getPublicationCreatedAtMs(p),
         }))
         .filter(({ index, idStr }) => index !== currentPostIndex && idStr)
-        .map(({ index }) => index);
 
       if (resetCandidates.length === 0) return;
-      const nextIndex = resetCandidates[Math.floor(Math.random() * resetCandidates.length)];
+      const nextIndex = pickCandidateIndex(resetCandidates);
+      if (nextIndex < 0) return;
       const nextIdStr = publications[nextIndex]?.id != null ? String(publications[nextIndex].id) : '';
       setCurrentPostIndex(nextIndex);
       if (nextIdStr) {
@@ -5338,7 +5560,8 @@ const FrontScreen = ({
       return;
     }
 
-    const nextIndex = candidateIndices[Math.floor(Math.random() * candidateIndices.length)];
+    const nextIndex = pickCandidateIndex(candidateEntries);
+    if (nextIndex < 0) return;
     const nextIdStr = publications[nextIndex]?.id != null ? String(publications[nextIndex].id) : '';
     setCurrentPostIndex(nextIndex);
     if (nextIdStr) {
@@ -5349,84 +5572,6 @@ const FrontScreen = ({
       startNextPublicationProgressAnimation();
     }
   };
-
-  const publicationSwipeX = useRef(new Animated.Value(0)).current;
-  const isPublicationSwipeAnimatingRef = useRef(false);
-
-  useEffect(() => {
-    // Ensure we never keep a stale translation when the publication changes.
-    publicationSwipeX.stopAnimation();
-    publicationSwipeX.setValue(0);
-  }, [currentPostIndex, publicationSwipeX]);
-
-  const publicationSwipePanResponder = useMemo(() => {
-    const SWIPE_START_PX = 10;
-    const SWIPE_TRIGGER_PX = Math.min(120, Math.round(SCREEN_WIDTH * 0.22));
-
-    return PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onStartShouldSetPanResponderCapture: () => false,
-
-      // Only claim the gesture if it is clearly horizontal.
-      // This keeps vertical ScrollView scrolling working (and lets horizontal carousels keep priority).
-      onMoveShouldSetPanResponder: (_evt, gesture) => {
-        if (activeBottomTab !== 'home') return false;
-        if (isHomeCarouselGestureActiveRef.current) return false;
-        if (publications.length <= 1) return false;
-        if (isPublicationSwipeAnimatingRef.current) return false;
-
-        const dx = Math.abs(gesture.dx);
-        const dy = Math.abs(gesture.dy);
-        if (dx < SWIPE_START_PX) return false;
-        return dx > dy * 1.2;
-      },
-      onMoveShouldSetPanResponderCapture: () => false,
-
-      onPanResponderMove: (_evt, gesture) => {
-        publicationSwipeX.setValue(gesture.dx);
-      },
-
-      onPanResponderRelease: (_evt, gesture) => {
-        const dx = gesture.dx;
-        const dy = gesture.dy;
-        const absDx = Math.abs(dx);
-        const absDy = Math.abs(dy);
-
-        if (activeBottomTab !== 'home' || publications.length <= 1) {
-          Animated.spring(publicationSwipeX, { toValue: 0, useNativeDriver: true }).start();
-          return;
-        }
-
-        // Trigger when the intent is horizontal and surpasses threshold.
-        if (absDx >= SWIPE_TRIGGER_PX && absDx > absDy * 1.1 && !isPublicationSwipeAnimatingRef.current) {
-          if (hasSeenHomeSwipeTutorial === false) {
-            markHomeSwipeTutorialSeen();
-          }
-          isPublicationSwipeAnimatingRef.current = true;
-          const outTo = dx > 0 ? SCREEN_WIDTH : -SCREEN_WIDTH;
-          Animated.timing(publicationSwipeX, {
-            toValue: outTo,
-            duration: 160,
-            useNativeDriver: true,
-          }).start(() => {
-            publicationSwipeX.setValue(0);
-            isPublicationSwipeAnimatingRef.current = false;
-            // For swipe UX, change instantly (no "next" button progress animation).
-            handleNextRandomPublication({ animate: false });
-          });
-          return;
-        }
-
-        Animated.spring(publicationSwipeX, {
-          toValue: 0,
-          useNativeDriver: true,
-        }).start();
-      },
-      onPanResponderTerminate: () => {
-        Animated.spring(publicationSwipeX, { toValue: 0, useNativeDriver: true }).start();
-      },
-    });
-  }, [activeBottomTab, handleNextRandomPublication, hasSeenHomeSwipeTutorial, markHomeSwipeTutorialSeen, publicationSwipeX, publications.length]);
 
   useEffect(() => {
     return () => {
@@ -5439,8 +5584,11 @@ const FrontScreen = ({
         nextPublicationIconAppearAnimRef.current.stop();
         nextPublicationIconAppearAnimRef.current = null;
       }
+
+      publicationTransitionOpacity.stopAnimation();
+      publicationTransitionTranslateY.stopAnimation();
     };
-  }, []);
+  }, [publicationTransitionOpacity, publicationTransitionTranslateY]);
 
   useEffect(() => {
     const currentPub = publications[currentPostIndex];
@@ -5448,6 +5596,30 @@ const FrontScreen = ({
       seenPublicationIdsRef.current.add(String(currentPub.id));
     }
   }, [publications, currentPostIndex]);
+
+  useEffect(() => {
+    if (publications.length === 0) {
+      homePagerIndexRef.current = 0;
+      if (currentPostIndex !== 0) {
+        setCurrentPostIndex(0);
+      }
+      return;
+    }
+
+    const maxIndex = Math.max(0, publications.length - 1);
+    if (currentPostIndex > maxIndex) {
+      setCurrentPostIndex(maxIndex);
+      return;
+    }
+
+    if (homePagerIndexRef.current === currentPostIndex) return;
+
+    requestAnimationFrame(() => {
+      if (!homePagerRef.current) return;
+      homePagerRef.current.setPageWithoutAnimation(currentPostIndex);
+      homePagerIndexRef.current = currentPostIndex;
+    });
+  }, [currentPostIndex, publications.length]);
 
   const openGroupRequestPanel = async (targetUsername: string) => {
     if (!authToken) {
@@ -6672,6 +6844,19 @@ const FrontScreen = ({
   const [activePresentationIndices, setActivePresentationIndices] = useState<Record<string, number>>({});
   const [presentationOverlayVisible, setPresentationOverlayVisible] = useState<Record<string, boolean>>({});
   const [expandedProfileTexts, setExpandedProfileTexts] = useState<Record<string, boolean>>({});
+  const [homeCarouselLoadingVisibleByPubId, setHomeCarouselLoadingVisibleByPubId] = useState<Record<string, boolean>>({});
+  const homeCarouselRefs = useRef<Record<string, FlatList<CarouselImageData> | null>>({});
+  const homeCarouselHideOverlayTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  useEffect(() => {
+    return () => {
+      const timers = homeCarouselHideOverlayTimersRef.current;
+      Object.keys(timers).forEach((key) => {
+        clearTimeout(timers[key]);
+      });
+      homeCarouselHideOverlayTimersRef.current = {};
+    };
+  }, []);
 
   // Load persisted unlocks for the current user (so the Keitin panel stays open after restart).
   useEffect(() => {
@@ -6823,8 +7008,6 @@ const FrontScreen = ({
   const [homePresentationImagesLoaded, setHomePresentationImagesLoaded] = useState<Record<string, Record<number, boolean>>>({});
   const homePresentationPrefetchSigRef = useRef<string>('');
   const homePresentationActiveIndexRef = useRef<Record<string, number>>({});
-  const [homeCarouselMountKeysByPubId, setHomeCarouselMountKeysByPubId] = useState<Record<string, number>>({});
-  const homeCarouselRepaintAfterLoadSigByPubIdRef = useRef<Record<string, string>>({});
 
   const markHomePresentationImageLoaded = useCallback((pubId: string | number, imageIndex: number) => {
     const key = String(pubId || '');
@@ -7062,19 +7245,19 @@ const FrontScreen = ({
     const sig = `${pubId}:${uris.join('|')}`;
     if (homePresentationPrefetchSigRef.current === sig) return;
     homePresentationPrefetchSigRef.current = sig;
+    setHomeCarouselLoadingVisibleByPubId(prev => (prev[pubId] === true ? prev : { ...prev, [pubId]: true }));
 
-    // Prefetch all images so the carousel doesn't feel "stuck" on the first render.
-    // If prefetch fails, mark as loaded anyway to avoid an infinite spinner.
+    // Prefetch only warms the native cache.
+    // The visible loading state must depend on the actual <Image /> mount events,
+    // otherwise Android can hide the overlay before the texture is painted.
     uris.forEach((uri, idx) => {
       try {
-        Image.prefetch(uri)
-          .then(() => markHomePresentationImageLoaded(pubId, idx))
-          .catch(() => markHomePresentationImageLoaded(pubId, idx));
+        Image.prefetch(uri).catch(() => {});
       } catch {
-        markHomePresentationImageLoaded(pubId, idx);
+        // ignore
       }
     });
-  }, [activeBottomTab, currentPostIndex, publications, markHomePresentationImageLoaded]);
+  }, [activeBottomTab, currentPostIndex, publications]);
 
   useEffect(() => {
     if (activeBottomTab !== 'home') return;
@@ -7091,19 +7274,36 @@ const FrontScreen = ({
     for (let i = 0; i < total; i += 1) {
       if (loadedMap[i]) loadedCount += 1;
     }
-    if (loadedCount < total) return;
 
-    const sig = `${pub.presentation.images.map((img: any) => String(img?.uri || '')).join('|')}::${total}`;
-    if (homeCarouselRepaintAfterLoadSigByPubIdRef.current[pubId] === sig) return;
-    homeCarouselRepaintAfterLoadSigByPubIdRef.current[pubId] = sig;
+    const existingTimer = homeCarouselHideOverlayTimersRef.current[pubId];
+    if (loadedCount < total) {
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+        delete homeCarouselHideOverlayTimersRef.current[pubId];
+      }
+      setHomeCarouselLoadingVisibleByPubId(prev => (prev[pubId] === true ? prev : { ...prev, [pubId]: true }));
+      return;
+    }
 
-    requestAnimationFrame(() => {
-      setHomeCarouselMountKeysByPubId(prev => ({
-        ...prev,
-        [pubId]: (prev[pubId] || 0) + 1,
-      }));
-    });
-  }, [activeBottomTab, currentPostIndex, publications, homePresentationImagesLoaded]);
+    if (homeCarouselLoadingVisibleByPubId[pubId] === false) return;
+    if (existingTimer) return;
+
+    homeCarouselHideOverlayTimersRef.current[pubId] = setTimeout(() => {
+      const currentIndex = Math.max(0, activePresentationIndices[pubId] ?? 0);
+      const targetOffset = currentIndex * HOME_CARD_WIDTH;
+
+      InteractionManager.runAfterInteractions(() => {
+        requestAnimationFrame(() => {
+          homeCarouselRefs.current[pubId]?.scrollToOffset({ offset: targetOffset, animated: false });
+          requestAnimationFrame(() => {
+            setHomeCarouselLoadingVisibleByPubId(prev => (prev[pubId] === false ? prev : { ...prev, [pubId]: false }));
+          });
+        });
+      });
+
+      delete homeCarouselHideOverlayTimersRef.current[pubId];
+    }, 80);
+  }, [activeBottomTab, currentPostIndex, publications, homePresentationImagesLoaded, homeCarouselLoadingVisibleByPubId, activePresentationIndices]);
 
   const publicationAnimations = useRef<Record<string, { scale: Animated.Value, opacity: Animated.Value }>>({});
   const publicationLastTaps = useRef<Record<string, number>>({});
@@ -7675,7 +7875,7 @@ const FrontScreen = ({
           .filter(Boolean) as Publication[];
 
         const existingIds = new Set(kept.map(p => String(p.id)));
-        const appended = filteredData.filter(p => !existingIds.has(String(p.id)));
+        const appended = buildHomePublicationSequence(filteredData.filter(p => !existingIds.has(String(p.id))));
         const nextList = [...kept, ...appended];
         setPublications(nextList);
 
@@ -7688,10 +7888,10 @@ const FrontScreen = ({
         return;
       }
 
-      const shuffled = shuffleArray(filteredData);
-      setPublications(shuffled);
+      const orderedPublications = buildHomePublicationSequence(filteredData);
+      setPublications(orderedPublications);
       setCurrentPostIndex(0);
-      seenPublicationIdsRef.current = new Set(shuffled[0]?.id != null ? [String(shuffled[0].id)] : []);
+      seenPublicationIdsRef.current = new Set(orderedPublications[0]?.id != null ? [String(orderedPublications[0].id)] : []);
     } catch (error) {
       console.error('Error fetching posts:', error);
     } finally {
@@ -9853,7 +10053,7 @@ const FrontScreen = ({
               </View>
             )}
           </ScrollView>
-          {(viewingProfileRingSource === 'home' || activeBottomTab === 'home') && adsInitialized && (
+          {(viewingProfileRingSource === 'home' || activeBottomTab === 'home') && adsSdkReady && (
             <View
               collapsable={false}
               style={[
@@ -9862,10 +10062,10 @@ const FrontScreen = ({
               ]}
             >
               <BannerAd
-                key={`ring-banner-${viewingProfileRingId || 'none'}-${homeProfileRingBannerSize}-${homeProfileRingBannerRequestKey}`}
+                key={`ring-banner-${viewingProfileRingId || 'none'}-${homeProfileRingBannerSize}-${homeProfileRingBannerRequestKey}-${requestNonPersonalizedAdsOnly ? 'npa' : 'pa'}`}
                 unitId={BANNER_AD_UNIT_ID}
                 size={homeProfileRingBannerSize}
-                requestOptions={{ requestNonPersonalizedAdsOnly: true }}
+                requestOptions={{ requestNonPersonalizedAdsOnly }}
                 onPaid={(event) => {
                   trackAdPaidEvent({
                     format: 'banner',
@@ -10306,12 +10506,8 @@ const FrontScreen = ({
         {/* Pantalla Home */}
         {activeBottomTab === 'home' && (
           <View style={[styles.homeScreenContainer, { paddingTop: Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT + 8 : 8, paddingBottom: 0 }]}>
-            <ScrollView
-              style={{ flex: 1 }}
-              contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingBottom: bottomNavHeight + 16 }}
-              scrollEnabled={isHomeMainScrollEnabled}
-            >
-              {giveAways.length === 0 && publications.length === 0 ? (
+            {giveAways.length === 0 && publications.length === 0 ? (
+              <View style={styles.homeEmptyStateWrap}>
                 <View style={styles.emptyStateContainer}>
                   {isHomePostsLoading || !hasHomePostsLoadedOnce ? (
                     <View style={styles.homeLoadingContainer}>
@@ -10382,9 +10578,33 @@ const FrontScreen = ({
                     </Text>
                   )}
                 </View>
-              ) : (
-                <>
-                  {publications.slice(currentPostIndex, currentPostIndex + 1).map((pub) => {
+              </View>
+            ) : publications.length === 0 ? (
+              <ScrollView
+                style={styles.homePageScroll}
+                contentContainerStyle={[styles.homePageContentContainer, { paddingBottom: bottomNavHeight + 16 }]}
+                showsVerticalScrollIndicator={false}
+              >
+                {giveAways.map((giveaway, index) => (
+                  <View key={giveaway.id} style={styles.giveAwayCard}>
+                    <Text style={styles.giveAwayPulsacionesText}>
+                      Sorteo {index + 1}
+                    </Text>
+                    {/* TODO: Renderizar cada sorteo completo */}
+                  </View>
+                ))}
+              </ScrollView>
+            ) : (
+              <PagerView
+                ref={homePagerRef}
+                style={styles.homePager}
+                initialPage={0}
+                overdrag={false}
+                offscreenPageLimit={1}
+                scrollEnabled={isHomeMainScrollEnabled}
+                onPageSelected={(event) => handleHomePageSelected(event.nativeEvent.position)}
+              >
+                  {publications.map((pub, pageIndex) => {
                     const activeIndex = activeIntimidadIndices[pub.id] || 0;
                     const activePresentationIndex = activePresentationIndices[pub.id] || 0;
                     const isOverlayVisible = presentationOverlayVisible[pub.id] !== false;
@@ -10414,17 +10634,27 @@ const FrontScreen = ({
                     }
                     const pubAnims = publicationAnimations.current[pub.id];
                     const pubDoubleTap = publicationDoubleTapState[pub.id] || { visible: false, emoji: '' };
-                    const joinedStateKey = isJoined ? 'joined' : 'not_joined';
                     const homeCarouselLoadedMap = homePresentationImagesLoaded[String(pub.id)] || {};
-                    const homeCarouselExtraData = `${JSON.stringify(homeCarouselLoadedMap)}|joined:${joinedStateKey}|rings:${ringsVisible ? 1 : 0}|overlay:${isOverlayVisible ? 1 : 0}|doubleTap:${pubDoubleTap.visible ? pubDoubleTap.emoji || 'visible' : 'hidden'}`;
-
+                    const isHomeCarouselLoadingVisible = homeCarouselLoadingVisibleByPubId[String(pub.id)] !== false;
+                    const homeCarouselExtraData = `${Object.keys(homeCarouselLoadedMap).sort().join(',')}|active:${activePresentationIndex}`;
                     return (
+                      <View key={`home-page-${String(pub.id)}`} style={styles.homePagerPage} collapsable={false}>
+                        <ScrollView
+                          style={styles.homePageScroll}
+                          contentContainerStyle={[styles.homePageContentContainer, { paddingBottom: bottomNavHeight + 16 }]}
+                          nestedScrollEnabled
+                          showsVerticalScrollIndicator={false}
+                          scrollEventThrottle={16}
+                          keyboardShouldPersistTaps="handled"
+                        >
                       <Animated.View
-                        key={pub.id}
-                        style={{ marginBottom: 0, transform: [{ translateX: publicationSwipeX }] }}
-                        {...publicationSwipePanResponder.panHandlers}
+                        style={{
+                          marginBottom: 0,
+                          opacity: pageIndex === currentPostIndex ? publicationTransitionOpacity : 1,
+                          transform: [{ translateY: pageIndex === currentPostIndex ? publicationTransitionTranslateY : 0 }],
+                        }}
                       >
-                        {shouldShowHomeSwipeTutorial && (
+                        {shouldShowHomeSwipeTutorial && pageIndex === currentPostIndex && (
                           <Pressable
                             style={styles.homeSwipeTutorialContainer}
                             onPress={markHomeSwipeTutorialSeen}
@@ -10432,26 +10662,20 @@ const FrontScreen = ({
                             accessibilityRole="button"
                           >
                             <Animated.View
-                              style={{
-                                opacity: homeSwipeTutorialArrowOpacity,
-                                transform: [{ translateX: homeSwipeTutorialLeftArrowOffset }],
-                              }}
+                              style={[
+                                styles.homeSwipeTutorialIconWrap,
+                                {
+                                  opacity: homeSwipeTutorialIconOpacity,
+                                  transform: [{ scale: homeSwipeTutorialIconScale }],
+                                },
+                              ]}
                             >
-                              <MaterialIcons name="keyboard-arrow-left" size={26} color="#FFB74D" />
+                              <MaterialIcons name="swap-horiz" size={22} color="#FFB74D" />
                             </Animated.View>
 
                             <Text style={styles.homeSwipeTutorialText}>
                               {t('front.homeSwipeTutorialHint' as TranslationKey)}
                             </Text>
-
-                            <Animated.View
-                              style={{
-                                opacity: homeSwipeTutorialArrowOpacity,
-                                transform: [{ translateX: homeSwipeTutorialRightArrowOffset }],
-                              }}
-                            >
-                              <MaterialIcons name="keyboard-arrow-right" size={26} color="#FFB74D" />
-                            </Animated.View>
                           </Pressable>
                         )}
                         <View style={styles.presentationHeaderContainer}>
@@ -10563,13 +10787,18 @@ const FrontScreen = ({
                                 const total = pub.presentation.images.length;
                                 const loadedMap = homeCarouselLoadedMap;
                                 const loadedCount = Math.min(total, Object.values(loadedMap).filter(Boolean).length);
-                                const isLoading = loadedCount < total;
-
-                                if (!isLoading) return null;
-
+                                const isLoading = isHomeCarouselLoadingVisible;
                                 return (
-                                  <View style={styles.homeCarouselLoadingOverlay} pointerEvents="none">
-                                    <GradientSpinner size={34} />
+                                  <View
+                                    style={[
+                                      styles.homeCarouselLoadingOverlay,
+                                      !isLoading && styles.homeCarouselLoadingOverlayHidden,
+                                    ]}
+                                    pointerEvents="none"
+                                  >
+                                    <View style={styles.homeCarouselLoadingSpinnerWrap}>
+                                      <GradientSpinner size={22} />
+                                    </View>
                                     <View style={styles.homeCarouselLoadingPill}>
                                       <Text style={styles.homeCarouselLoadingText}>{t('front.loadingImages' as TranslationKey)}</Text>
                                       <Text style={styles.homeCarouselLoadingSubText}>{loadedCount}/{total}</Text>
@@ -10578,12 +10807,11 @@ const FrontScreen = ({
                                 );
                               })()}
                               <FlatList
-                                key={`home-carousel-${String(pub.id)}-${homeCarouselMountKeysByPubId[String(pub.id)] || 0}-${pub.presentation.images.length}-${joinedStateKey}`}
+                                ref={(ref) => {
+                                  homeCarouselRefs.current[String(pub.id)] = ref;
+                                }}
                                 data={pub.presentation.images}
-                                keyExtractor={(_, index) => `pub-${pub.id}-image-${index}`}
-                                // Home carousel cells also depend on external state like joined-channel,
-                                // rings visibility and overlay state. Exposing them through `extraData`
-                                // prevents stale Android image surfaces after joining a channel.
+                                keyExtractor={(item, index) => `pub-${pub.id}-image-${index}-${String(item?.uri || '')}`}
                                 extraData={homeCarouselExtraData}
                                 horizontal
                                 pagingEnabled
@@ -10594,6 +10822,9 @@ const FrontScreen = ({
                                 decelerationRate="fast"
                                 scrollEventThrottle={16}
                                 removeClippedSubviews={false}
+                                initialNumToRender={pub.presentation.images.length}
+                                maxToRenderPerBatch={pub.presentation.images.length}
+                                windowSize={3}
                                 onScrollBeginDrag={() => setHomeCarouselGestureActive(true)}
                                 onScrollEndDrag={() => setHomeCarouselGestureActive(false)}
                                 onMomentumScrollBegin={() => setHomeCarouselGestureActive(true)}
@@ -10616,10 +10847,10 @@ const FrontScreen = ({
                                 }}
                                 renderItem={({ item, index }) => {
                                   const imageUri = getServerResourceUrl(item.uri);
-                                  const imageRenderKey = `pub-${pub.id}-image-${index}-${joinedStateKey}-${String(imageUri || '')}`;
+                                  const imageRenderKey = `pub-${pub.id}-image-${index}`;
 
                                   return (
-                                  <View key={imageRenderKey} style={[styles.profilePresentationSlide, { width: HOME_CARD_WIDTH }]}>
+                                  <View style={[styles.profilePresentationSlide, { width: HOME_CARD_WIDTH }]}> 
                                     <TouchableWithoutFeedback onPress={() => handlePublicationDoubleTap(pub.id, pub.reactions)}>
                                       <View style={[
                                         styles.carouselImageFrame,
@@ -10632,11 +10863,11 @@ const FrontScreen = ({
                                         }}
                                       >
                                         <Image
-                                          key={imageRenderKey}
                                           source={{ uri: imageUri }}
                                           style={styles.carouselImage}
                                           resizeMode="cover"
                                           fadeDuration={0}
+                                          onLoad={() => markHomePresentationImageLoaded(pub.id, index)}
                                           onLoadEnd={() => markHomePresentationImageLoaded(pub.id, index)}
                                           onError={() => markHomePresentationImageLoaded(pub.id, index)}
                                         />
@@ -11329,22 +11560,12 @@ const FrontScreen = ({
                         )}
 
                       </Animated.View>
+                        </ScrollView>
+                      </View>
                     );
                   })}
-                  {
-                    giveAways.map((giveaway, index) => (
-                      <View key={giveaway.id} style={styles.giveAwayCard}>
-                        <Text style={styles.giveAwayPulsacionesText}>
-                          Sorteo {index + 1}
-                        </Text>
-                        {/* TODO: Renderizar cada sorteo completo */}
-                      </View>
-                    ))
-                  }
-                </>
-              )
-              }
-            </ScrollView >
+              </PagerView>
+            )}
           </View >
         )}
 
@@ -17845,6 +18066,22 @@ const styles = StyleSheet.create({
     paddingTop: 64,
     paddingBottom: 0,
   },
+  homeEmptyStateWrap: {
+    flex: 1,
+  },
+  homePager: {
+    flex: 1,
+  },
+  homePagerPage: {
+    flex: 1,
+  },
+  homePageScroll: {
+    flex: 1,
+  },
+  homePageContentContainer: {
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
   homeSwipeTutorialContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -17857,6 +18094,15 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 183, 77, 0.35)',
     borderRadius: 14,
     backgroundColor: 'rgba(0, 0, 0, 0.55)',
+  },
+  homeSwipeTutorialIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 183, 77, 0.08)',
+    marginRight: 8,
   },
   homeSwipeTutorialText: {
     flex: 1,
@@ -18381,14 +18627,19 @@ const styles = StyleSheet.create({
 
   homeCarouselLoadingOverlay: {
     position: 'absolute',
-    top: 0,
+    top: 14,
     left: 0,
     right: 0,
-    bottom: 0,
     zIndex: 30,
     elevation: 30,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     alignItems: 'center',
+  },
+  homeCarouselLoadingOverlayHidden: {
+    opacity: 0,
+  },
+  homeCarouselLoadingSpinnerWrap: {
+    marginBottom: 8,
   },
   homeCarouselLoadingPill: {
     paddingVertical: 10,
@@ -18401,7 +18652,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     flexDirection: 'row',
     gap: 10,
-    marginTop: 10,
   },
   homeCarouselLoadingText: {
     color: '#FFFFFF',
@@ -18636,6 +18886,72 @@ const styles = StyleSheet.create({
     gap: 6,
     position: 'absolute',
     right: 0,
+  },
+  homeDiscoverContainer: {
+    width: '100%',
+    paddingHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 2,
+    alignItems: 'center',
+  },
+  homeDiscoverChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 183, 77, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.28)',
+    marginBottom: 10,
+  },
+  homeDiscoverChipText: {
+    color: 'rgba(255, 255, 255, 0.78)',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  homeDiscoverButton: {
+    width: '100%',
+    minHeight: 56,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.88)',
+    overflow: 'hidden',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    shadowColor: '#FFB74D',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  homeDiscoverButtonGlow: {
+    position: 'absolute',
+    top: -24,
+    left: -12,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: 'rgba(255, 183, 77, 0.1)',
+  },
+  homeDiscoverButtonText: {
+    flex: 1,
+    marginLeft: 12,
+    marginRight: 10,
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  homeDiscoverProgressWrap: {
+    width: 28,
+    height: 18,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 4,
   },
   profileLikeCount: {
     color: '#ffffffff',

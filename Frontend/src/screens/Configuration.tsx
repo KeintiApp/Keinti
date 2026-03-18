@@ -5,6 +5,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import ImageCropPicker from 'react-native-image-crop-picker';
+import { AdsConsent, AdsConsentPrivacyOptionsRequirementStatus } from 'react-native-google-mobile-ads';
 import Clipboard from '@react-native-clipboard/clipboard';
 import { API_URL, getServerResourceUrl } from '../config/api';
 import { POLICY_URLS, type PolicyUrlKey } from '../config/policies';
@@ -372,6 +373,82 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   const [galleryPermissionStatus, setGalleryPermissionStatus] = useState<GalleryPermissionStatus>('unknown');
   const [isCheckingDevicePermissions, setIsCheckingDevicePermissions] = useState(false);
   const lastSyncedGalleryPermissionRef = useRef<GalleryPermissionStatus>('unknown');
+  
+  const [privacyOptionsRequired, setPrivacyOptionsRequired] = useState(false);
+  const [isOpeningPrivacyOptions, setIsOpeningPrivacyOptions] = useState(false);
+
+  useEffect(() => {
+    // Refresh consent info so privacyOptionsRequirementStatus is current.
+    AdsConsent.requestInfoUpdate()
+      .then((info) => {
+        setPrivacyOptionsRequired(
+          info.privacyOptionsRequirementStatus === AdsConsentPrivacyOptionsRequirementStatus.REQUIRED
+        );
+      })
+      .catch(() => {
+        AdsConsent.getConsentInfo()
+          .then((info) => {
+            setPrivacyOptionsRequired(
+              info.privacyOptionsRequirementStatus === AdsConsentPrivacyOptionsRequirementStatus.REQUIRED
+            );
+          })
+          .catch(() => {});
+      });
+  }, []);
+
+  const openPrivacyOptions = async () => {
+    if (isOpeningPrivacyOptions) return;
+    setIsOpeningPrivacyOptions(true);
+
+    try {
+      const info = await AdsConsent.requestInfoUpdate();
+      const isRequired =
+        info.privacyOptionsRequirementStatus === AdsConsentPrivacyOptionsRequirementStatus.REQUIRED;
+
+      setPrivacyOptionsRequired(isRequired);
+
+      if (isRequired) {
+        await AdsConsent.showPrivacyOptionsForm();
+        return;
+      }
+
+      Alert.alert(
+        localize({ es: 'Opciones de privacidad', en: 'Privacy Options', fr: 'Options de confidentialité', pt: 'Opções de privacidade' }),
+        localize({
+          es: 'Ahora mismo no hay un formulario de opciones de privacidad disponible para este dispositivo o región.',
+          en: 'There is currently no privacy options form available for this device or region.',
+          fr: 'Aucun formulaire d’options de confidentialité n’est actuellement disponible pour cet appareil ou cette région.',
+          pt: 'No momento, não há um formulário de opções de privacidade disponível para este dispositivo ou região.',
+        })
+      );
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error || '');
+      const lowerMsg = msg.toLowerCase();
+      const isMissingConsentFormConfig =
+        lowerMsg.includes('publisher misconfiguration') ||
+        lowerMsg.includes('no form(s) configured') ||
+        lowerMsg.includes('no forms configured');
+
+      Alert.alert(
+        localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }),
+        isMissingConsentFormConfig
+          ? localize({
+              es: 'Google AdMob todavía no tiene configurado/publicado un formulario de consentimiento para esta aplicación. Debes crear y publicar el mensaje en AdMob > Privacy & messaging para que el usuario pueda aceptar o rechazar anuncios personalizados.',
+              en: 'Google AdMob does not yet have a consent form configured/published for this application. You must create and publish the message in AdMob > Privacy & messaging so the user can accept or reject personalized ads.',
+              fr: 'Google AdMob n’a pas encore de formulaire de consentement configuré/publié pour cette application. Vous devez créer et publier le message dans AdMob > Privacy & messaging pour que l’utilisateur puisse accepter ou refuser les annonces personnalisées.',
+              pt: 'O Google AdMob ainda não possui um formulário de consentimento configurado/publicado para este aplicativo. Você deve criar e publicar a mensagem em AdMob > Privacy & messaging para que o usuário possa aceitar ou recusar anúncios personalizados.',
+            })
+          : msg || localize({
+              es: 'No se pudieron abrir las opciones de privacidad.',
+              en: 'Privacy options could not be opened.',
+              fr: 'Impossible d’ouvrir les options de confidentialité.',
+              pt: 'Não foi possível abrir as opções de privacidade.',
+            })
+      );
+    } finally {
+      setIsOpeningPrivacyOptions(false);
+    }
+  };
 
   const [isLoadingPersonalData, setIsLoadingPersonalData] = useState(false);
   const [myEmail, setMyEmail] = useState<string>('');
@@ -1961,6 +2038,52 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               {Platform.OS !== 'android' ? (
                 <Text style={styles.permissionSystemHint}>{t('devicePermissions.iosHint')}</Text>
               ) : null}
+            </View>
+
+            <View style={[styles.personalDataItem]}>
+              <View style={styles.permissionRowTop}>
+                <Text style={styles.personalDataItemTitle}>
+                  {localize({
+                    es: 'Opciones de privacidad',
+                    en: 'Privacy Options',
+                    fr: 'Options de confidentialité',
+                    pt: 'Opções de privacidade',
+                  })}
+                </Text>
+
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  onPress={openPrivacyOptions}
+                  disabled={isOpeningPrivacyOptions}
+                  style={[
+                    styles.permissionBadge,
+                    { backgroundColor: privacyOptionsRequired ? '#333' : '#242424' },
+                    isOpeningPrivacyOptions ? { opacity: 0.6 } : null,
+                  ]}
+                >
+                  {isOpeningPrivacyOptions ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : (
+                    <Text style={styles.permissionBadgeText}>
+                      {localize({
+                        es: 'Gestionar',
+                        en: 'Manage',
+                        fr: 'Gérer',
+                        pt: 'Gerenciar',
+                      })}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.permissionDescription}>
+                {localize({
+                  es: 'Gestiona tus preferencias de consentimiento de anuncios y privacidad.',
+                  en: 'Manage your ad consent and privacy preferences.',
+                  fr: 'Gérez vos préférences de consentement publicitaire et de confidentialité.',
+                  pt: 'Gerencie suas preferências de consentimento de anúncios e privacidade.',
+                })}
+              </Text>
             </View>
           </View>
         </ScrollView>

@@ -8,7 +8,6 @@ import FrontScreen from './src/screens/FrontScreen';
 import Configuration from './src/screens/Configuration';
 import { I18nProvider } from './src/i18n/I18nProvider';
 import { type Language, isSupportedLanguage } from './src/i18n/translations';
-import mobileAds from 'react-native-google-mobile-ads';
 import { clearKeintiAuthSession, loadKeintiAuthSession, saveKeintiAuthSession } from './src/services/authSessionStorage';
 import { completeSupabaseProfile, exchangeSupabaseSession, getAccountAuthStatus, getMyPersonalData, getUserByUsername, updatePreferredLanguage } from './src/services/userService';
 import { isSupabaseConfigured, supabase } from './src/config/supabase';
@@ -35,15 +34,6 @@ function App() {
   const [loginNotice, setLoginNotice] = useState<{ message: string; token: number } | null>(null);
 
   const pendingKeyForEmail = (e: string) => `keinti:pendingSignup:${String(e || '').trim().toLowerCase()}`;
-
-  useEffect(() => {
-    // Safe to call multiple times, but we only do it once.
-    mobileAds()
-      .initialize()
-      .catch(err => {
-        console.warn('AdMob init failed:', err);
-      });
-  }, []);
 
   // Global deep-link handler for Supabase PKCE callbacks.
   // Needed for email confirmation links (Confirm your email) because the app may open on Login.
