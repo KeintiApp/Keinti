@@ -26,6 +26,7 @@ import {
 } from 'react-native';
 import type { ImageSourcePropType } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import { BlurView } from '@react-native-community/blur';
 import MapView, { PROVIDER_GOOGLE, type PoiClickEvent } from 'react-native-maps';
 import PagerView from 'react-native-pager-view';
 import Geolocation from '@react-native-community/geolocation';
@@ -49,6 +50,16 @@ import { POST_TTL_MS } from '../config/postTtl';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Language, TranslationKey } from '../i18n/translations';
 import { ensureAdsConsentForAccount, getStoredAdsRuntimeConfig } from '../services/adsConsent';
+import Reanimated, {
+  Easing as ReanimatedEasing,
+  interpolate,
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 
 import Svg, { Defs, LinearGradient, Stop, Rect, Circle, Path, Text as SvgText } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -79,7 +90,7 @@ const CHANNEL_IMAGE_LOCK_OVERLAY_TEXT_BOTTOM = '(ver anuncio)';
 const CHANNEL_IMAGE_LOCK_BLUR_RADIUS = 22;
 
 // Height reserved by the custom bottom nav bar (plus a small safety margin).
-const BOTTOM_NAV_OVERLAY_HEIGHT = 60;
+const BOTTOM_NAV_OVERLAY_HEIGHT = 76;
 
 const hashString = (input: string) => {
   // Simple non-crypto hash for stable storage keys.
@@ -348,47 +359,173 @@ const GradientIcon = ({ name, size, colors }: GradientIconProps) => {
   return <MaterialIcons name={name} size={size} color={colors[1] || colors[0]} />;
 };
 
-type BottomNavIconName = 'home' | 'person' | 'forum';
+type MainBottomTab = 'chat' | 'home' | 'profile';
+type BottomTabState = MainBottomTab | 'notifications';
+type BottomNavIconName = MainBottomTab;
 
-const BottomNavGradientIcon = ({
-  name,
-  size,
-  reverse = false,
-  opacity = 1,
-  color,
+const MAIN_BOTTOM_TABS: Array<{ key: MainBottomTab; icon: BottomNavIconName }> = [
+  { key: 'chat', icon: 'chat' },
+  { key: 'home', icon: 'home' },
+  { key: 'profile', icon: 'profile' },
+];
+
+const MAIN_BOTTOM_TAB_INDEX: Record<MainBottomTab, number> = {
+  chat: 0,
+  home: 1,
+  profile: 2,
+};
+
+const isMainBottomTab = (value: string): value is MainBottomTab => (
+  value === 'chat' || value === 'home' || value === 'profile'
+);
+
+const getMainBottomTabIndex = (value: MainBottomTab) => MAIN_BOTTOM_TAB_INDEX[value];
+
+const BOTTOM_NAV_ICONS: Record<BottomNavIconName, { active: string; inactive: string }> = {
+  chat: { active: 'chat-bubble', inactive: 'chat-bubble-outline' },
+  home: { active: 'home', inactive: 'home' },
+  profile: { active: 'person', inactive: 'person-outline' },
+};
+
+const BottomNavTabButton = ({
+  tabKey,
+  icon,
+  active,
+  disabled,
+  labelCount,
+  labelText,
+  onPress,
 }: {
-  name: BottomNavIconName;
-  size: number;
-  reverse?: boolean;
-  opacity?: number;
-  color?: string;
+  tabKey: MainBottomTab;
+  icon: BottomNavIconName;
+  active: boolean;
+  disabled?: boolean;
+  labelCount?: number;
+  labelText?: string;
+  onPress: (tab: MainBottomTab) => void;
 }) => {
-  const pathByName: Record<BottomNavIconName, string> = {
-    home: 'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z',
-    person:
-      'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
-    forum:
-      'M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z',
-  };
+  const scaleProgress = useSharedValue(1);
+  const activeProgress = useSharedValue(active ? 1 : 0);
+
+  useEffect(() => {
+    activeProgress.value = withSpring(active ? 1 : 0, {
+      damping: 20,
+      stiffness: 260,
+      mass: 0.6,
+    });
+  }, [active, activeProgress]);
+
+  const handlePressIn = useCallback(() => {
+    if (disabled) return;
+    scaleProgress.value = withTiming(0.85, { duration: 100, easing: ReanimatedEasing.out(ReanimatedEasing.quad) });
+  }, [disabled, scaleProgress]);
+
+  const handlePressOut = useCallback(() => {
+    scaleProgress.value = withSpring(1, { damping: 15, stiffness: 300 });
+  }, [scaleProgress]);
+
+  const containerAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scaleProgress.value }],
+  }));
+
+  const dotAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: activeProgress.value,
+    transform: [
+      { scaleX: interpolate(activeProgress.value, [0, 1], [0, 1]) },
+    ],
+  }));
+
+  const glassOpacity = useAnimatedStyle(() => ({
+    opacity: activeProgress.value,
+  }));
+
+  const iconEntry = BOTTOM_NAV_ICONS[icon];
+  const iconName = active ? iconEntry.active : iconEntry.inactive;
+  const iconColor = active ? '#FFB74D' : 'rgba(255,255,255,0.4)';
 
   return (
-    <Svg width={size} height={size} viewBox="0 0 24 24">
-      <Defs>
-        <LinearGradient id={`grad_${name}`} x1="0" y1="0" x2="1" y2="1">
-          <Stop
-            offset="0"
-            stopColor={reverse ? '#ffe45c' : '#FFB74D'}
-            stopOpacity={opacity}
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected: active, disabled: !!disabled }}
+      disabled={disabled}
+      onPress={() => onPress(tabKey)}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      style={styles.bottomNavPressable}
+    >
+      <Reanimated.View style={[
+        styles.bottomNavItem,
+        disabled && styles.bottomNavItemDisabled,
+        containerAnimatedStyle,
+      ]}>
+        <Reanimated.View style={[styles.bottomNavGlassPill, glassOpacity]} pointerEvents="none">
+          <BlurView
+            blurType="dark"
+            blurAmount={20}
+            reducedTransparencyFallbackColor="rgba(255,255,255,0.08)"
+            style={StyleSheet.absoluteFill}
           />
-          <Stop
-            offset="1"
-            stopColor={reverse ? '#FFB74D' : '#ffe45c'}
-            stopOpacity={opacity}
+          <View style={styles.bottomNavGlassPillHighlight} />
+        </Reanimated.View>
+        <View style={styles.bottomNavIconWrap}>
+          <MaterialIcons name={iconName} size={26} color={iconColor} />
+        </View>
+        {labelText ? (
+          <Text style={[styles.bottomNavLabel, active && styles.bottomNavLabelActive]}>
+            <Text style={styles.bottomNavLabelCount}>{labelCount} </Text>
+            <Text style={styles.bottomNavLabelBold}>{labelText}</Text>
+          </Text>
+        ) : (
+          <Reanimated.View style={[styles.bottomNavDot, dotAnimatedStyle]} />
+        )}
+      </Reanimated.View>
+    </Pressable>
+  );
+};
+
+const BottomNavigationBar = ({
+  activeTab,
+  disabled,
+  bottomInset,
+  homeBadgeCount,
+  onLayout,
+  onTabPress,
+}: {
+  activeTab: MainBottomTab;
+  disabled?: boolean;
+  bottomInset: number;
+  homeBadgeCount: number;
+  onLayout: (event: any) => void;
+  onTabPress: (tab: MainBottomTab) => void;
+}) => {
+  const { t } = useI18n();
+  return (
+    <View
+      style={[
+        styles.bottomNavBar,
+        {
+          bottom: 0,
+          paddingBottom: bottomInset + 6,
+        },
+      ]}
+      pointerEvents={disabled ? 'none' : 'auto'}
+      onLayout={onLayout}
+    >
+      <View style={styles.bottomNavChrome}>
+        {MAIN_BOTTOM_TABS.map((tab) => (
+          <BottomNavTabButton
+            key={tab.key}
+            tabKey={tab.key}
+            icon={tab.icon}
+            active={activeTab === tab.key}
+            disabled={disabled}
+            labelCount={tab.key === 'home' ? homeBadgeCount : undefined}
+            labelText={tab.key === 'home' ? t('front.publicationsCount') : undefined}
+            onPress={onTabPress}
           />
-        </LinearGradient>
-      </Defs>
-      <Path fill={color || `url(#grad_${name})`} d={pathByName[name]} />
-    </Svg>
+        ))}
+      </View>
+    </View>
   );
 };
 
@@ -892,6 +1029,8 @@ interface FrontScreenProps {
   onNavigateToNotifications?: () => void;
   onNavigateToRecompensa?: () => void;
   onNavigateToConfiguration?: () => void;
+  onReloadGiveAways?: () => void;
+  onReloadApp?: () => void;
   onLogout?: () => void;
   giveAways?: GiveAway[];
   onOpenFilter?: () => void;
@@ -1090,8 +1229,6 @@ const FrontScreen = ({
   onNavigateToNotifications,
   onNavigateToRecompensa,
   onNavigateToConfiguration,
-  onReloadGiveAways,
-  onReloadApp,
   onLogout,
   giveAways = [],
 
@@ -2093,7 +2230,7 @@ const FrontScreen = ({
   const [socialNetworks, setSocialNetworks] = useState<SocialNetwork[]>(
     initialSocialNetworks || [],
   );
-  const [activeBottomTab, setActiveBottomTab] = useState('home');
+  const [activeBottomTab, setActiveBottomTab] = useState<BottomTabState>('home');
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [bottomNavHeight, setBottomNavHeight] = useState<number>(BOTTOM_NAV_OVERLAY_HEIGHT);
@@ -2112,6 +2249,7 @@ const FrontScreen = ({
   const homePagerIndexRef = useRef(0);
   const prevHomeAnimatedIndexRef = useRef(0);
   const homeTabDidMountRef = useRef(false);
+  const [homeRefreshCounter, setHomeRefreshCounter] = useState(0);
   const homeLoaderPulseAnim = useRef(new Animated.Value(0)).current;
   const homeLoaderPulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
   const homeLoaderRotateAnim = useRef(new Animated.Value(0)).current;
@@ -2141,6 +2279,17 @@ const FrontScreen = ({
   const [chatView, setChatView] = useState<'channel' | 'channels' | 'groups' | 'groupChat'>('channel');
   const [groupsTab, setGroupsTab] = useState<'tusGrupos' | 'unidos'>('tusGrupos');
   const [joinedGroupsRenderCount, setJoinedGroupsRenderCount] = useState(JOINED_GROUPS_RENDER_BATCH);
+  const contentTabTransitionProgress = useSharedValue(1);
+  const contentTabTransitionDirection = useSharedValue(0);
+  const lastAnimatedBottomTabRef = useRef<MainBottomTab>('home');
+
+  const handleBottomTabChange = useCallback((nextTab: MainBottomTab) => {
+    if (nextTab === 'home') {
+      setHomeRefreshCounter(c => c + 1);
+    }
+    setActiveBottomTab(nextTab);
+    setProfileView('profile');
+  }, []);
 
   useEffect(() => {
     if (groupsTab !== 'unidos') return;
@@ -5153,7 +5302,53 @@ const FrontScreen = ({
     hasSeenHomeSwipeTutorial === false &&
     publications.length > 0;
 
+  const homeActivePublicationsCount = useMemo(
+    () => publications.filter((publication) => getRemainingTime(publication.createdAt) !== 'Tiempo agotado').length,
+    [publications],
+  );
+
+  const isBottomNavInteractionDisabled =
+    activeBottomTab === 'home' &&
+    (isHomePostsLoading || !hasHomePostsLoadedOnce);
+
   const profileRingPanelsBottomOffset = Math.max(bottomNavHeight, bottomSystemOffset);
+
+  useEffect(() => {
+    if (!isMainBottomTab(activeBottomTab)) {
+      return;
+    }
+
+    const previousTab = lastAnimatedBottomTabRef.current;
+    if (previousTab === activeBottomTab) {
+      return;
+    }
+
+    const previousIndex = getMainBottomTabIndex(previousTab);
+    const nextIndex = getMainBottomTabIndex(activeBottomTab);
+    contentTabTransitionDirection.value = nextIndex >= previousIndex ? 1 : -1;
+    contentTabTransitionProgress.value = 0;
+    contentTabTransitionProgress.value = withTiming(1, {
+      duration: 260,
+      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+    });
+    lastAnimatedBottomTabRef.current = activeBottomTab;
+  }, [activeBottomTab, contentTabTransitionDirection, contentTabTransitionProgress]);
+
+  const bottomContentTransitionStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(contentTabTransitionProgress.value, [0, 1], [0.78, 1]),
+    transform: [
+      {
+        translateX: interpolate(
+          contentTabTransitionProgress.value,
+          [0, 1],
+          [contentTabTransitionDirection.value * 18, 0],
+        ),
+      },
+      {
+        translateY: interpolate(contentTabTransitionProgress.value, [0, 1], [8, 0]),
+      },
+    ],
+  }));
 
   useEffect(() => {
     if (activeBottomTab !== 'home') {
@@ -5321,6 +5516,56 @@ const FrontScreen = ({
     setActivePublicationOptionsId(null);
   }, [currentPostIndex, activeBottomTab]);
 
+  // Persistent animated value for the ring‐icon pulse (shared across all posts;
+  // only the currently‐active post drives it).
+  const homeRingIconPulseAnim = useRef(new Animated.Value(1)).current;
+  const homeRingIconPulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+
+  const startHomeRingIconPulse = useCallback(() => {
+    if (homeRingIconPulseLoopRef.current) return; // already running
+    homeRingIconPulseAnim.setValue(1);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(homeRingIconPulseAnim, {
+          toValue: 1.35,
+          duration: 620,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(homeRingIconPulseAnim, {
+          toValue: 1,
+          duration: 620,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    homeRingIconPulseLoopRef.current = loop;
+    loop.start();
+  }, [homeRingIconPulseAnim]);
+
+  const stopHomeRingIconPulse = useCallback(() => {
+    if (homeRingIconPulseLoopRef.current) {
+      homeRingIconPulseLoopRef.current.stop();
+      homeRingIconPulseLoopRef.current = null;
+    }
+    homeRingIconPulseAnim.setValue(1);
+  }, [homeRingIconPulseAnim]);
+
+  const toggleHomeProfileRingsVisible = useCallback((postId: string) => {
+    const key = String(postId || '');
+    if (!key) return;
+    setHomeProfileRingsVisibleByPostId(prev => {
+      const isVisible = prev[key] === true;
+      if (isVisible) {
+        stopHomeRingIconPulse();
+      } else {
+        startHomeRingIconPulse();
+      }
+      return { ...prev, [key]: !isVisible };
+    });
+  }, [startHomeRingIconPulse, stopHomeRingIconPulse]);
+
   const handleHomePageSelected = useCallback((nextIndex: number) => {
     homePagerIndexRef.current = nextIndex;
     if (nextIndex === currentPostIndex) return;
@@ -5329,6 +5574,17 @@ const FrontScreen = ({
       markHomeSwipeTutorialSeen();
     }
 
+    // Hide rings & stop animation for the publication the user is leaving.
+    const leavingPublication = publications[currentPostIndex];
+    if (leavingPublication) {
+      const leavingId = String(leavingPublication.id);
+      setHomeProfileRingsVisibleByPostId(prev => {
+        if (prev[leavingId] !== true) return prev;
+        return { ...prev, [leavingId]: false };
+      });
+    }
+    stopHomeRingIconPulse();
+
     setCurrentPostIndex(nextIndex);
     const nextPublication = publications[nextIndex];
     const nextPublicationId = nextPublication?.id != null ? String(nextPublication.id) : '';
@@ -5336,7 +5592,7 @@ const FrontScreen = ({
       seenPublicationIdsRef.current.add(nextPublicationId);
     }
     trackHomePublicationAdvanceForAds();
-  }, [currentPostIndex, hasSeenHomeSwipeTutorial, markHomeSwipeTutorialSeen, publications]);
+  }, [currentPostIndex, hasSeenHomeSwipeTutorial, markHomeSwipeTutorialSeen, publications, stopHomeRingIconPulse]);
 
   const startNextPublicationProgressAnimation = () => {
     if (nextPublicationAnimRef.current) {
@@ -6845,7 +7101,6 @@ const FrontScreen = ({
   const [presentationOverlayVisible, setPresentationOverlayVisible] = useState<Record<string, boolean>>({});
   const [expandedProfileTexts, setExpandedProfileTexts] = useState<Record<string, boolean>>({});
   const [homeCarouselLoadingVisibleByPubId, setHomeCarouselLoadingVisibleByPubId] = useState<Record<string, boolean>>({});
-  const homeCarouselRefs = useRef<Record<string, FlatList<CarouselImageData> | null>>({});
   const homeCarouselHideOverlayTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
@@ -6994,19 +7249,11 @@ const FrontScreen = ({
     });
   }, []);
 
-  const toggleHomeProfileRingsVisible = useCallback((postId: string) => {
-    const key = String(postId || '');
-    if (!key) return;
-    setHomeProfileRingsVisibleByPostId(prev => {
-      const isVisible = prev[key] === true;
-      return { ...prev, [key]: !isVisible };
-    });
-  }, []);
-
   // Home: track which carousel images have finished loading per publication.
   // This lets us show a loader overlay until all images are ready.
   const [homePresentationImagesLoaded, setHomePresentationImagesLoaded] = useState<Record<string, Record<number, boolean>>>({});
   const homePresentationPrefetchSigRef = useRef<string>('');
+  const homePresentationImageSigByPubIdRef = useRef<Record<string, string>>({});
   const homePresentationActiveIndexRef = useRef<Record<string, number>>({});
 
   const markHomePresentationImageLoaded = useCallback((pubId: string | number, imageIndex: number) => {
@@ -7070,6 +7317,23 @@ const FrontScreen = ({
       return { ...prev, [key]: nextIndex };
     });
   }, []);
+
+  const activeHomePublication = activeBottomTab === 'home'
+    ? publications?.[currentPostIndex] ?? null
+    : null;
+
+  const activeHomePresentationImageSig = useMemo(() => {
+    const pub = activeHomePublication;
+    if (!pub || !Array.isArray(pub.presentation?.images) || pub.presentation.images.length === 0) return '';
+
+    const imageParts = pub.presentation.images.map((img: any, index: number) => {
+      const rawUri = String(img?.uri || '').trim();
+      const aspectRatio = String(img?.aspectRatio || '');
+      return `${index}:${rawUri}:${aspectRatio}`;
+    });
+
+    return `${String(pub.id || '')}::${imageParts.join('|')}`;
+  }, [activeHomePublication]);
 
   const updateProfilePresentationActiveIndexFromScroll = useCallback((
     contentOffsetX: number,
@@ -7230,7 +7494,7 @@ const FrontScreen = ({
   useEffect(() => {
     if (activeBottomTab !== 'home') return;
 
-    const pub = publications?.[currentPostIndex];
+    const pub = activeHomePublication;
     if (!pub || !pub.presentation?.images || pub.presentation.images.length === 0) return;
 
     const pubId = String(pub.id || '');
@@ -7242,9 +7506,22 @@ const FrontScreen = ({
 
     if (uris.length === 0) return;
 
-    const sig = `${pubId}:${uris.join('|')}`;
+    const sig = activeHomePresentationImageSig;
+    if (!sig) return;
     if (homePresentationPrefetchSigRef.current === sig) return;
     homePresentationPrefetchSigRef.current = sig;
+
+    if (homePresentationImageSigByPubIdRef.current[pubId] !== sig) {
+      homePresentationImageSigByPubIdRef.current[pubId] = sig;
+      setHomePresentationImagesLoaded(prev => {
+        if (!prev[pubId] || Object.keys(prev[pubId]).length === 0) return prev;
+        return {
+          ...prev,
+          [pubId]: {},
+        };
+      });
+    }
+
     setHomeCarouselLoadingVisibleByPubId(prev => (prev[pubId] === true ? prev : { ...prev, [pubId]: true }));
 
     // Prefetch only warms the native cache.
@@ -7257,12 +7534,12 @@ const FrontScreen = ({
         // ignore
       }
     });
-  }, [activeBottomTab, currentPostIndex, publications]);
+  }, [activeBottomTab, activeHomePublication, activeHomePresentationImageSig]);
 
   useEffect(() => {
     if (activeBottomTab !== 'home') return;
 
-    const pub = publications?.[currentPostIndex];
+    const pub = activeHomePublication;
     if (!pub || !pub.presentation?.images || pub.presentation.images.length === 0) return;
 
     const pubId = String(pub.id || '');
@@ -7289,21 +7566,15 @@ const FrontScreen = ({
     if (existingTimer) return;
 
     homeCarouselHideOverlayTimersRef.current[pubId] = setTimeout(() => {
-      const currentIndex = Math.max(0, activePresentationIndices[pubId] ?? 0);
-      const targetOffset = currentIndex * HOME_CARD_WIDTH;
-
       InteractionManager.runAfterInteractions(() => {
         requestAnimationFrame(() => {
-          homeCarouselRefs.current[pubId]?.scrollToOffset({ offset: targetOffset, animated: false });
-          requestAnimationFrame(() => {
-            setHomeCarouselLoadingVisibleByPubId(prev => (prev[pubId] === false ? prev : { ...prev, [pubId]: false }));
-          });
+          setHomeCarouselLoadingVisibleByPubId(prev => (prev[pubId] === false ? prev : { ...prev, [pubId]: false }));
         });
       });
 
       delete homeCarouselHideOverlayTimersRef.current[pubId];
     }, 80);
-  }, [activeBottomTab, currentPostIndex, publications, homePresentationImagesLoaded, homeCarouselLoadingVisibleByPubId, activePresentationIndices]);
+  }, [activeBottomTab, activeHomePublication, activeHomePresentationImageSig, homePresentationImagesLoaded, homeCarouselLoadingVisibleByPubId]);
 
   const publicationAnimations = useRef<Record<string, { scale: Animated.Value, opacity: Animated.Value }>>({});
   const publicationLastTaps = useRef<Record<string, number>>({});
@@ -7915,7 +8186,7 @@ const FrontScreen = ({
   }, [authToken]); // Re-fetch when authToken changes
 
   useEffect(() => {
-    // When returning to the Home tab, refresh the feed.
+    // When returning to the Home tab (or re-tapping it), refresh the feed.
     if (!homeTabDidMountRef.current) {
       homeTabDidMountRef.current = true;
       return;
@@ -7926,7 +8197,7 @@ const FrontScreen = ({
 
     fetchHomePosts({ preservePosition: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeBottomTab]);
+  }, [activeBottomTab, homeRefreshCounter]);
 
   useEffect(() => {
     const shouldAnimate = isHomePostsLoading || !hasHomePostsLoadedOnce;
@@ -9640,20 +9911,6 @@ const FrontScreen = ({
         </TouchableWithoutFeedback>
       )}
 
-      {/* Profile ring color panel overlay */}
-      {showProfileRingColorPanel && (
-        <TouchableWithoutFeedback onPress={closeProfileRingColorPanel}>
-          <View style={styles.socialPanelOverlay} />
-        </TouchableWithoutFeedback>
-      )}
-
-      {/* Profile ring viewer panel overlay */}
-      {showProfileRingViewerPanel && (
-        <TouchableWithoutFeedback onPress={closeProfileRingViewerPanel}>
-          <View style={styles.socialPanelOverlay} />
-        </TouchableWithoutFeedback>
-      )}
-
       {/* Reaction Panel */}
       <Animated.View
         style={[
@@ -9692,411 +9949,6 @@ const FrontScreen = ({
           ))}
         </ScrollView>
       </Animated.View>
-
-      {/* Profile ring color panel */}
-      {showProfileRingColorPanel && (
-        <Animated.View
-          style={[
-            styles.profileRingColorPanel,
-            isKeyboardVisible && keyboardHeight > 0
-              ? { bottom: keyboardHeight }
-              : { bottom: profileRingPanelsBottomOffset },
-            { transform: [{ translateY: profileRingColorPanelAnimation }] },
-          ]}
-        >
-          <View style={styles.profileRingColorPanelHeader}>
-            <TouchableOpacity
-              onPress={createSelectedProfileRing}
-              activeOpacity={0.8}
-              disabled={!canCreateProfileRingMeta}
-              style={styles.profileRingApplyAction}
-            >
-              <MaterialIcons name="check" size={22} color="#FFFFFF" />
-              <Text style={styles.profileRingApplyActionText}>{t('common.create' as TranslationKey)}</Text>
-              {!canCreateProfileRingMeta && (
-                <View style={styles.profileRingApplyActionDisabledOverlay} pointerEvents="none" />
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={deleteSelectedProfileRing}
-              activeOpacity={0.8}
-              style={styles.profileRingDeleteAction}
-            >
-              <MaterialIcons name="delete" size={18} color="#FFFFFF" />
-              <Text style={styles.profileRingDeleteActionText}>{t('front.profileRingDelete' as TranslationKey)}</Text>
-            </TouchableOpacity>
-          </View>
-          <ScrollView
-            ref={profileRingPanelScrollRef}
-            style={styles.profileRingPanelScroll}
-            contentContainerStyle={styles.profileRingPanelScrollContent}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-            showsVerticalScrollIndicator={false}
-          >
-            <View style={styles.profileRingColorOptionsRow}>
-              {PROFILE_RING_COLOR_OPTIONS.map(opt => {
-                const selectedColor = String(profileRingColorDraft || '').toLowerCase();
-                const isSelected = selectedColor === opt.color.toLowerCase();
-                const innerSize = 34;
-                return (
-                  <TouchableOpacity
-                    key={opt.key}
-                    activeOpacity={0.8}
-                    onPress={() => applyColorToSelectedRing(opt.color)}
-                    style={[
-                      styles.profileRingColorOptionOuter,
-                      isSelected && styles.profileRingColorOptionOuterSelected,
-                    ]}
-                  >
-                    <View
-                      style={[
-                        styles.profileRingColorOptionInner,
-                        { width: innerSize, height: innerSize, borderRadius: innerSize / 2, borderColor: opt.color },
-                      ]}
-                    />
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            <View style={styles.profileRingMetaContainer}>
-              <Text style={styles.profileRingFieldLabel}>{t('front.profileRingNameLabel' as TranslationKey)}</Text>
-              <Text style={styles.profileRingFieldHelper}>{t('front.profileRingNameHelper' as TranslationKey)}</Text>
-              <TextInput
-                style={styles.profileRingTextInput}
-                value={profileRingNameDraft}
-                onChangeText={updateSelectedProfileRingName}
-                maxLength={38}
-                placeholderTextColor="rgba(255, 255, 255, 0.3)"
-                autoCapitalize="sentences"
-                autoCorrect
-              />
-
-              <Text style={styles.profileRingFieldLabel}>{t('front.profileRingDescriptionLabel' as TranslationKey)}</Text>
-              <TextInput
-                style={[styles.profileRingTextInput, styles.profileRingTextArea]}
-                value={profileRingDescriptionDraft}
-                onChangeText={updateSelectedProfileRingDescription}
-                onFocus={ensureProfileRingFocusedFieldVisible}
-                maxLength={280}
-                placeholderTextColor="rgba(255, 255, 255, 0.3)"
-                autoCapitalize="sentences"
-                autoCorrect
-                multiline
-                textAlignVertical="top"
-              />
-
-              <View style={styles.profileRingLinkLocationContainer}>
-                <View style={styles.profileRingLinkLocationBlock}>
-                  <TouchableOpacity
-                    activeOpacity={0.75}
-                    onPress={toggleProfileRingLinkExpanded}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                  >
-                    <View style={styles.profileRingLinkLocationRow}>
-                      <MaterialIcons name="link" size={18} color="#FFFFFF" />
-                      <Text style={styles.profileRingLinkLocationText}>{t('front.profileRingLinkLabel' as TranslationKey)}</Text>
-                      <View style={{ flex: 1 }} />
-                      <MaterialIcons
-                        name={isProfileRingLinkExpanded ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
-                        size={22}
-                        color="rgba(255, 255, 255, 0.8)"
-                      />
-                    </View>
-                  </TouchableOpacity>
-                  <Text style={styles.profileRingLinkLocationHelper}>{t('front.profileRingLinkHelper' as TranslationKey)}</Text>
-
-                  {!!(profileRingLinkNetworkDraft && profileRingLinkUrlDraft) && !isProfileRingLinkExpanded && (() => {
-                    const key = String(profileRingLinkNetworkDraft || '').trim();
-                    const url = String(profileRingLinkUrlDraft || '').trim();
-                    if (!key || !url) return null;
-                    const source = (SOCIAL_ICONS as any)[key];
-
-                    return (
-                      <View style={styles.profileRingLinkPreviewRow}>
-                        <TouchableOpacity
-                          activeOpacity={0.75}
-                          onPress={clearProfileRingLinkDraft}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          accessibilityRole="button"
-                          accessibilityLabel="Eliminar enlace"
-                          style={styles.profileRingPreviewRemoveBtn}
-                        >
-                          <MaterialIcons name="close" size={14} color="#FFFFFF" />
-                        </TouchableOpacity>
-                        {source ? (
-                          <TouchableOpacity
-                            activeOpacity={0.75}
-                            onPress={() => openExternalLink(url)}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          >
-                            <Image source={source} style={styles.profileRingLinkedIcon} />
-                          </TouchableOpacity>
-                        ) : null}
-                        <TouchableOpacity
-                          activeOpacity={0.75}
-                          onPress={() => openExternalLink(url)}
-                          style={{ flex: 1 }}
-                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                        >
-                          <Text style={styles.profileRingLinkPreviewText} numberOfLines={1}>
-                            {url}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  })()}
-
-                  {isProfileRingLinkExpanded && (
-                    <View style={styles.profileRingLinkPickerContainer}>
-                      <View style={styles.socialIconsRow}>
-                        {Object.entries(SOCIAL_ICONS).map(([key, source]) => (
-                          <TouchableOpacity
-                            key={key}
-                            onPress={() => handleSelectProfileRingLinkNetwork(key)}
-                            activeOpacity={0.7}
-                            style={[
-                              styles.socialIconContainer,
-                              profileRingLinkNetworkDraft === key && styles.socialIconSelected,
-                            ]}
-                          >
-                            <Image source={source as any} style={[styles.socialIcon, styles.profileRingSocialIcon]} />
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-
-                      <View style={styles.profileRingLinkInputContainer}>
-                        <TextInput
-                          style={[
-                            styles.socialPanelInput,
-                            !profileRingLinkNetworkDraft && styles.socialPanelInputDisabled,
-                            profileRingLinkErrorDraft ? styles.socialPanelInputError : null,
-                            { marginTop: 0 },
-                          ]}
-                          placeholder={profileRingLinkNetworkDraft ? t('front.link' as TranslationKey) : t('front.selectSocialNetwork' as TranslationKey)}
-                          placeholderTextColor="rgba(255, 255, 255, 0.3)"
-                          value={profileRingLinkUrlDraft}
-                          onChangeText={handleProfileRingLinkUrlChange}
-                          onFocus={ensureProfileRingFocusedFieldVisible}
-                          autoCapitalize="none"
-                          autoCorrect={false}
-                          keyboardType="url"
-                          editable={!!profileRingLinkNetworkDraft}
-                          selectTextOnFocus={!!profileRingLinkNetworkDraft}
-                        />
-                        {profileRingLinkNetworkDraft && profileRingLinkErrorDraft ? (
-                          <Text style={styles.socialPanelErrorText}>{profileRingLinkErrorDraft}</Text>
-                        ) : null}
-                      </View>
-
-                      <TouchableOpacity
-                        style={[
-                          styles.linkButton,
-                          (!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft) && styles.linkButtonDisabled,
-                          styles.profileRingLinkApplyButton,
-                        ]}
-                        onPress={applyProfileRingLinkDraft}
-                        disabled={!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft}
-                        activeOpacity={0.7}
-                      >
-                        <Text
-                          style={[
-                            styles.linkButtonText,
-                            (!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft) && styles.linkButtonTextDisabled,
-                          ]}
-                        >
-                          {t('common.apply' as TranslationKey)}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                </View>
-                <View style={styles.profileRingLinkLocationBlock}>
-                  <TouchableOpacity
-                    activeOpacity={0.75}
-                    onPress={openProfileRingLocationPicker}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                  >
-                    <View style={styles.profileRingLinkLocationRow}>
-                      <MaterialIcons name="location-on" size={18} color="#FFFFFF" />
-                      <Text style={styles.profileRingLinkLocationText}>{t('front.profileRingLocationLabel' as TranslationKey)}</Text>
-                      <View style={{ flex: 1 }} />
-                      <MaterialIcons name="add" size={22} color="rgba(255, 255, 255, 0.8)" />
-                    </View>
-                  </TouchableOpacity>
-                  <Text style={styles.profileRingLinkLocationHelper}>{t('front.profileRingLocationHelper' as TranslationKey)}</Text>
-
-                  {!!(profileRingLocationLabelDraft) && (
-                    <View style={styles.profileRingLocationPreviewRow}>
-                      <TouchableOpacity
-                        activeOpacity={0.75}
-                        onPress={clearProfileRingLocationDraft}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        accessibilityRole="button"
-                        accessibilityLabel="Eliminar ubicación"
-                        style={styles.profileRingPreviewRemoveBtn}
-                      >
-                        <MaterialIcons name="close" size={14} color="#FFFFFF" />
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        activeOpacity={0.75}
-                        onPress={() => openExternalLink(profileRingLocationUrlDraft || 'https://www.google.com/maps')}
-                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
-                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                      >
-                        <MaterialIcons name="place" size={16} color="rgba(255, 183, 77, 0.9)" />
-                        <Text style={styles.profileRingLocationPreviewText} numberOfLines={1}>
-                          {profileRingLocationLabelDraft}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                </View>
-              </View>
-            </View>
-          </ScrollView>
-        </Animated.View>
-      )}
-
-      {/* Profile ring viewer panel */}
-      {showProfileRingViewerPanel && viewingProfileRing && (
-        <Animated.View
-          style={[
-            styles.profileRingViewerPanel,
-            { bottom: profileRingPanelsBottomOffset },
-            { borderTopColor: viewingProfileRing.color || '#FFB74D' },
-            { transform: [{ translateY: profileRingViewerPanelAnimation }] },
-          ]}
-        >
-          <View style={styles.profileRingViewerHeader}>
-            <View style={[styles.profileRingViewerColorDot, { borderColor: viewingProfileRing.color || '#FFFFFF' }]} />
-            <View style={{ flex: 1 }} />
-            {viewingProfileRingSource === 'profile' && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-                <TouchableOpacity
-                  onPress={handleEditViewingProfileRing}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  activeOpacity={0.75}
-                  accessibilityRole="button"
-                  accessibilityLabel="Editar aro"
-                >
-                  <MaterialIcons name="edit" size={20} color="#FFFFFF" />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={requestDeleteViewingProfileRing}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  activeOpacity={0.75}
-                  accessibilityRole="button"
-                  accessibilityLabel="Eliminar aro"
-                >
-                  <MaterialIcons name="delete" size={22} color="#FFFFFF" />
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={styles.profileRingViewerScrollContent}
-          >
-            <Text style={styles.profileRingViewerName}>
-              {viewingProfileRing.name}
-            </Text>
-            <Text style={styles.profileRingViewerDescription}>
-              {viewingProfileRing.description}
-            </Text>
-
-            {!!(viewingProfileRing.linkNetwork && viewingProfileRing.linkUrl) && (
-              <View style={styles.profileRingViewerMetaSection}>
-                <Text style={styles.profileRingViewerMetaLabel}>{t('front.profileRingLinkLabel' as TranslationKey)}</Text>
-                <TouchableOpacity
-                  activeOpacity={0.75}
-                  onPress={() => openExternalLink(viewingProfileRing.linkUrl)}
-                  style={styles.profileRingViewerMetaRow}
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                >
-                  {(() => {
-                    const key = String(viewingProfileRing.linkNetwork || '').trim();
-                    const source = (SOCIAL_ICONS as any)[key];
-                    if (!source) return null;
-                    return (
-                      <Image
-                        source={source}
-                        style={styles.profileRingViewerLinkLogo}
-                      />
-                    );
-                  })()}
-                  <Text style={styles.profileRingViewerMetaText} numberOfLines={2}>
-                    {viewingProfileRing.linkUrl}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {!!(viewingProfileRing.locationLabel) && (
-              <View style={styles.profileRingViewerMetaSection}>
-                <Text style={styles.profileRingViewerMetaLabel}>{t('front.profileRingLocationLabel' as TranslationKey)}</Text>
-                <TouchableOpacity
-                  activeOpacity={0.75}
-                  onPress={() => openExternalLink(viewingProfileRing.locationUrl || 'https://www.google.com/maps')}
-                  style={styles.profileRingViewerMetaRow}
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                >
-                  <MaterialIcons name="place" size={18} color="#FFB74D" />
-                  <Text style={styles.profileRingViewerMetaText} numberOfLines={2}>
-                    {viewingProfileRing.locationLabel}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </ScrollView>
-          {(viewingProfileRingSource === 'home' || activeBottomTab === 'home') && adsSdkReady && (
-            <View
-              collapsable={false}
-              style={[
-                styles.profileRingViewerAdContainer,
-                !homeProfileRingBannerReady && { minHeight: 0, marginTop: 0 },
-              ]}
-            >
-              <BannerAd
-                key={`ring-banner-${viewingProfileRingId || 'none'}-${homeProfileRingBannerSize}-${homeProfileRingBannerRequestKey}-${requestNonPersonalizedAdsOnly ? 'npa' : 'pa'}`}
-                unitId={BANNER_AD_UNIT_ID}
-                size={homeProfileRingBannerSize}
-                requestOptions={{ requestNonPersonalizedAdsOnly }}
-                onPaid={(event) => {
-                  trackAdPaidEvent({
-                    format: 'banner',
-                    placement: 'home_profile_ring_viewer_banner',
-                    event,
-                  });
-                }}
-                onAdLoaded={() => setHomeProfileRingBannerReady(true)}
-                onAdFailedToLoad={(error) => {
-                  setHomeProfileRingBannerReady(false);
-
-                  if (homeProfileRingBannerSize !== BannerAdSize.BANNER) {
-                    setHomeProfileRingBannerSize(BannerAdSize.BANNER);
-                    setHomeProfileRingBannerRequestKey(k => k + 1);
-                    return;
-                  }
-
-                  console.warn('[AdMob] Home profile ring banner failed to load', {
-                    unitId: BANNER_AD_UNIT_ID,
-                    size: homeProfileRingBannerSize,
-                    isDev: typeof __DEV__ !== 'undefined' ? __DEV__ : undefined,
-                    code: (error as any)?.code,
-                    message: (error as any)?.message,
-                    error,
-                  });
-                }}
-              />
-            </View>
-          )}
-        </Animated.View>
-      )}
 
       {/* Confirm delete profile ring (styled modal) */}
       <Modal
@@ -10502,7 +10354,7 @@ const FrontScreen = ({
       }
 
       {/* Contenido principal */}
-      <View style={styles.content}>
+      <Reanimated.View style={[styles.content, bottomContentTransitionStyle]}>
         {/* Pantalla Home */}
         {activeBottomTab === 'home' && (
           <View style={[styles.homeScreenContainer, { paddingTop: Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT + 8 : 8, paddingBottom: 0 }]}>
@@ -10624,6 +10476,29 @@ const FrontScreen = ({
                       : trimmedText.slice(0, PROFILE_TEXT_PREVIEW_LIMIT);
 
                     const isJoined = myChannels.some(ch => String(ch?.post_id ?? ch?.postId ?? ch?.id) === String(pub.id));
+                    const renderablePublicationSocials = Array.isArray(pub.user.socialNetworks)
+                      ? pub.user.socialNetworks.reduce<Array<{ key: string; link: string; iconSource: any }>>((acc, sn, socialIndex) => {
+                        const key = normalizeSocialIconKey(sn?.id);
+                        const link = String(sn?.link || '').trim();
+                        const iconSource = SOCIAL_ICONS[key as keyof typeof SOCIAL_ICONS];
+                        if (!key || !link || !iconSource) return acc;
+                        acc.push({
+                          key: `${key}-${socialIndex}`,
+                          link,
+                          iconSource,
+                        });
+                        return acc;
+                      }, [])
+                      : [];
+                    const HOME_SOCIAL_ICON_SIZE = 18;
+                    const HOME_SOCIAL_ICON_GAP = 10;
+                    const HOME_SOCIAL_ICONS_VIEWPORT_COUNT = 3;
+                    const HOME_SOCIAL_TOUCH_HORIZONTAL_PADDING = 8;
+                    const totalRenderablePublicationSocials = renderablePublicationSocials.length;
+                    const homeSocialViewportCount = Math.min(totalRenderablePublicationSocials, HOME_SOCIAL_ICONS_VIEWPORT_COUNT);
+                    const homeSocialIconsViewportWidth = homeSocialViewportCount > 0
+                      ? (homeSocialViewportCount * HOME_SOCIAL_ICON_SIZE) + ((homeSocialViewportCount - 1) * HOME_SOCIAL_ICON_GAP)
+                      : 0;
 
                     // Initialize animations if not present
                     if (!publicationAnimations.current[pub.id]) {
@@ -10636,7 +10511,7 @@ const FrontScreen = ({
                     const pubDoubleTap = publicationDoubleTapState[pub.id] || { visible: false, emoji: '' };
                     const homeCarouselLoadedMap = homePresentationImagesLoaded[String(pub.id)] || {};
                     const isHomeCarouselLoadingVisible = homeCarouselLoadingVisibleByPubId[String(pub.id)] !== false;
-                    const homeCarouselExtraData = `${Object.keys(homeCarouselLoadedMap).sort().join(',')}|active:${activePresentationIndex}`;
+                    const homeCarouselExtraData = `active:${activePresentationIndex}|rings:${ringsVisible ? 1 : 0}`;
                     return (
                       <View key={`home-page-${String(pub.id)}`} style={styles.homePagerPage} collapsable={false}>
                         <ScrollView
@@ -10724,9 +10599,70 @@ const FrontScreen = ({
                                     style={{ marginRight: 4 }}
                                   />
                                 )}
-                                <Text style={{ color: '#FFFFFF', fontSize: 12 }}>
-                                  {formatSocialNetworksCount(pub.user.socialNetworks.length)}
-                                </Text>
+                                {intimidadesVisible[pub.id] && renderablePublicationSocials.length > 0 ? (
+                                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <View
+                                      style={{
+                                        width: homeSocialIconsViewportWidth + (HOME_SOCIAL_TOUCH_HORIZONTAL_PADDING * 2),
+                                        height: 28,
+                                        marginHorizontal: -HOME_SOCIAL_TOUCH_HORIZONTAL_PADDING,
+                                        paddingHorizontal: HOME_SOCIAL_TOUCH_HORIZONTAL_PADDING,
+                                        justifyContent: 'center',
+                                      }}
+                                      onTouchStart={() => setHomeCarouselGestureActive(true)}
+                                      onTouchEnd={() => setHomeCarouselGestureActive(false)}
+                                      onTouchCancel={() => setHomeCarouselGestureActive(false)}
+                                      onMoveShouldSetResponderCapture={() => {
+                                        setHomeCarouselGestureActive(true);
+                                        return false;
+                                      }}
+                                    >
+                                      <View style={{ width: homeSocialIconsViewportWidth, height: 24, overflow: 'hidden' }}>
+                                      <ScrollView
+                                        horizontal
+                                        nestedScrollEnabled
+                                        directionalLockEnabled
+                                        showsHorizontalScrollIndicator={false}
+                                        scrollEnabled={totalRenderablePublicationSocials > HOME_SOCIAL_ICONS_VIEWPORT_COUNT}
+                                        style={{ height: 24 }}
+                                        scrollEventThrottle={16}
+                                        onTouchStart={() => setHomeCarouselGestureActive(true)}
+                                        onTouchEnd={() => setHomeCarouselGestureActive(false)}
+                                        onTouchCancel={() => setHomeCarouselGestureActive(false)}
+                                        onScrollBeginDrag={() => setHomeCarouselGestureActive(true)}
+                                        onScrollEndDrag={() => setHomeCarouselGestureActive(false)}
+                                        onMomentumScrollBegin={() => setHomeCarouselGestureActive(true)}
+                                        onMomentumScrollEnd={() => setHomeCarouselGestureActive(false)}
+                                        contentContainerStyle={{ alignItems: 'center', paddingVertical: 2, paddingRight: 4 }}
+                                      >
+                                        {renderablePublicationSocials.map(({ key, link, iconSource }, socialIndex) => {
+                                          const isLast = socialIndex === renderablePublicationSocials.length - 1;
+                                          return (
+                                            <TouchableOpacity
+                                              key={key}
+                                              onPress={() => openExternalLink(link)}
+                                              activeOpacity={0.7}
+                                              style={{ marginRight: isLast ? 0 : HOME_SOCIAL_ICON_GAP, paddingVertical: 2 }}
+                                            >
+                                              <Image
+                                                source={iconSource}
+                                                style={{ width: HOME_SOCIAL_ICON_SIZE, height: HOME_SOCIAL_ICON_SIZE, resizeMode: 'contain' }}
+                                              />
+                                            </TouchableOpacity>
+                                          );
+                                        })}
+                                      </ScrollView>
+                                    </View>
+                                    </View>
+                                    <Text style={{ marginLeft: 6, color: 'rgba(255, 255, 255, 0.7)', fontSize: 12 }}>
+                                      {totalRenderablePublicationSocials}
+                                    </Text>
+                                  </View>
+                                ) : (
+                                  <Text style={{ color: '#FFFFFF', fontSize: 12 }}>
+                                    {formatSocialNetworksCount(pub.user.socialNetworks.length)}
+                                  </Text>
+                                )}
                               </View>
                             </View>
                           </View>
@@ -10807,11 +10743,8 @@ const FrontScreen = ({
                                 );
                               })()}
                               <FlatList
-                                ref={(ref) => {
-                                  homeCarouselRefs.current[String(pub.id)] = ref;
-                                }}
                                 data={pub.presentation.images}
-                                keyExtractor={(item, index) => `pub-${pub.id}-image-${index}-${String(item?.uri || '')}`}
+                                keyExtractor={(_item, index) => `pub-${pub.id}-image-${index}`}
                                 extraData={homeCarouselExtraData}
                                 horizontal
                                 pagingEnabled
@@ -11013,11 +10946,13 @@ const FrontScreen = ({
                                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                                     style={{ paddingVertical: 2, paddingHorizontal: 2, opacity: hasPresentationRings ? 1 : 0.35 }}
                                   >
-                                    <GradientIcon
-                                      name="panorama-fish-eye"
-                                      size={16}
-                                      colors={['#FFB74D', '#ffe45c']}
-                                    />
+                                    <Animated.View style={ringsVisible ? { transform: [{ scale: homeRingIconPulseAnim }] } : undefined}>
+                                      <GradientIcon
+                                        name="panorama-fish-eye"
+                                        size={16}
+                                        colors={['#FFB74D', '#ffe45c']}
+                                      />
+                                    </Animated.View>
                                   </TouchableOpacity>
 
                                   <CountdownTimer
@@ -11572,9 +11507,9 @@ const FrontScreen = ({
         {/* Pantalla Profile */}
         {
           activeBottomTab === 'profile' && (
-            <View style={[styles.profileScreenContainer, { paddingBottom: bottomNavHeight + 16 }]}>
+            <View style={styles.profileScreenContainer}>
               {profileView === 'profile' ? (
-                <ScrollView key={`profile-main-view-${profileViewMountKey}`} contentContainerStyle={styles.profileScrollContent}>
+                <ScrollView key={`profile-main-view-${profileViewMountKey}`} contentContainerStyle={[styles.profileScrollContent, { paddingBottom: bottomNavHeight + 16 }]}>
                   {profilePresentation ? (
                     <>
                       <View style={styles.presentationHeaderContainer}>
@@ -12226,7 +12161,7 @@ const FrontScreen = ({
                 <View style={{ flex: 1 }}>
                   <ScrollView
                     scrollEnabled={!isPublished}
-                    contentContainerStyle={{ paddingTop: 0, paddingBottom: 80 }}
+                    contentContainerStyle={{ paddingTop: 0, paddingBottom: bottomNavHeight + 16 }}
                   >
                     <View style={styles.categorySelectorContainer}>
                     <Text style={styles.categoryLabel}>{t('front.category' as TranslationKey)}</Text>
@@ -15662,7 +15597,7 @@ const FrontScreen = ({
                                       />
                                     )}
                                     <View style={{ zIndex: 1 }}>
-                                      <BottomNavGradientIcon name="person" size={16} />
+                                      <MaterialIcons name="person-outline" size={16} color="#FFCF72" />
                                     </View>
                                   </View>
                                 </TouchableOpacity>
@@ -16006,7 +15941,7 @@ const FrontScreen = ({
                               fontWeight: '600',
                             }}
                           >
-                            {isRead ? 'Leido' : 'No leido'}
+                            {isRead ? t('notifications.read') : t('notifications.unread')}
                           </Text>
                         </View>
 
@@ -16114,7 +16049,468 @@ const FrontScreen = ({
           </View>
         )
         }
-      </View >
+      </Reanimated.View>
+
+      {/* Barra de navegación inferior */}
+      {activeBottomTab !== 'notifications' && !isKeyboardVisible && isMainBottomTab(activeBottomTab) && (
+        <BottomNavigationBar
+          activeTab={activeBottomTab as MainBottomTab}
+          bottomInset={bottomSystemOffset}
+          disabled={isBottomNavInteractionDisabled}
+          homeBadgeCount={homeActivePublicationsCount}
+          onLayout={(e) => {
+            const h = e?.nativeEvent?.layout?.height;
+            if (typeof h === 'number' && h > 0) {
+              setBottomNavHeight(prev => (prev === h ? prev : h));
+            }
+          }}
+          onTabPress={handleBottomTabChange}
+        />
+      )}
+
+      {/* Profile ring viewer panel overlay */}
+      {showProfileRingViewerPanel && (
+        <TouchableWithoutFeedback onPress={closeProfileRingViewerPanel}>
+          <View style={styles.socialPanelOverlay} />
+        </TouchableWithoutFeedback>
+      )}
+
+      {/* Profile ring viewer panel */}
+      {showProfileRingViewerPanel && viewingProfileRing && (
+        <Animated.View
+          style={[
+            styles.profileRingViewerPanel,
+            { bottom: 0, paddingBottom: Math.max(bottomSystemOffset, 24) },
+            { borderTopColor: viewingProfileRing.color || '#FFB74D' },
+            { transform: [{ translateY: profileRingViewerPanelAnimation }] },
+          ]}
+        >
+          <View style={styles.profileRingViewerHeader}>
+            <View style={[styles.profileRingViewerColorDot, { borderColor: viewingProfileRing.color || '#FFFFFF' }]} />
+            <View style={{ flex: 1 }} />
+            {viewingProfileRingSource === 'profile' && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+                <TouchableOpacity
+                  onPress={handleEditViewingProfileRing}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel="Editar aro"
+                >
+                  <MaterialIcons name="edit" size={20} color="#FFFFFF" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={requestDeleteViewingProfileRing}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel="Eliminar aro"
+                >
+                  <MaterialIcons name="delete" size={22} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.profileRingViewerScrollContent}
+          >
+            <Text style={styles.profileRingViewerName}>
+              {viewingProfileRing.name}
+            </Text>
+            <Text style={styles.profileRingViewerDescription}>
+              {viewingProfileRing.description}
+            </Text>
+
+            {!!(viewingProfileRing.linkNetwork && viewingProfileRing.linkUrl) && (
+              <View style={styles.profileRingViewerMetaSection}>
+                <Text style={styles.profileRingViewerMetaLabel}>{t('front.profileRingLinkLabel' as TranslationKey)}</Text>
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={() => openExternalLink(viewingProfileRing.linkUrl)}
+                  style={styles.profileRingViewerMetaRow}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  {(() => {
+                    const key = String(viewingProfileRing.linkNetwork || '').trim();
+                    const source = (SOCIAL_ICONS as any)[key];
+                    if (!source) return null;
+                    return (
+                      <Image
+                        source={source}
+                        style={styles.profileRingViewerLinkLogo}
+                      />
+                    );
+                  })()}
+                  <Text style={styles.profileRingViewerMetaText} numberOfLines={2}>
+                    {viewingProfileRing.linkUrl}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {!!(viewingProfileRing.locationLabel) && (
+              <View style={styles.profileRingViewerMetaSection}>
+                <Text style={styles.profileRingViewerMetaLabel}>{t('front.profileRingLocationLabel' as TranslationKey)}</Text>
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={() => openExternalLink(viewingProfileRing.locationUrl || 'https://www.google.com/maps')}
+                  style={styles.profileRingViewerMetaRow}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <MaterialIcons name="place" size={18} color="#FFB74D" />
+                  <Text style={styles.profileRingViewerMetaText} numberOfLines={2}>
+                    {viewingProfileRing.locationLabel}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </ScrollView>
+          {(viewingProfileRingSource === 'home' || activeBottomTab === 'home') && adsSdkReady && (
+            <View
+              collapsable={false}
+              style={[
+                styles.profileRingViewerAdContainer,
+                !homeProfileRingBannerReady && { minHeight: 0, marginTop: 0 },
+              ]}
+            >
+              <BannerAd
+                key={`ring-banner-${viewingProfileRingId || 'none'}-${homeProfileRingBannerSize}-${homeProfileRingBannerRequestKey}-${requestNonPersonalizedAdsOnly ? 'npa' : 'pa'}`}
+                unitId={BANNER_AD_UNIT_ID}
+                size={homeProfileRingBannerSize}
+                requestOptions={{ requestNonPersonalizedAdsOnly }}
+                onPaid={(event) => {
+                  trackAdPaidEvent({
+                    format: 'banner',
+                    placement: 'home_profile_ring_viewer_banner',
+                    event,
+                  });
+                }}
+                onAdLoaded={() => setHomeProfileRingBannerReady(true)}
+                onAdFailedToLoad={(error) => {
+                  setHomeProfileRingBannerReady(false);
+
+                  if (homeProfileRingBannerSize !== BannerAdSize.BANNER) {
+                    setHomeProfileRingBannerSize(BannerAdSize.BANNER);
+                    setHomeProfileRingBannerRequestKey(k => k + 1);
+                    return;
+                  }
+
+                  console.warn('[AdMob] Home profile ring banner failed to load', {
+                    unitId: BANNER_AD_UNIT_ID,
+                    size: homeProfileRingBannerSize,
+                    isDev: typeof __DEV__ !== 'undefined' ? __DEV__ : undefined,
+                    code: (error as any)?.code,
+                    message: (error as any)?.message,
+                    error,
+                  });
+                }}
+              />
+            </View>
+          )}
+        </Animated.View>
+      )}
+
+      {/* Profile ring color panel overlay */}
+      {showProfileRingColorPanel && (
+        <TouchableWithoutFeedback onPress={closeProfileRingColorPanel}>
+          <View style={styles.socialPanelOverlay} />
+        </TouchableWithoutFeedback>
+      )}
+
+      {/* Profile ring color panel */}
+      {showProfileRingColorPanel && (
+        <Animated.View
+          style={[
+            styles.profileRingColorPanel,
+            isKeyboardVisible && keyboardHeight > 0
+              ? { bottom: keyboardHeight }
+              : { bottom: 0, paddingBottom: Math.max(bottomSystemOffset, 24) },
+            { transform: [{ translateY: profileRingColorPanelAnimation }] },
+          ]}
+        >
+          <View style={styles.profileRingColorPanelHeader}>
+            <TouchableOpacity
+              onPress={createSelectedProfileRing}
+              activeOpacity={0.8}
+              disabled={!canCreateProfileRingMeta}
+              style={styles.profileRingApplyAction}
+            >
+              <MaterialIcons name="check" size={22} color="#FFFFFF" />
+              <Text style={styles.profileRingApplyActionText}>{t('common.create' as TranslationKey)}</Text>
+              {!canCreateProfileRingMeta && (
+                <View style={styles.profileRingApplyActionDisabledOverlay} pointerEvents="none" />
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={deleteSelectedProfileRing}
+              activeOpacity={0.8}
+              style={styles.profileRingDeleteAction}
+            >
+              <MaterialIcons name="delete" size={18} color="#FFFFFF" />
+              <Text style={styles.profileRingDeleteActionText}>{t('front.profileRingDelete' as TranslationKey)}</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            ref={profileRingPanelScrollRef}
+            style={styles.profileRingPanelScroll}
+            contentContainerStyle={styles.profileRingPanelScrollContent}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.profileRingColorOptionsRow}>
+              {PROFILE_RING_COLOR_OPTIONS.map(opt => {
+                const selectedColor = String(profileRingColorDraft || '').toLowerCase();
+                const isSelected = selectedColor === opt.color.toLowerCase();
+                const innerSize = 34;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    activeOpacity={0.8}
+                    onPress={() => applyColorToSelectedRing(opt.color)}
+                    style={[
+                      styles.profileRingColorOptionOuter,
+                      isSelected && styles.profileRingColorOptionOuterSelected,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.profileRingColorOptionInner,
+                        { width: innerSize, height: innerSize, borderRadius: innerSize / 2, borderColor: opt.color },
+                      ]}
+                    />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View style={styles.profileRingMetaContainer}>
+              <Text style={styles.profileRingFieldLabel}>{t('front.profileRingNameLabel' as TranslationKey)}</Text>
+              <Text style={styles.profileRingFieldHelper}>{t('front.profileRingNameHelper' as TranslationKey)}</Text>
+              <TextInput
+                style={styles.profileRingTextInput}
+                value={profileRingNameDraft}
+                onChangeText={updateSelectedProfileRingName}
+                maxLength={38}
+                placeholderTextColor="rgba(255, 255, 255, 0.3)"
+                autoCapitalize="sentences"
+                autoCorrect
+              />
+
+              <Text style={styles.profileRingFieldLabel}>{t('front.profileRingDescriptionLabel' as TranslationKey)}</Text>
+              <TextInput
+                style={[styles.profileRingTextInput, styles.profileRingTextArea]}
+                value={profileRingDescriptionDraft}
+                onChangeText={updateSelectedProfileRingDescription}
+                onFocus={ensureProfileRingFocusedFieldVisible}
+                maxLength={280}
+                placeholderTextColor="rgba(255, 255, 255, 0.3)"
+                autoCapitalize="sentences"
+                autoCorrect
+                multiline
+                textAlignVertical="top"
+              />
+
+              <View style={styles.profileRingLinkLocationContainer}>
+                <View style={styles.profileRingLinkLocationBlock}>
+                  <TouchableOpacity
+                    activeOpacity={0.75}
+                    onPress={toggleProfileRingLinkExpanded}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <View style={styles.profileRingLinkLocationRow}>
+                      <MaterialIcons name="link" size={18} color="#FFFFFF" />
+                      <Text style={styles.profileRingLinkLocationText}>{t('front.profileRingLinkLabel' as TranslationKey)}</Text>
+                      <View style={{ flex: 1 }} />
+                      <MaterialIcons
+                        name={isProfileRingLinkExpanded ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                        size={22}
+                        color="rgba(255, 255, 255, 0.8)"
+                      />
+                    </View>
+                  </TouchableOpacity>
+                  <Text style={styles.profileRingLinkLocationHelper}>{t('front.profileRingLinkHelper' as TranslationKey)}</Text>
+
+                  {!!(profileRingLinkNetworkDraft && profileRingLinkUrlDraft) && !isProfileRingLinkExpanded && (() => {
+                    const key = String(profileRingLinkNetworkDraft || '').trim();
+                    const url = String(profileRingLinkUrlDraft || '').trim();
+                    if (!key || !url) return null;
+                    const source = (SOCIAL_ICONS as any)[key];
+
+                    return (
+                      <View style={styles.profileRingLinkPreviewRow}>
+                        <TouchableOpacity
+                          activeOpacity={0.75}
+                          onPress={clearProfileRingLinkDraft}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Eliminar enlace"
+                          style={styles.profileRingPreviewRemoveBtn}
+                        >
+                          <MaterialIcons name="close" size={14} color="#FFFFFF" />
+                        </TouchableOpacity>
+                        {source ? (
+                          <TouchableOpacity
+                            activeOpacity={0.75}
+                            onPress={() => openExternalLink(url)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Image source={source} style={styles.profileRingLinkedIcon} />
+                          </TouchableOpacity>
+                        ) : null}
+                        <TouchableOpacity
+                          activeOpacity={0.75}
+                          onPress={() => openExternalLink(url)}
+                          style={{ flex: 1 }}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        >
+                          <Text style={styles.profileRingLinkPreviewText} numberOfLines={1}>
+                            {url}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })()}
+
+                  {isProfileRingLinkExpanded && (
+                    <View style={styles.profileRingLinkPickerContainer}>
+                      <View style={styles.socialIconsRow}>
+                        {Object.entries(SOCIAL_ICONS).map(([key, source]) => (
+                          <TouchableOpacity
+                            key={key}
+                            onPress={() => handleSelectProfileRingLinkNetwork(key)}
+                            activeOpacity={0.7}
+                            style={[
+                              styles.socialIconContainer,
+                              profileRingLinkNetworkDraft === key && styles.socialIconSelected,
+                            ]}
+                          >
+                            <Image source={source as any} style={[styles.socialIcon, styles.profileRingSocialIcon]} />
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+
+                      <View style={styles.profileRingLinkInputContainer}>
+                        <TextInput
+                          style={[
+                            styles.socialPanelInput,
+                            !profileRingLinkNetworkDraft && styles.socialPanelInputDisabled,
+                            profileRingLinkErrorDraft ? styles.socialPanelInputError : null,
+                            { marginTop: 0 },
+                          ]}
+                          placeholder={profileRingLinkNetworkDraft ? t('front.link' as TranslationKey) : t('front.selectSocialNetwork' as TranslationKey)}
+                          placeholderTextColor="rgba(255, 255, 255, 0.3)"
+                          value={profileRingLinkUrlDraft}
+                          onChangeText={handleProfileRingLinkUrlChange}
+                          onFocus={ensureProfileRingFocusedFieldVisible}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          keyboardType="url"
+                          editable={!!profileRingLinkNetworkDraft}
+                          selectTextOnFocus={!!profileRingLinkNetworkDraft}
+                        />
+                        {profileRingLinkNetworkDraft && profileRingLinkErrorDraft ? (
+                          <Text style={styles.socialPanelErrorText}>{profileRingLinkErrorDraft}</Text>
+                        ) : null}
+                      </View>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.linkButton,
+                          (!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft) && styles.linkButtonDisabled,
+                          styles.profileRingLinkApplyButton,
+                        ]}
+                        onPress={applyProfileRingLinkDraft}
+                        disabled={!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft}
+                        activeOpacity={0.7}
+                      >
+                        <Text
+                          style={[
+                            styles.linkButtonText,
+                            (!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft) && styles.linkButtonTextDisabled,
+                          ]}
+                        >
+                          {t('common.apply' as TranslationKey)}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+                <View style={styles.profileRingLinkLocationBlock}>
+                  <TouchableOpacity
+                    activeOpacity={0.75}
+                    onPress={openProfileRingLocationPicker}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <View style={styles.profileRingLinkLocationRow}>
+                      <MaterialIcons name="location-on" size={18} color="#FFFFFF" />
+                      <Text style={styles.profileRingLinkLocationText}>{t('front.profileRingLocationLabel' as TranslationKey)}</Text>
+                      <View style={{ flex: 1 }} />
+                      <MaterialIcons name="add" size={22} color="rgba(255, 255, 255, 0.8)" />
+                    </View>
+                  </TouchableOpacity>
+                  <Text style={styles.profileRingLinkLocationHelper}>{t('front.profileRingLocationHelper' as TranslationKey)}</Text>
+
+                  {!!(profileRingLocationLabelDraft) && (
+                    <View style={styles.profileRingLocationPreviewRow}>
+                      <TouchableOpacity
+                        activeOpacity={0.75}
+                        onPress={clearProfileRingLocationDraft}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Eliminar ubicación"
+                        style={styles.profileRingPreviewRemoveBtn}
+                      >
+                        <MaterialIcons name="close" size={14} color="#FFFFFF" />
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        activeOpacity={0.75}
+                        onPress={() => openExternalLink(profileRingLocationUrlDraft || 'https://www.google.com/maps')}
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      >
+                        <MaterialIcons name="place" size={16} color="rgba(255, 183, 77, 0.9)" />
+                        <Text style={styles.profileRingLocationPreviewText} numberOfLines={1}>
+                          {profileRingLocationLabelDraft}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              </View>
+            </View>
+          </ScrollView>
+        </Animated.View>
+      )}
+
+      {isBottomToastVisible && (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.bottomToastContainer,
+            {
+              bottom: bottomNavHeight + 20,
+              opacity: bottomToastAnim,
+              transform: [
+                {
+                  translateY: bottomToastAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [120, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <View style={styles.bottomToastPanel}>
+            <Text style={styles.bottomToastText}>{bottomToastMessage}</Text>
+          </View>
+        </Animated.View>
+      )}
 
       {/* Modal de Permiso de Galería (estilo similar a Eliminar cuenta) */}
       <Modal
@@ -16413,7 +16809,7 @@ const FrontScreen = ({
                     <View style={[styles.profileIconCircleLarge, profilePhotoUri ? { borderWidth: 0 } : null]}>
                       {profilePhotoUri ? (
                         <Image
-                          source={{ uri: getServerResourceUrl(profilePhotoUri) }}
+                          source={{ uri: getServerResourceUrl(String(profilePhotoUri)) }}
                           style={styles.profileImageLarge}
                         />
                       ) : (
@@ -16422,7 +16818,9 @@ const FrontScreen = ({
                     </View>
                   </View>
                   <Text style={styles.sidePanelUsername}>
-                    {username ? `@${username.replace(/^@/, '')}` : t('front.userPlaceholder')}
+                    {typeof username === 'string' && username
+                      ? `@${username.replace(/^@/, '')}`
+                      : t('front.userPlaceholder')}
                   </Text>
                 </View>
 
@@ -16505,142 +16903,6 @@ const FrontScreen = ({
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Barra de navegación inferior */}
-      {activeBottomTab !== 'notifications' && !isKeyboardVisible && (
-        <View
-          style={[
-            styles.bottomNavBar,
-            {
-              justifyContent: 'space-evenly',
-              bottom: 0,
-              paddingBottom: bottomSystemOffset + 6,
-            },
-          ]}
-          pointerEvents={(activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)) ? 'none' : 'auto'}
-          onLayout={(e) => {
-            const h = e?.nativeEvent?.layout?.height;
-            if (typeof h === 'number' && h > 0) {
-              setBottomNavHeight(prev => (prev === h ? prev : h));
-            }
-          }}
-        >
-            {/* Chat (Left) */}
-            <TouchableOpacity
-              style={[styles.bottomNavItem, (activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)) && { opacity: 0.3 }]}
-              onPress={() => {
-                setActiveBottomTab('chat');
-                setProfileView('profile');
-              }}
-              activeOpacity={0.7}
-              disabled={activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)}>
-              {activeBottomTab === 'chat' ? (
-                <View style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}>
-                    <Svg width={40} height={40} style={{ position: 'absolute' }}>
-                      <Defs>
-                        <LinearGradient id="grad_circle_chat" x1="0" y1="0" x2="1" y2="1">
-                          <Stop offset="0" stopColor="#FFB74D" />
-                          <Stop offset="1" stopColor="#FFEB3B" />
-                        </LinearGradient>
-                      </Defs>
-                      <Circle cx={20} cy={20} r={20} fill="url(#grad_circle_chat)" />
-                    </Svg>
-                    <BottomNavGradientIcon name="forum" size={24} color="#000000" />
-                    <Svg width="16" height="3" style={{ marginTop: 2 }}>
-                      <Rect x="0" y="0" width="16" height="3" fill="#000000" rx="1.5" />
-                    </Svg>
-                </View>
-              ) : (
-                <BottomNavGradientIcon name="forum" size={20} opacity={0.5} />
-              )}
-            </TouchableOpacity>
-
-            {/* Home (Center) */}
-            <TouchableOpacity
-              style={[styles.bottomNavItem, (activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)) && { opacity: 0.3 }]}
-              onPress={() => {
-                setActiveBottomTab('home');
-                setProfileView('profile');
-              }}
-              activeOpacity={0.7}
-              disabled={activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)}>
-              {activeBottomTab === 'home' ? (
-                <View style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}>
-                    <Svg width={40} height={40} style={{ position: 'absolute' }}>
-                      <Defs>
-                        <LinearGradient id="grad_circle_home" x1="0" y1="0" x2="1" y2="1">
-                          <Stop offset="0" stopColor="#FFB74D" />
-                          <Stop offset="1" stopColor="#FFEB3B" />
-                        </LinearGradient>
-                      </Defs>
-                      <Circle cx={20} cy={20} r={20} fill="url(#grad_circle_home)" />
-                    </Svg>
-                    <BottomNavGradientIcon name="home" size={24} color="#000000" />
-                    <Svg width="16" height="3" style={{ marginTop: 2 }}>
-                      <Rect x="0" y="0" width="16" height="3" fill="#000000" rx="1.5" />
-                    </Svg>
-                </View>
-              ) : (
-                <BottomNavGradientIcon name="home" size={20} opacity={0.5} />
-              )}
-            </TouchableOpacity>
-
-            {/* Profile (Right) */}
-            <TouchableOpacity
-              style={[styles.bottomNavItem, (activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)) && { opacity: 0.3 }]}
-              onPress={() => {
-                setActiveBottomTab('profile');
-                setProfileView('profile');
-              }}
-              activeOpacity={0.7}
-              disabled={activeBottomTab === 'home' && (isHomePostsLoading || !hasHomePostsLoadedOnce)}>
-              {activeBottomTab === 'profile' ? (
-                <View style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}>
-                    <Svg width={40} height={40} style={{ position: 'absolute' }}>
-                      <Defs>
-                        <LinearGradient id="grad_circle_profile" x1="0" y1="0" x2="1" y2="1">
-                          <Stop offset="0" stopColor="#FFB74D" />
-                          <Stop offset="1" stopColor="#FFEB3B" />
-                        </LinearGradient>
-                      </Defs>
-                      <Circle cx={20} cy={20} r={20} fill="url(#grad_circle_profile)" />
-                    </Svg>
-                    <BottomNavGradientIcon name="person" size={24} color="#000000" />
-                    <Svg width="16" height="3" style={{ marginTop: 2 }}>
-                      <Rect x="0" y="0" width="16" height="3" fill="#000000" rx="1.5" />
-                    </Svg>
-                </View>
-              ) : (
-                <BottomNavGradientIcon name="person" size={20} opacity={0.5} />
-              )}
-            </TouchableOpacity>
-        </View>
-      )}
-
-      {isBottomToastVisible && (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.bottomToastContainer,
-            {
-              bottom: bottomNavHeight + 20,
-              opacity: bottomToastAnim,
-              transform: [
-                {
-                  translateY: bottomToastAnim.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [120, 0],
-                  }),
-                },
-              ],
-            },
-          ]}
-        >
-          <View style={styles.bottomToastPanel}>
-            <Text style={styles.bottomToastText}>{bottomToastMessage}</Text>
-          </View>
-        </Animated.View>
-      )}
-
       {/* Modal Solicitar (agregar a grupo desde Canal) */}
       <Modal
         visible={showGroupMembersPanel}
@@ -16689,7 +16951,6 @@ const FrontScreen = ({
                       elevation: 10,
                     }}>
                       <TouchableOpacity
-                        activeOpacity={0.85}
                         onPress={() => {
                           setShowGroupMembersActionsMenu(false);
                           setSelectedGroupMemberKeys(new Set());
@@ -17914,7 +18175,7 @@ const FrontScreen = ({
           )}
         </View>
       </Modal>
-    </View >
+    </View>
   );
 };
 
@@ -18280,27 +18541,75 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    flexDirection: 'row',
-    backgroundColor: '#000000',
-    paddingTop: 0,
-    paddingBottom: 1,
-    paddingHorizontal: 20,
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 4,
     zIndex: 9999,
     elevation: 9999,
   },
-  bottomNavLeft: {
+  bottomNavChrome: {
     flexDirection: 'row',
-    gap: 20,
+    alignItems: 'center',
+    justifyContent: 'space-evenly',
+    paddingVertical: 6,
+    minHeight: 62,
+  },
+  bottomNavPressable: {
+    flex: 1,
+    alignItems: 'center',
   },
   bottomNavItem: {
-    paddingTop: 1,
-    paddingBottom: 2,
-    paddingHorizontal: 8,
-    borderRadius: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 18,
+    borderRadius: 22,
+    overflow: 'hidden',
+    gap: 4,
+  },
+  bottomNavGlassPill: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 22,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  bottomNavGlassPillHighlight: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '50%',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  bottomNavItemDisabled: {
+    opacity: 0.35,
+  },
+  bottomNavIconWrap: {
+    position: 'relative',
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bottomNavDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#FFB74D',
+  },
+  bottomNavLabel: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 10,
+  },
+  bottomNavLabelCount: {
+    fontWeight: '400',
+  },
+  bottomNavLabelBold: {
+    fontWeight: '800',
+  },
+  bottomNavLabelActive: {
+    color: '#FFB74D',
   },
   nextPublicationProgressContainer: {
     alignItems: 'center',
@@ -18319,17 +18628,6 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     minWidth: 24,
     textAlign: 'center',
-  },
-  bottomNavItemActive: {
-    backgroundColor: '#000000',
-    borderRadius: 50,
-    width: 39,
-    height: 39,
-    borderWidth: 2,
-    borderColor: '#FFB74D',
-    padding: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   bottomNavArrow: {
     alignItems: 'center',

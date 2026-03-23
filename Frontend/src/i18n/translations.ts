@@ -159,6 +159,7 @@ export type TranslationKey =
   | 'front.userPlaceholder'
   | 'front.selectCategory'
   | 'front.noPublicationsAvailable'
+  | 'front.publicationsCount'
   | 'front.socialNetworksSingular'
   | 'front.socialNetworksPlural'
   | 'front.publish'
@@ -263,6 +264,8 @@ export type TranslationKey =
   | 'notifications.groupJoinRequestMessage'
   | 'notifications.ignore'
   | 'notifications.accept'
+  | 'notifications.read'
+  | 'notifications.unread'
   | 'notifications.empty'
 
   | 'config.title'
@@ -572,6 +575,7 @@ const es: Record<TranslationKey, string> = {
   'front.userPlaceholder': 'Usuario',
   'front.selectCategory': 'Selecciona una categoría',
   'front.noPublicationsAvailable': 'No hay publicaciones disponibles',
+  'front.publicationsCount': 'Publicaciones',
   'front.socialNetworksSingular': 'red social',
   'front.socialNetworksPlural': 'redes sociales',
   'front.publish': 'Publicar',
@@ -677,6 +681,8 @@ const es: Record<TranslationKey, string> = {
   'notifications.groupJoinRequestMessage': '{user} te ha enviado una solicitud para que te unas a su grupo {group}. ¿Quieres unirte?',
   'notifications.ignore': 'Ignorar',
   'notifications.accept': 'Aceptar',
+  'notifications.read': 'Leído',
+  'notifications.unread': 'No leído',
   'notifications.empty': 'No tienes notificaciones',
 
   'config.title': 'Configuración',
@@ -1020,6 +1026,7 @@ const en: Record<TranslationKey, string> = {
   'front.userPlaceholder': 'User',
   'front.selectCategory': 'Select a category',
   'front.noPublicationsAvailable': 'No posts available',
+  'front.publicationsCount': 'Posts',
   'front.socialNetworksSingular': 'social network',
   'front.socialNetworksPlural': 'social networks',
   'front.publish': 'Publish',
@@ -1125,6 +1132,8 @@ const en: Record<TranslationKey, string> = {
   'notifications.groupJoinRequestMessage': '{user} sent you a request to join their group {group}. Do you want to join?',
   'notifications.ignore': 'Ignore',
   'notifications.accept': 'Accept',
+  'notifications.read': 'Read',
+  'notifications.unread': 'Unread',
   'notifications.empty': "You don't have notifications",
 
   'config.title': 'Settings',
@@ -1443,6 +1452,7 @@ export const translations: Record<Language, Record<TranslationKey, string>> = {
     'front.userPlaceholder': 'Utilisateur',
     'front.selectCategory': 'Sélectionnez une catégorie',
     'front.noPublicationsAvailable': 'Aucune publication disponible',
+    'front.publicationsCount': 'Publications',
     'front.socialNetworksSingular': 'réseau social',
     'front.socialNetworksPlural': 'réseaux sociaux',
     'front.publish': 'Publier',
@@ -1540,6 +1550,8 @@ export const translations: Record<Language, Record<TranslationKey, string>> = {
     'notifications.groupJoinRequestMessage': '{user} vous a envoyé une demande pour rejoindre son groupe {group}. Voulez-vous le rejoindre ?',
     'notifications.ignore': 'Ignorer',
     'notifications.accept': 'Accepter',
+    'notifications.read': 'Lu',
+    'notifications.unread': 'Non lu',
     'notifications.empty': 'Vous n’avez pas de notifications',
     'config.title': 'Paramètres',
     'config.accountCenter': 'Centre de compte',
@@ -1828,6 +1840,7 @@ L’équipe Keinti`,
     'front.userPlaceholder': 'Usuário',
     'front.selectCategory': 'Selecione uma categoria',
     'front.noPublicationsAvailable': 'Nenhuma publicação disponível',
+    'front.publicationsCount': 'Publicações',
     'front.socialNetworksSingular': 'rede social',
     'front.socialNetworksPlural': 'redes sociais',
     'front.publish': 'Publicar',
@@ -1925,6 +1938,8 @@ L’équipe Keinti`,
     'notifications.groupJoinRequestMessage': '{user} enviou uma solicitação para você entrar no grupo {group}. Deseja entrar?',
     'notifications.ignore': 'Ignorar',
     'notifications.accept': 'Aceitar',
+    'notifications.read': 'Lido',
+    'notifications.unread': 'Não lido',
     'notifications.empty': 'Você não tem notificações',
     'config.title': 'Configurações',
     'config.accountCenter': 'Central da conta',
