@@ -5303,8 +5303,12 @@ const FrontScreen = ({
     publications.length > 0;
 
   const homeActivePublicationsCount = useMemo(
-    () => publications.filter((publication) => getRemainingTime(publication.createdAt) !== 'Tiempo agotado').length,
-    [publications],
+    () => {
+      const othersCount = publications.filter((publication) => getRemainingTime(publication.createdAt) !== 'Tiempo agotado').length;
+      const myCount = myPublication && getRemainingTime(myPublication.createdAt) !== 'Tiempo agotado' ? 1 : 0;
+      return othersCount + myCount;
+    },
+    [publications, myPublication],
   );
 
   const isBottomNavInteractionDisabled =
@@ -10425,9 +10429,14 @@ const FrontScreen = ({
                       />
                     </View>
                   ) : (
-                    <Text style={styles.emptyStateText}>
-                      {t('front.noPublicationsAvailable' as TranslationKey)}
-                    </Text>
+                    <>
+                      <Text style={[styles.emptyStateText, { fontWeight: 'bold' }]}>
+                        {t('front.noPublicationsAvailable' as TranslationKey)}
+                      </Text>
+                      <Text style={[styles.emptyStateText, { fontSize: 14, marginTop: 4 }]}>
+                        {t('front.forYou' as TranslationKey)}
+                      </Text>
+                    </>
                   )}
                 </View>
               </View>

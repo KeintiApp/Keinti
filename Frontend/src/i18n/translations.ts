@@ -159,6 +159,7 @@ export type TranslationKey =
   | 'front.userPlaceholder'
   | 'front.selectCategory'
   | 'front.noPublicationsAvailable'
+  | 'front.forYou'
   | 'front.publicationsCount'
   | 'front.socialNetworksSingular'
   | 'front.socialNetworksPlural'
@@ -575,6 +576,7 @@ const es: Record<TranslationKey, string> = {
   'front.userPlaceholder': 'Usuario',
   'front.selectCategory': 'Selecciona una categoría',
   'front.noPublicationsAvailable': 'No hay publicaciones disponibles',
+  'front.forYou': 'Para ti',
   'front.publicationsCount': 'Publicaciones',
   'front.socialNetworksSingular': 'red social',
   'front.socialNetworksPlural': 'redes sociales',
@@ -1026,6 +1028,7 @@ const en: Record<TranslationKey, string> = {
   'front.userPlaceholder': 'User',
   'front.selectCategory': 'Select a category',
   'front.noPublicationsAvailable': 'No posts available',
+  'front.forYou': 'For you',
   'front.publicationsCount': 'Posts',
   'front.socialNetworksSingular': 'social network',
   'front.socialNetworksPlural': 'social networks',
@@ -1452,6 +1455,7 @@ export const translations: Record<Language, Record<TranslationKey, string>> = {
     'front.userPlaceholder': 'Utilisateur',
     'front.selectCategory': 'Sélectionnez une catégorie',
     'front.noPublicationsAvailable': 'Aucune publication disponible',
+    'front.forYou': 'Pour toi',
     'front.publicationsCount': 'Publications',
     'front.socialNetworksSingular': 'réseau social',
     'front.socialNetworksPlural': 'réseaux sociaux',
@@ -1840,6 +1844,7 @@ L’équipe Keinti`,
     'front.userPlaceholder': 'Usuário',
     'front.selectCategory': 'Selecione uma categoria',
     'front.noPublicationsAvailable': 'Nenhuma publicação disponível',
+    'front.forYou': 'Para você',
     'front.publicationsCount': 'Publicações',
     'front.socialNetworksSingular': 'rede social',
     'front.socialNetworksPlural': 'redes sociais',
