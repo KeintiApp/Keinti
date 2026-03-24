@@ -2233,6 +2233,7 @@ const FrontScreen = ({
   const [activeBottomTab, setActiveBottomTab] = useState<BottomTabState>('home');
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const keyboardHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [bottomNavHeight, setBottomNavHeight] = useState<number>(BOTTOM_NAV_OVERLAY_HEIGHT);
   const [channelInputBarHeight, setChannelInputBarHeight] = useState<number>(72);
   const [groupInputBarHeight, setGroupInputBarHeight] = useState<number>(72);
@@ -2752,6 +2753,12 @@ const FrontScreen = ({
     const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
     const showSub = Keyboard.addListener(showEvt, (e: any) => {
+      // Cancel any pending hide so a quick hide→show cycle (Android field
+      // switch flicker) never repositions the panel and exposes the overlay.
+      if (keyboardHideTimerRef.current) {
+        clearTimeout(keyboardHideTimerRef.current);
+        keyboardHideTimerRef.current = null;
+      }
       setIsKeyboardVisible(true);
       // With edge-to-edge enabled the root view stretches to the screen
       // bottom, so we need the full distance from the screen bottom to the
@@ -2767,13 +2774,29 @@ const FrontScreen = ({
       setKeyboardHeight(typeof h === 'number' && h > 0 ? h : 0);
     });
     const hideSub = Keyboard.addListener(hideEvt, () => {
-      setIsKeyboardVisible(false);
-      setKeyboardHeight(0);
+      // On Android, switching focus between TextInputs fires
+      // keyboardDidHide → keyboardDidShow in quick succession. Without a
+      // debounce the panel jumps to bottom:0 for one frame, the user's tap
+      // lands on the overlay behind it and closes the panel.
+      if (Platform.OS === 'android') {
+        keyboardHideTimerRef.current = setTimeout(() => {
+          keyboardHideTimerRef.current = null;
+          setIsKeyboardVisible(false);
+          setKeyboardHeight(0);
+        }, 80);
+      } else {
+        setIsKeyboardVisible(false);
+        setKeyboardHeight(0);
+      }
     });
 
     return () => {
       showSub.remove();
       hideSub.remove();
+      if (keyboardHideTimerRef.current) {
+        clearTimeout(keyboardHideTimerRef.current);
+        keyboardHideTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -9920,9 +9943,8 @@ const FrontScreen = ({
         style={[
           styles.reactionPanel,
           {
-            bottom: (!isKeyboardVisible && activeBottomTab !== 'notifications')
-              ? (bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT)
-              : 0,
+            bottom: 0,
+            paddingBottom: Math.max(bottomSystemOffset, 24),
             transform: [{ translateY: reactionPanelAnimation }],
           },
         ]}
@@ -16224,7 +16246,13 @@ const FrontScreen = ({
 
       {/* Profile ring color panel overlay */}
       {showProfileRingColorPanel && (
-        <TouchableWithoutFeedback onPress={closeProfileRingColorPanel}>
+        <TouchableWithoutFeedback onPress={() => {
+          if (isKeyboardVisible) {
+            Keyboard.dismiss();
+            return;
+          }
+          closeProfileRingColorPanel();
+        }}>
           <View style={styles.socialPanelOverlay} />
         </TouchableWithoutFeedback>
       )}
@@ -16267,7 +16295,7 @@ const FrontScreen = ({
             style={styles.profileRingPanelScroll}
             contentContainerStyle={styles.profileRingPanelScrollContent}
             keyboardShouldPersistTaps="handled"
-            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.profileRingColorOptionsRow}>
