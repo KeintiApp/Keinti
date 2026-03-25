@@ -4,8 +4,6 @@ import mobileAds, { AdsConsent, AdsConsentStatus } from 'react-native-google-mob
 export type AdsRuntimeConfig = {
   /** True once the Google Mobile Ads SDK has been initialized and we can safely request ads. */
   adsSdkReady: boolean;
-  /** When true, all ad requests should be non-personalized (NPA). */
-  requestNonPersonalizedAdsOnly: boolean;
   /** Whether GDPR applies to this device/user (best-effort). */
   gdprApplies: boolean | null;
 };
@@ -75,7 +73,6 @@ export const getStoredAdsRuntimeConfig = async (): Promise<AdsRuntimeConfig> => 
   const adsSdkReady = safeBoolean(consentInfo?.canRequestAds);
 
   let gdprApplies: boolean | null = null;
-  let requestNonPersonalizedAdsOnly = false;
 
   try {
     gdprApplies = await AdsConsent.getGdprApplies();
@@ -83,22 +80,20 @@ export const getStoredAdsRuntimeConfig = async (): Promise<AdsRuntimeConfig> => 
     gdprApplies = null;
   }
 
-  if (gdprApplies === true) {
-    try {
-      const choices = await AdsConsent.getUserChoices();
-      if (choices && typeof choices === 'object' && 'selectPersonalisedAds' in choices) {
-        requestNonPersonalizedAdsOnly = (choices as any).selectPersonalisedAds === false;
-      }
-    } catch {
-      // ignore
-    }
+  if (__DEV__) {
+    const choices = await AdsConsent.getUserChoices().catch(() => null);
+    console.log('[AdsConsent] runtime config:', {
+      canRequestAds: consentInfo?.canRequestAds,
+      status: consentInfo?.status,
+      gdprApplies,
+      userChoices: choices,
+    });
   }
 
   await initializeAdsSdkIfNeeded(adsSdkReady);
 
   return {
     adsSdkReady,
-    requestNonPersonalizedAdsOnly,
     gdprApplies,
   };
 };
@@ -107,8 +102,8 @@ export const getStoredAdsRuntimeConfig = async (): Promise<AdsRuntimeConfig> => 
  * Collects (or refreshes) consent information using Google UMP via AdsConsent.
  *
  * - Shows a consent form when required.
- * - Computes whether we should request non-personalized ads.
  * - Initializes the Google Mobile Ads SDK only when UMP indicates we can request ads.
+ * - The SDK reads the TCF v2.0 consent string automatically for ad personalization.
  */
 export const gatherConsentAndPrepareAds = async (): Promise<AdsRuntimeConfig> => {
   let consentInfo = await AdsConsent.getConsentInfo().catch(() => null as any);

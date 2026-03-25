@@ -293,7 +293,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
   };
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={safeClose}>
+    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent navigationBarTranslucent onRequestClose={safeClose}>
       <TouchableWithoutFeedback onPress={safeClose}>
         <View style={styles.overlay}>
           <TouchableWithoutFeedback>

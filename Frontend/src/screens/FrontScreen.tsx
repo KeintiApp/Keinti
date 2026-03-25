@@ -899,6 +899,126 @@ const CATEGORY_LABELS_EN: Record<string, string> = {
   'Cultura': 'Culture',
 };
 
+const CATEGORY_LABELS_FR: Record<string, string> = {
+  'Sin categoría': 'Sans catégorie',
+  'Videojuegos': 'Jeux vidéo',
+  'Deportes': 'Sports',
+  'Moda': 'Mode',
+  'Turismo': 'Tourisme',
+  'Entretenimiento': 'Divertissement',
+  'Tecnología': 'Technologie',
+  'Ciencia': 'Science',
+  'Gastronomía y nutrición': 'Gastronomie et nutrition',
+  'IA': 'IA',
+  'Política': 'Politique',
+  'Religión': 'Religion',
+  'Emprendimiento': 'Entrepreneuriat',
+  'Economía': 'Économie',
+  'Educación': 'Éducation',
+  'Hogar': 'Maison',
+  'VR': 'VR',
+  'Información': 'Information',
+  'Arte': 'Art',
+  'Música': 'Musique',
+  'Cine': 'Cinéma',
+  'Motor': 'Automobile',
+  'Naturaleza': 'Nature',
+  'Animales': 'Animaux',
+  'Cultura': 'Culture',
+};
+
+const CATEGORY_LABELS_PT: Record<string, string> = {
+  'Sin categoría': 'Sem categoria',
+  'Videojuegos': 'Videojogos',
+  'Deportes': 'Desporto',
+  'Moda': 'Moda',
+  'Turismo': 'Turismo',
+  'Entretenimiento': 'Entretenimento',
+  'Tecnología': 'Tecnologia',
+  'Ciencia': 'Ciência',
+  'Gastronomía y nutrición': 'Gastronomia e nutrição',
+  'IA': 'IA',
+  'Política': 'Política',
+  'Religión': 'Religião',
+  'Emprendimiento': 'Empreendedorismo',
+  'Economía': 'Economia',
+  'Educación': 'Educação',
+  'Hogar': 'Lar',
+  'VR': 'VR',
+  'Información': 'Informação',
+  'Arte': 'Arte',
+  'Música': 'Música',
+  'Cine': 'Cinema',
+  'Motor': 'Automóvel',
+  'Naturaleza': 'Natureza',
+  'Animales': 'Animais',
+  'Cultura': 'Cultura',
+};
+
+const CATEGORY_LABELS_DE: Record<string, string> = {
+  'Sin categoría': 'Ohne Kategorie',
+  'Videojuegos': 'Videospiele',
+  'Deportes': 'Sport',
+  'Moda': 'Mode',
+  'Turismo': 'Tourismus',
+  'Entretenimiento': 'Unterhaltung',
+  'Tecnología': 'Technologie',
+  'Ciencia': 'Wissenschaft',
+  'Gastronomía y nutrición': 'Gastronomie & Ernährung',
+  'IA': 'KI',
+  'Política': 'Politik',
+  'Religión': 'Religion',
+  'Emprendimiento': 'Unternehmertum',
+  'Economía': 'Wirtschaft',
+  'Educación': 'Bildung',
+  'Hogar': 'Zuhause',
+  'VR': 'VR',
+  'Información': 'Information',
+  'Arte': 'Kunst',
+  'Música': 'Musik',
+  'Cine': 'Kino',
+  'Motor': 'Automobil',
+  'Naturaleza': 'Natur',
+  'Animales': 'Tiere',
+  'Cultura': 'Kultur',
+};
+
+const CATEGORY_LABELS_IT: Record<string, string> = {
+  'Sin categoría': 'Senza categoria',
+  'Videojuegos': 'Videogiochi',
+  'Deportes': 'Sport',
+  'Moda': 'Moda',
+  'Turismo': 'Turismo',
+  'Entretenimiento': 'Intrattenimento',
+  'Tecnología': 'Tecnologia',
+  'Ciencia': 'Scienza',
+  'Gastronomía y nutrición': 'Gastronomia e nutrizione',
+  'IA': 'IA',
+  'Política': 'Politica',
+  'Religión': 'Religione',
+  'Emprendimiento': 'Imprenditoria',
+  'Economía': 'Economia',
+  'Educación': 'Istruzione',
+  'Hogar': 'Casa',
+  'VR': 'VR',
+  'Información': 'Informazione',
+  'Arte': 'Arte',
+  'Música': 'Musica',
+  'Cine': 'Cinema',
+  'Motor': 'Automobilismo',
+  'Naturaleza': 'Natura',
+  'Animales': 'Animali',
+  'Cultura': 'Cultura',
+};
+
+const CATEGORY_LABELS: Partial<Record<Language, Record<string, string>>> = {
+  en: CATEGORY_LABELS_EN,
+  fr: CATEGORY_LABELS_FR,
+  pt: CATEGORY_LABELS_PT,
+  de: CATEGORY_LABELS_DE,
+  it: CATEGORY_LABELS_IT,
+};
+
 const REACTION_EMOJIS = Array.from(new Set([
   '👍', '❤️', '😂', '😮', '😢', '😡', '👏', '🔥', '🎉', '💯',
   '😍', '🤔', '😱', '🥳', '😎', '🙌', '👀', '🤝', '🙏', '💪',
@@ -1080,8 +1200,6 @@ const formatRemainingTimeForDisplay = (
   language: Language,
   t: (key: TranslationKey) => string
 ) => {
-  if (language !== 'en') return raw;
-
   if (raw === 'Tiempo agotado') return t('chat.timeExpired' as TranslationKey);
 
   const m = raw.match(/^Falta\s+(\d+)\s+(hora|horas|minuto|minutos)$/i);
@@ -1237,12 +1355,12 @@ const FrontScreen = ({
   authToken,
 }: FrontScreenProps) => {
   const { t, language } = useI18n();
-  const localize = (messages: Record<Language, string>) => messages[language] || messages.es;
-  const errorTitle = localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' });
-  const warningTitle = localize({ es: 'Aviso', en: 'Notice', fr: 'Avis', pt: 'Aviso' });
-  const sessionRequiredTitle = localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória' });
-  const permissionRequiredTitle = localize({ es: 'Permiso requerido', en: 'Permission required', fr: 'Autorisation requise', pt: 'Permissão obrigatória' });
-  const adUnavailableTitle = localize({ es: 'Anuncio no disponible', en: 'Ad unavailable', fr: 'Annonce indisponible', pt: 'Anúncio indisponível' });
+  const localize = (messages: Partial<Record<Language, string>> & { es: string }) => messages[language] || messages.en || messages.es;
+  const errorTitle = localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' });
+  const warningTitle = localize({ es: 'Aviso', en: 'Notice', fr: 'Avis', pt: 'Aviso', de: 'Hinweis', it: 'Avviso' });
+  const sessionRequiredTitle = localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória', de: 'Sitzung erforderlich', it: 'Sessione richiesta' });
+  const permissionRequiredTitle = localize({ es: 'Permiso requerido', en: 'Permission required', fr: 'Autorisation requise', pt: 'Permissão obrigatória', de: 'Berechtigung erforderlich', it: 'Permesso richiesto' });
+  const adUnavailableTitle = localize({ es: 'Anuncio no disponible', en: 'Ad unavailable', fr: 'Annonce indisponible', pt: 'Anúncio indisponível', de: 'Anzeige nicht verfügbar', it: 'Annuncio non disponibile' });
 
   const [homeProfileRingBannerReady, setHomeProfileRingBannerReady] = useState(false);
   const [homeProfileRingBannerSize, setHomeProfileRingBannerSize] = useState(HOME_PROFILE_RING_DEFAULT_BANNER_SIZE);
@@ -1255,7 +1373,6 @@ const FrontScreen = ({
   // Ads consent/runtime config.
   // Consent is resolved once per authenticated account when entering the app.
   const [adsSdkReady, setAdsSdkReady] = useState(false);
-  const [requestNonPersonalizedAdsOnly, setRequestNonPersonalizedAdsOnly] = useState(false);
 
   const isFrontScreenMountedRef = useRef(true);
   useEffect(() => {
@@ -1264,7 +1381,7 @@ const FrontScreen = ({
     };
   }, []);
 
-  const consentInFlightRef = useRef<Promise<{ adsSdkReady: boolean; requestNonPersonalizedAdsOnly: boolean; gdprApplies: boolean | null }> | null>(null);
+  const consentInFlightRef = useRef<Promise<{ adsSdkReady: boolean; gdprApplies: boolean | null }> | null>(null);
 
   const syncAdsRuntimeForCurrentAccount = useCallback(async () => {
     if (consentInFlightRef.current) return consentInFlightRef.current;
@@ -1273,15 +1390,13 @@ const FrontScreen = ({
       .then((cfg) => {
         if (isFrontScreenMountedRef.current) {
           setAdsSdkReady(!!cfg.adsSdkReady);
-          setRequestNonPersonalizedAdsOnly(!!cfg.requestNonPersonalizedAdsOnly);
         }
         return cfg;
       })
       .catch(() => {
-        const fallback = { adsSdkReady: false, requestNonPersonalizedAdsOnly: false, gdprApplies: null };
+        const fallback = { adsSdkReady: false, gdprApplies: null };
         if (isFrontScreenMountedRef.current) {
           setAdsSdkReady(false);
-          setRequestNonPersonalizedAdsOnly(false);
         }
         return fallback;
       })
@@ -1300,13 +1415,11 @@ const FrontScreen = ({
       .then((cfg) => {
         if (cancelled || !isFrontScreenMountedRef.current) return;
         setAdsSdkReady(!!cfg.adsSdkReady);
-        setRequestNonPersonalizedAdsOnly(!!cfg.requestNonPersonalizedAdsOnly);
       })
       .catch(async () => {
         const fallback = await getStoredAdsRuntimeConfig().catch(() => null);
         if (cancelled || !isFrontScreenMountedRef.current || !fallback) return;
         setAdsSdkReady(!!fallback.adsSdkReady);
-        setRequestNonPersonalizedAdsOnly(!!fallback.requestNonPersonalizedAdsOnly);
       });
 
     return () => {
@@ -1384,9 +1497,7 @@ const FrontScreen = ({
     setIsRewardedLoaded(false);
     resetRewardedGateState();
 
-    const rewarded = RewardedAd.createForAdRequest(REWARDED_AD_UNIT_ID, {
-      requestNonPersonalizedAdsOnly,
-    });
+    const rewarded = RewardedAd.createForAdRequest(REWARDED_AD_UNIT_ID);
     rewardedAdRef.current = rewarded;
 
     const unsubscribeLoaded = rewarded.addAdEventListener(RewardedAdEventType.LOADED, () => {
@@ -1414,6 +1525,8 @@ const FrontScreen = ({
               en: 'The ad could not be shown right now.',
               fr: "Impossible d'afficher l'annonce pour le moment.",
               pt: 'Não foi possível mostrar o anúncio neste momento.',
+              de: 'Die Anzeige konnte gerade nicht angezeigt werden.',
+              it: 'Impossibile mostrare l\'annuncio in questo momento.',
             }));
           }
         }
@@ -1474,6 +1587,8 @@ const FrontScreen = ({
           en: 'There are no ads available right now.',
           fr: "Aucune annonce n'est disponible pour le moment.",
           pt: 'Não há anúncios disponíveis neste momento.',
+          de: 'Derzeit sind keine Anzeigen verfügbar.',
+          it: 'Non ci sono annunci disponibili al momento.',
         }));
       }
     });
@@ -1489,7 +1604,7 @@ const FrontScreen = ({
       unsubscribeClosed();
       unsubscribeError();
     };
-  }, [adsSdkReady, requestNonPersonalizedAdsOnly]);
+  }, [adsSdkReady]);
 
   // Preload the first rewarded ad only after the SDK has fully initialized.
   useEffect(() => {
@@ -1600,6 +1715,8 @@ const FrontScreen = ({
           en: 'There are no ads available right now.',
           fr: "Aucune annonce n'est disponible pour le moment.",
           pt: 'Não há anúncios disponíveis neste momento.',
+          de: 'Derzeit sind keine Anzeigen verfügbar.',
+          it: 'Non ci sono annunci disponibili al momento.',
         }));
         return;
       }
@@ -1611,6 +1728,8 @@ const FrontScreen = ({
         en: 'There are no ads available right now.',
         fr: "Aucune annonce n'est disponible pour le moment.",
         pt: 'Não há anúncios disponíveis neste momento.',
+        de: 'Derzeit sind keine Anzeigen verfügbar.',
+        it: 'Non ci sono annunci disponibili al momento.',
       }));
       return;
     }
@@ -1622,6 +1741,8 @@ const FrontScreen = ({
         en: 'The ad module was not found.',
         fr: "Le module d'annonces est introuvable.",
         pt: 'O módulo de anúncios não foi encontrado.',
+        de: 'Das Anzeigenmodul wurde nicht gefunden.',
+        it: 'Il modulo annunci non è stato trovato.',
       }));
       return;
     }
@@ -1640,6 +1761,8 @@ const FrontScreen = ({
           en: 'The ad could not be shown right now.',
           fr: "Impossible d'afficher l'annonce pour le moment.",
           pt: 'Não foi possível mostrar o anúncio neste momento.',
+          de: 'Die Anzeige konnte gerade nicht angezeigt werden.',
+          it: 'Impossibile mostrare l\'annuncio in questo momento.',
         }));
       }
       return;
@@ -1662,6 +1785,8 @@ const FrontScreen = ({
           en: 'The ad could not be shown right now.',
           fr: "Impossible d'afficher l'annonce pour le moment.",
           pt: 'Não foi possível mostrar o anúncio neste momento.',
+          de: 'Die Anzeige konnte gerade nicht angezeigt werden.',
+          it: 'Impossibile mostrare l\'annuncio in questo momento.',
         }));
       }
     }, 7000);
@@ -1797,8 +1922,9 @@ const FrontScreen = ({
 
   const getCategoryLabel = (category: string | undefined) => {
     if (!category) return '';
-    if (language !== 'en') return category;
-    return CATEGORY_LABELS_EN[category] ?? category;
+    if (language === 'es') return category;
+    const map = CATEGORY_LABELS[language];
+    return map?.[category] ?? category;
   };
 
   const [myGroups, setMyGroups] = useState<Group[]>([]);
@@ -1855,6 +1981,8 @@ const FrontScreen = ({
         en: 'Sign in to view the members.',
         fr: 'Connectez-vous pour voir les membres.',
         pt: 'Entre para ver os membros.',
+        de: 'Melde dich an, um die Mitglieder zu sehen.',
+        it: 'Accedi per visualizzare i membri.',
       }));
       return;
     }
@@ -2014,6 +2142,8 @@ const FrontScreen = ({
         en: 'Sign in to view the members.',
         fr: 'Connectez-vous pour voir les membres.',
         pt: 'Entre para ver os membros.',
+        de: 'Melde dich an, um die Mitglieder zu sehen.',
+        it: 'Accedi per visualizzare i membri.',
       }));
       return;
     }
@@ -2125,6 +2255,8 @@ const FrontScreen = ({
           en: 'Select an image to create the group.',
           fr: 'Sélectionnez une image pour créer le groupe.',
           pt: 'Selecione uma imagem para criar o grupo.',
+          de: 'Wähle ein Bild, um die Gruppe zu erstellen.',
+          it: 'Seleziona un\'immagine per creare il gruppo.',
         }));
       }
 
@@ -2156,6 +2288,8 @@ const FrontScreen = ({
             en: 'The group could not be updated.',
             fr: 'Impossible de mettre à jour le groupe.',
             pt: 'Não foi possível atualizar o grupo.',
+            de: 'Die Gruppe konnte nicht aktualisiert werden.',
+            it: 'Impossibile aggiornare il gruppo.',
           }));
         }
 
@@ -2186,6 +2320,8 @@ const FrontScreen = ({
             en: 'The group could not be created.',
             fr: 'Impossible de créer le groupe.',
             pt: 'Não foi possível criar o grupo.',
+            de: 'Die Gruppe konnte nicht erstellt werden.',
+            it: 'Impossibile creare il gruppo.',
           }));
         }
 
@@ -2208,6 +2344,8 @@ const FrontScreen = ({
         en: 'The group could not be saved.',
         fr: 'Impossible d’enregistrer le groupe.',
         pt: 'Não foi possível salvar o grupo.',
+        de: 'Die Gruppe konnte nicht gespeichert werden.',
+        it: 'Impossibile salvare il gruppo.',
       }));
     } finally {
       setIsSavingGroup(false);
@@ -2843,6 +2981,8 @@ const FrontScreen = ({
         en: 'Sign in to send images.',
         fr: 'Connectez-vous pour envoyer des images.',
         pt: 'Entre para enviar imagens.',
+        de: 'Melde dich an, um Bilder zu senden.',
+        it: 'Accedi per inviare immagini.',
       }));
       return;
     }
@@ -2878,6 +3018,8 @@ const FrontScreen = ({
           en: 'The image could not be selected. Please try again.',
           fr: "Impossible de sélectionner l'image. Réessayez.",
           pt: 'Não foi possível selecionar a imagem. Tente novamente.',
+          de: 'Das Bild konnte nicht ausgewählt werden. Bitte versuche es erneut.',
+          it: 'Impossibile selezionare l\'immagine. Riprova.',
         }));
       }
     }
@@ -2899,6 +3041,8 @@ const FrontScreen = ({
         en: 'Sign in to send images.',
         fr: 'Connectez-vous pour envoyer des images.',
         pt: 'Entre para enviar imagens.',
+        de: 'Melde dich an, um Bilder zu senden.',
+        it: 'Accedi per inviare immagini.',
       }));
       return;
     }
@@ -2949,6 +3093,8 @@ const FrontScreen = ({
             en: 'The image could not be sent.',
             fr: "Impossible d'envoyer l'image.",
             pt: 'Não foi possível enviar a imagem.',
+            de: 'Das Bild konnte nicht gesendet werden.',
+            it: 'Impossibile inviare l\'immagine.',
           }));
         }
       }
@@ -2959,6 +3105,8 @@ const FrontScreen = ({
         en: 'Connection error while sending the image.',
         fr: "Erreur de connexion lors de l'envoi de l'image.",
         pt: 'Erro de conexão ao enviar a imagem.',
+        de: 'Verbindungsfehler beim Senden des Bildes.',
+        it: 'Errore di connessione durante l\'invio dell\'immagine.',
       }));
     } finally {
       setIsSendingGroupImage(false);
@@ -2984,6 +3132,8 @@ const FrontScreen = ({
         en: 'Sign in to send images.',
         fr: 'Connectez-vous pour envoyer des images.',
         pt: 'Entre para enviar imagens.',
+        de: 'Melde dich an, um Bilder zu senden.',
+        it: 'Accedi per inviare immagini.',
       }));
       return;
     }
@@ -3022,6 +3172,8 @@ const FrontScreen = ({
           en: 'The image could not be selected. Please try again.',
           fr: "Impossible de sélectionner l'image. Réessayez.",
           pt: 'Não foi possível selecionar a imagem. Tente novamente.',
+          de: 'Das Bild konnte nicht ausgewählt werden. Bitte versuche es erneut.',
+          it: 'Impossibile selezionare l\'immagine. Riprova.',
         }));
       }
     }
@@ -3043,6 +3195,8 @@ const FrontScreen = ({
         en: 'Sign in to send images.',
         fr: 'Connectez-vous pour envoyer des images.',
         pt: 'Entre para enviar imagens.',
+        de: 'Melde dich an, um Bilder zu senden.',
+        it: 'Accedi per inviare immagini.',
       }));
       return;
     }
@@ -3096,6 +3250,8 @@ const FrontScreen = ({
             en: 'Wait for the creator response before replying again',
             fr: 'Attendez la réponse du créateur avant de répondre à nouveau',
             pt: 'Espere a resposta do criador antes de responder novamente',
+            de: 'Warte auf die Antwort des Erstellers, bevor du erneut antwortest',
+            it: 'Attendi la risposta del creatore prima di rispondere di nuovo',
           }));
           return;
         }
@@ -3118,6 +3274,8 @@ const FrontScreen = ({
               en: 'The image could not be sent.',
               fr: "Impossible d'envoyer l'image.",
               pt: 'Não foi possível enviar a imagem.',
+              de: 'Das Bild konnte nicht gesendet werden.',
+              it: 'Impossibile inviare l\'immagine.',
             }));
           }
         }
@@ -3129,6 +3287,8 @@ const FrontScreen = ({
         en: 'Connection error while sending the image.',
         fr: "Erreur de connexion lors de l'envoi de l'image.",
         pt: 'Erro de conexão ao enviar a imagem.',
+        de: 'Verbindungsfehler beim Senden des Bildes.',
+        it: 'Errore di connessione durante l\'invio dell\'immagine.',
       }));
     } finally {
       setIsSendingChannelImage(false);
@@ -3329,6 +3489,8 @@ const FrontScreen = ({
           en: 'The image could not be selected. Please try again.',
           fr: "Impossible de sélectionner l'image. Réessayez.",
           pt: 'Não foi possível selecionar a imagem. Tente novamente.',
+          de: 'Das Bild konnte nicht ausgewählt werden. Bitte versuche es erneut.',
+          it: 'Impossibile selezionare l\'immagine. Riprova.',
         }));
       }
 
@@ -3608,11 +3770,15 @@ const FrontScreen = ({
           en: 'Unsupported link',
           fr: 'Lien non pris en charge',
           pt: 'Link não suportado',
+          de: 'Link nicht unterstützt',
+          it: 'Link non supportato',
         }), localize({
           es: 'No se puede abrir este enlace en tu dispositivo.',
           en: 'This link cannot be opened on your device.',
           fr: 'Ce lien ne peut pas être ouvert sur votre appareil.',
           pt: 'Este link não pode ser aberto no seu dispositivo.',
+          de: 'Dieser Link kann auf deinem Gerät nicht geöffnet werden.',
+          it: 'Impossibile aprire questo link sul tuo dispositivo.',
         }));
         return;
       }
@@ -3624,6 +3790,8 @@ const FrontScreen = ({
         en: 'The link could not be opened.',
         fr: 'Impossible d’ouvrir le lien.',
         pt: 'Não foi possível abrir o link.',
+        de: 'Der Link konnte nicht geöffnet werden.',
+        it: 'Impossibile aprire il link.',
       }));
     }
   };
@@ -4523,6 +4691,8 @@ const FrontScreen = ({
         en: 'Enable location permission to select a location.',
         fr: 'Activez l’autorisation de localisation pour sélectionner un lieu.',
         pt: 'Ative a permissão de localização para selecionar um local.',
+        de: 'Aktiviere die Standortberechtigung, um einen Standort auszuwählen.',
+        it: 'Attiva il permesso di posizione per selezionare una posizione.',
       }));
       return;
     }
@@ -4607,6 +4777,8 @@ const FrontScreen = ({
               en: 'Sign in to search for locations.',
               fr: 'Connectez-vous pour rechercher des lieux.',
               pt: 'Entre para pesquisar locais.',
+              de: 'Melde dich an, um Standorte zu suchen.',
+              it: 'Accedi per cercare posizioni.',
             }));
           } else if (resp.status === 503) {
             if (isActive) setProfileRingLocationSearchError(localize({
@@ -4614,6 +4786,8 @@ const FrontScreen = ({
               en: 'Location search is not configured on the server.',
               fr: 'La recherche de lieux n’est pas configurée sur le serveur.',
               pt: 'A busca de locais não está configurada no servidor.',
+              de: 'Die Standortsuche ist auf dem Server nicht konfiguriert.',
+              it: 'La ricerca di posizione non è configurata sul server.',
             }));
           } else {
             if (isActive) setProfileRingLocationSearchError(localize({
@@ -4621,6 +4795,8 @@ const FrontScreen = ({
               en: 'The location could not be searched.',
               fr: 'Impossible de rechercher ce lieu.',
               pt: 'Não foi possível pesquisar o local.',
+              de: 'Der Standort konnte nicht gesucht werden.',
+              it: 'Impossibile cercare la posizione.',
             }));
           }
           if (isActive) setProfileRingLocationPredictions([]);
@@ -4645,6 +4821,8 @@ const FrontScreen = ({
             en: 'The location could not be searched.',
             fr: 'Impossible de rechercher ce lieu.',
             pt: 'Não foi possível pesquisar o local.',
+            de: 'Der Standort konnte nicht gesucht werden.',
+            it: 'Impossibile cercare la posizione.',
           }));
         }
       } finally {
@@ -4697,6 +4875,8 @@ const FrontScreen = ({
           en: 'The place details could not be loaded.',
           fr: 'Impossible de charger les détails du lieu.',
           pt: 'Não foi possível carregar os detalhes do local.',
+          de: 'Die Ortsdetails konnten nicht geladen werden.',
+          it: 'Impossibile caricare i dettagli del luogo.',
         }));
         return;
       }
@@ -4709,6 +4889,8 @@ const FrontScreen = ({
           en: 'The location is invalid.',
           fr: 'Le lieu sélectionné n’est pas valide.',
           pt: 'O local selecionado não é válido.',
+          de: 'Der Standort ist ungültig.',
+          it: 'La posizione non è valida.',
         }));
         return;
       }
@@ -4726,6 +4908,8 @@ const FrontScreen = ({
         en: 'The place details could not be loaded.',
         fr: 'Impossible de charger les détails du lieu.',
         pt: 'Não foi possível carregar os detalhes do local.',
+        de: 'Die Ortsdetails konnten nicht geladen werden.',
+        it: 'Impossibile caricare i dettagli del luogo.',
       }));
     } finally {
       setIsProfileRingLocationSearching(false);
@@ -5740,9 +5924,7 @@ const FrontScreen = ({
     isHomeInterstitialLoadedRef.current = false;
     isHomeInterstitialShowingRef.current = false;
 
-    const interstitial = InterstitialAd.createForAdRequest(INTERSTITIAL_AD_UNIT_ID, {
-      requestNonPersonalizedAdsOnly,
-    });
+    const interstitial = InterstitialAd.createForAdRequest(INTERSTITIAL_AD_UNIT_ID);
 
     homeInterstitialRef.current = interstitial;
 
@@ -5781,7 +5963,7 @@ const FrontScreen = ({
       unsubscribeError();
       unsubscribePaid();
     };
-  }, [adsSdkReady, requestNonPersonalizedAdsOnly]);
+  }, [adsSdkReady]);
 
   const handleNextRandomPublication = (options?: { animate?: boolean }) => {
     const shouldAnimate = options?.animate !== false;
@@ -5911,6 +6093,8 @@ const FrontScreen = ({
         en: 'Sign in to make a request.',
         fr: 'Connectez-vous pour faire une demande.',
         pt: 'Entre para fazer uma solicitação.',
+        de: 'Melde dich an, um eine Anfrage zu senden.',
+        it: 'Accedi per inviare una richiesta.',
       }));
       return;
     }
@@ -5946,6 +6130,8 @@ const FrontScreen = ({
         en: 'Sign in to make a request.',
         fr: 'Connectez-vous pour faire une demande.',
         pt: 'Entre para fazer uma solicitação.',
+        de: 'Melde dich an, um eine Anfrage zu senden.',
+        it: 'Accedi per inviare una richiesta.',
       }));
       return;
     }
@@ -5978,6 +6164,8 @@ const FrontScreen = ({
           en: 'The request could not be sent.',
           fr: 'Impossible d’envoyer la demande.',
           pt: 'Não foi possível enviar a solicitação.',
+          de: 'Die Anfrage konnte nicht gesendet werden.',
+          it: 'Impossibile inviare la richiesta.',
         }));
       }
 
@@ -5988,6 +6176,8 @@ const FrontScreen = ({
         en: `The request has been sent to ${targetWithAt}`,
         fr: `La demande a été envoyée à ${targetWithAt}`,
         pt: `A solicitação foi enviada para ${targetWithAt}`,
+        de: `Die Anfrage wurde gesendet an`,
+        it: `La richiesta è stata inviata a`,
       }));
 
       // Optimistic UI: show pending immediately
@@ -6086,6 +6276,8 @@ const FrontScreen = ({
           en: 'The request could not be updated.',
           fr: 'Impossible de mettre à jour la demande.',
           pt: 'Não foi possível atualizar a solicitação.',
+          de: 'Die Anfrage konnte nicht aktualisiert werden.',
+          it: 'Impossibile aggiornare la richiesta.',
         }));
       }
 
@@ -6107,6 +6299,8 @@ const FrontScreen = ({
         en: 'The request could not be updated.',
         fr: 'Impossible de mettre à jour la demande.',
         pt: 'Não foi possível atualizar a solicitação.',
+        de: 'Die Anfrage konnte nicht aktualisiert werden.',
+        it: 'Impossibile aggiornare la richiesta.',
       }));
     }
   };
@@ -6312,6 +6506,8 @@ const FrontScreen = ({
         en: 'Sign in to manage the group.',
         fr: 'Connectez-vous pour gérer le groupe.',
         pt: 'Entre para gerenciar o grupo.',
+        de: 'Melde dich an, um die Gruppe zu verwalten.',
+        it: 'Accedi per gestire il gruppo.',
       }));
       return;
     }
@@ -6334,6 +6530,8 @@ const FrontScreen = ({
           en: 'The member could not be restricted.',
           fr: 'Impossible de limiter ce membre.',
           pt: 'Não foi possível limitar o membro.',
+          de: 'Das Mitglied konnte nicht eingeschränkt werden.',
+          it: 'Impossibile limitare il membro.',
         }));
       }
 
@@ -6342,6 +6540,8 @@ const FrontScreen = ({
         en: `You restricted interactions from ${normalizeMentionUsername(username)}`,
         fr: `Vous avez limité les interactions de ${normalizeMentionUsername(username)}`,
         pt: `Você limitou as interações de ${normalizeMentionUsername(username)}`,
+        de: `Du hast die Interaktionen eingeschränkt von`,
+        it: `Hai limitato le interazioni di`,
       }));
       if (selectedGroup?.id) {
         fetchGroupLimitedMembersIfOwner(selectedGroup.id);
@@ -6354,6 +6554,8 @@ const FrontScreen = ({
         en: 'The member could not be restricted.',
         fr: 'Impossible de limiter ce membre.',
         pt: 'Não foi possível limitar o membro.',
+        de: 'Das Mitglied konnte nicht eingeschränkt werden.',
+        it: 'Impossibile limitare il membro.',
       }));
     } finally {
       setGroupMessageOptions(null);
@@ -6367,6 +6569,8 @@ const FrontScreen = ({
         en: 'Sign in to manage the group.',
         fr: 'Connectez-vous pour gérer le groupe.',
         pt: 'Entre para gerenciar o grupo.',
+        de: 'Melde dich an, um die Gruppe zu verwalten.',
+        it: 'Accedi per gestire il gruppo.',
       }));
       return;
     }
@@ -6389,6 +6593,8 @@ const FrontScreen = ({
           en: 'The restriction could not be removed.',
           fr: 'Impossible de retirer la limitation.',
           pt: 'Não foi possível remover a limitação.',
+          de: 'Die Einschränkung konnte nicht entfernt werden.',
+          it: 'Impossibile rimuovere la limitazione.',
         }));
       }
 
@@ -6402,6 +6608,8 @@ const FrontScreen = ({
         en: 'The restriction could not be removed.',
         fr: 'Impossible de retirer la limitation.',
         pt: 'Não foi possível remover a limitação.',
+        de: 'Die Einschränkung konnte nicht entfernt werden.',
+        it: 'Impossibile rimuovere la limitazione.',
       }));
     } finally {
       setGroupMessageOptions(null);
@@ -6420,6 +6628,8 @@ const FrontScreen = ({
         en: 'Sign in to manage the group.',
         fr: 'Connectez-vous pour gérer le groupe.',
         pt: 'Entre para gerenciar o grupo.',
+        de: 'Melde dich an, um die Gruppe zu verwalten.',
+        it: 'Accedi per gestire il gruppo.',
       }));
       return;
     }
@@ -6432,6 +6642,8 @@ const FrontScreen = ({
             en: 'No reason provided',
             fr: 'Sans motif',
             pt: 'Sem motivo',
+            de: 'Kein Grund',
+            it: 'Nessun motivo',
           }))
         : undefined;
 
@@ -6451,6 +6663,8 @@ const FrontScreen = ({
           en: 'The member could not be removed.',
           fr: 'Impossible d’expulser ce membre.',
           pt: 'Não foi possível expulsar o membro.',
+          de: 'Das Mitglied konnte nicht ausgeschlossen werden.',
+          it: 'Impossibile espellere il membro.',
         }));
       }
 
@@ -6461,12 +6675,16 @@ const FrontScreen = ({
               en: `${normalizeMentionUsername(username)} has been removed and blocked`,
               fr: `${normalizeMentionUsername(username)} a été expulsé et bloqué`,
               pt: `${normalizeMentionUsername(username)} foi expulso e bloqueado`,
+              de: `wurde ausgeschlossen und blockiert`,
+              it: `è stato espulso e bloccato`,
             })
           : localize({
               es: `${normalizeMentionUsername(username)} ha sido expulsado`,
               en: `${normalizeMentionUsername(username)} has been removed`,
               fr: `${normalizeMentionUsername(username)} a été expulsé`,
               pt: `${normalizeMentionUsername(username)} foi expulso`,
+              de: `wurde ausgeschlossen`,
+              it: `è stato espulso`,
             })
       );
 
@@ -6504,6 +6722,8 @@ const FrontScreen = ({
         en: 'The member could not be removed.',
         fr: 'Impossible d’expulser ce membre.',
         pt: 'Não foi possível expulsar o membro.',
+        de: 'Das Mitglied konnte nicht ausgeschlossen werden.',
+        it: 'Impossibile espellere il membro.',
       }));
     } finally {
       setGroupMessageOptions(null);
@@ -6517,6 +6737,8 @@ const FrontScreen = ({
         en: 'Sign in to manage the group.',
         fr: 'Connectez-vous pour gérer le groupe.',
         pt: 'Entre para gerenciar o grupo.',
+        de: 'Melde dich an, um die Gruppe zu verwalten.',
+        it: 'Accedi per gestire il gruppo.',
       }));
       return;
     }
@@ -7049,6 +7271,8 @@ const FrontScreen = ({
             en: 'The channel could not be left.',
             fr: 'Impossible de quitter le canal.',
             pt: 'Não foi possível sair do canal.',
+            de: 'Der Kanal konnte nicht verlassen werden.',
+            it: 'Impossibile uscire dal canale.',
           });
         throw new Error(message);
       }
@@ -7064,6 +7288,8 @@ const FrontScreen = ({
         en: 'The channel could not be left.',
         fr: 'Impossible de quitter le canal.',
         pt: 'Não foi possível sair do canal.',
+        de: 'Der Kanal konnte nicht verlassen werden.',
+        it: 'Impossibile uscire dal canale.',
       }));
     }
   }, [authToken, fetchMyChannels, getJoinedChannelKey, getJoinedChannelPostId, t]);
@@ -7740,6 +7966,8 @@ const FrontScreen = ({
         en: 'You must create your presentation first.',
         fr: 'Vous devez d’abord créer votre présentation.',
         pt: 'Primeiro você precisa criar sua apresentação.',
+        de: 'Du musst zuerst deine Vorstellung erstellen.',
+        it: 'Devi prima creare la tua presentazione.',
       }));
       return;
     }
@@ -7825,6 +8053,8 @@ const FrontScreen = ({
             en: 'There was a problem saving your post on the server.',
             fr: 'Un problème est survenu lors de l’enregistrement de votre publication sur le serveur.',
             pt: 'Houve um problema ao salvar sua publicação no servidor.',
+            de: 'Beim Speichern deines Beitrags auf dem Server ist ein Problem aufgetreten.',
+            it: 'Si è verificato un problema durante il salvataggio del tuo post sul server.',
           }));
         }
       } catch (error) {
@@ -7834,6 +8064,8 @@ const FrontScreen = ({
           en: 'There was a connection problem while saving your post.',
           fr: 'Un problème de connexion est survenu lors de l’enregistrement de votre publication.',
           pt: 'Houve um problema de conexão ao salvar sua publicação.',
+          de: 'Beim Speichern deines Beitrags ist ein Verbindungsproblem aufgetreten.',
+          it: 'Si è verificato un problema di connessione durante il salvataggio del tuo post.',
         }));
       }
     } else {
@@ -9718,7 +9950,7 @@ const FrontScreen = ({
   return (
     <View style={styles.container}>
       {actionToast && (
-        <Modal transparent visible animationType="none" onRequestClose={() => { }}>
+        <Modal transparent visible animationType="none" statusBarTranslucent navigationBarTranslucent onRequestClose={() => { }}>
           <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
             <Animated.View
               pointerEvents="none"
@@ -16208,10 +16440,9 @@ const FrontScreen = ({
               ]}
             >
               <BannerAd
-                key={`ring-banner-${viewingProfileRingId || 'none'}-${homeProfileRingBannerSize}-${homeProfileRingBannerRequestKey}-${requestNonPersonalizedAdsOnly ? 'npa' : 'pa'}`}
+                key={`ring-banner-${viewingProfileRingId || 'none'}-${homeProfileRingBannerSize}-${homeProfileRingBannerRequestKey}`}
                 unitId={BANNER_AD_UNIT_ID}
                 size={homeProfileRingBannerSize}
-                requestOptions={{ requestNonPersonalizedAdsOnly }}
                 onPaid={(event) => {
                   trackAdPaidEvent({
                     format: 'banner',

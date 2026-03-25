@@ -286,12 +286,14 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
     const url = POLICY_URLS[key];
     if (!url) {
       Alert.alert(
-        localize({ es: 'URL no configurada', en: 'URL not configured', fr: 'URL non configurée', pt: 'URL não configurada' }),
+        localize({ es: 'URL no configurada', en: 'URL not configured', fr: 'URL non configurée', pt: 'URL não configurada', de: 'URL nicht konfiguriert', it: 'URL non configurato' }),
         localize({
           es: 'Configura una URL pública para esta política.',
           en: 'Configure a public URL for this policy.',
           fr: 'Configurez une URL publique pour cette politique.',
           pt: 'Configure uma URL pública para esta política.',
+          de: 'Konfiguriere eine öffentliche URL für diese Richtlinie.',
+          it: 'Configura un URL pubblico per questa politica.',
         }),
       );
       return;
@@ -300,12 +302,12 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
     try {
       const supported = await Linking.canOpenURL(url);
       if (!supported) {
-        Alert.alert(localize({ es: 'No se puede abrir el enlace', en: 'Cannot open link', fr: 'Impossible d’ouvrir le lien', pt: 'Não é possível abrir o link' }), url);
+        Alert.alert(localize({ es: 'No se puede abrir el enlace', en: 'Cannot open link', fr: 'Impossible d’ouvrir le lien', pt: 'Não é possível abrir o link', de: 'Link kann nicht geöffnet werden', it: 'Impossibile aprire il link' }), url);
         return;
       }
       await Linking.openURL(url);
     } catch {
-      Alert.alert(localize({ es: 'No se pudo abrir el enlace', en: 'Could not open link', fr: 'Impossible d’ouvrir le lien', pt: 'Não foi possível abrir o link' }), url);
+      Alert.alert(localize({ es: 'No se pudo abrir el enlace', en: 'Could not open link', fr: 'Impossible d’ouvrir le lien', pt: 'Não foi possível abrir o link', de: 'Link konnte nicht geöffnet werden', it: 'Impossibile aprire il link' }), url);
     }
   };
 
@@ -413,12 +415,14 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       }
 
       Alert.alert(
-        localize({ es: 'Opciones de privacidad', en: 'Privacy Options', fr: 'Options de confidentialité', pt: 'Opções de privacidade' }),
+        localize({ es: 'Opciones de privacidad', en: 'Privacy Options', fr: 'Options de confidentialité', pt: 'Opções de privacidade', de: 'Datenschutzoptionen', it: 'Opzioni di privacy' }),
         localize({
           es: 'Ahora mismo no hay un formulario de opciones de privacidad disponible para este dispositivo o región.',
           en: 'There is currently no privacy options form available for this device or region.',
           fr: 'Aucun formulaire d’options de confidentialité n’est actuellement disponible pour cet appareil ou cette région.',
           pt: 'No momento, não há um formulário de opções de privacidade disponível para este dispositivo ou região.',
+          de: 'Derzeit ist kein Datenschutz-Optionsformular für dieses Gerät oder diese Region verfügbar.',
+          it: 'Al momento non è disponibile un modulo sulle opzioni di privacy per questo dispositivo o questa regione.',
         })
       );
     } catch (error) {
@@ -430,19 +434,23 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
         lowerMsg.includes('no forms configured');
 
       Alert.alert(
-        localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }),
+        localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }),
         isMissingConsentFormConfig
           ? localize({
               es: 'Google AdMob todavía no tiene configurado/publicado un formulario de consentimiento para esta aplicación. Debes crear y publicar el mensaje en AdMob > Privacy & messaging para que el usuario pueda aceptar o rechazar anuncios personalizados.',
               en: 'Google AdMob does not yet have a consent form configured/published for this application. You must create and publish the message in AdMob > Privacy & messaging so the user can accept or reject personalized ads.',
               fr: 'Google AdMob n’a pas encore de formulaire de consentement configuré/publié pour cette application. Vous devez créer et publier le message dans AdMob > Privacy & messaging pour que l’utilisateur puisse accepter ou refuser les annonces personnalisées.',
               pt: 'O Google AdMob ainda não possui um formulário de consentimento configurado/publicado para este aplicativo. Você deve criar e publicar a mensagem em AdMob > Privacy & messaging para que o usuário possa aceitar ou recusar anúncios personalizados.',
+              de: 'Google AdMob hat noch kein Einwilligungsformular für diese Anwendung konfiguriert/veröffentlicht. Du musst die Nachricht unter AdMob > Privacy & messaging erstellen und veröffentlichen, damit der Nutzer personalisierte Werbung akzeptieren oder ablehnen kann.',
+              it: 'Google AdMob non ha ancora un modulo di consenso configurato/pubblicato per questa applicazione. Devi creare e pubblicare il messaggio in AdMob > Privacy & messaging affinché l\'utente possa accettare o rifiutare gli annunci personalizzati.',
             })
           : msg || localize({
               es: 'No se pudieron abrir las opciones de privacidad.',
               en: 'Privacy options could not be opened.',
               fr: 'Impossible d’ouvrir les options de confidentialité.',
               pt: 'Não foi possível abrir as opções de privacidade.',
+              de: 'Die Datenschutzoptionen konnten nicht geöffnet werden.',
+              it: 'Impossibile aprire le opzioni di privacy.',
             })
       );
     } finally {
@@ -731,7 +739,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       refreshAccountAuth();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo verificar', en: 'Could not verify', fr: 'Impossible de vérifier', pt: 'Não foi possível verificar' }));
+      Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }), msg || localize({ es: 'No se pudo verificar', en: 'Could not verify', fr: 'Impossible de vérifier', pt: 'Não foi possível verificar' }));
     } finally {
       setIsVerifyingKeinti(false);
     }
@@ -929,16 +937,18 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       // Si está denegado permanentemente, llevar a ajustes.
       if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
         Alert.alert(
-          localize({ es: 'Permiso requerido', en: 'Permission required', fr: 'Autorisation requise', pt: 'Permissão obrigatória' }),
+          localize({ es: 'Permiso requerido', en: 'Permission required', fr: 'Autorisation requise', pt: 'Permissão obrigatória', de: 'Berechtigung erforderlich', it: 'Permesso richiesto' }),
           localize({
             es: 'Para concederlo, abre Ajustes > Permisos y permite el acceso a Fotos.',
             en: 'To grant it, open Settings > Permissions and allow access to Photos.',
             fr: 'Pour l’accorder, ouvrez Réglages > Autorisations et autorisez l’accès aux photos.',
             pt: 'Para concedê-la, abra Ajustes > Permissões e permita o acesso às Fotos.',
+            de: 'Um sie zu erteilen, öffne Einstellungen > Berechtigungen und erlaube den Zugriff auf Fotos.',
+            it: 'Per concederlo, apri Impostazioni > Permessi e consenti l\'accesso alle Foto.',
           }),
           [
-            { text: localize({ es: 'Cancelar', en: 'Cancel', fr: 'Annuler', pt: 'Cancelar' }), style: 'cancel' },
-            { text: localize({ es: 'Abrir Ajustes', en: 'Open Settings', fr: 'Ouvrir les réglages', pt: 'Abrir Ajustes' }), onPress: () => Linking.openSettings() },
+            { text: localize({ es: 'Cancelar', en: 'Cancel', fr: 'Annuler', pt: 'Cancelar', de: 'Abbrechen', it: 'Annulla' }), style: 'cancel' },
+            { text: localize({ es: 'Abrir Ajustes', en: 'Open Settings', fr: 'Ouvrir les réglages', pt: 'Abrir Ajustes', de: 'Einstellungen öffnen', it: 'Apri Impostazioni' }), onPress: () => Linking.openSettings() },
           ]
         );
       }
@@ -1173,7 +1183,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
         setAdminBlockedSelfies(dedupeByEmailKeepLatest(blocked.items || [], 'blocked_at'));
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo cargar', en: 'Could not load', fr: 'Impossible de charger', pt: 'Não foi possível carregar' }));
+        Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }), msg || localize({ es: 'No se pudo cargar', en: 'Could not load', fr: 'Impossible de charger', pt: 'Não foi possível carregar' }));
         setAdminPendingSelfies([]);
         setAdminBlockedSelfies([]);
       } finally {
@@ -1435,7 +1445,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
   const saveNationality = async (nextNationality: string) => {
     if (!authToken) {
-      Alert.alert(localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória' }), localize({ es: 'Inicia sesión para actualizar tu nacionalidad.', en: 'Sign in to update your nationality.', fr: 'Connectez-vous pour mettre à jour votre nationalité.', pt: 'Entre para atualizar sua nacionalidade.' }));
+      Alert.alert(localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória', de: 'Sitzung erforderlich', it: 'Sessione richiesta' }), localize({ es: 'Inicia sesión para actualizar tu nacionalidad.', en: 'Sign in to update your nationality.', fr: 'Connectez-vous pour mettre à jour votre nationalité.', pt: 'Entre para atualizar sua nacionalidade.' }));
       return;
     }
 
@@ -1453,7 +1463,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       setMyNationality(String(resp?.nationality || clean).trim());
     } catch (e) {
       setMyNationality(previous);
-      Alert.alert(localize({ es: 'No se pudo actualizar', en: 'Could not update', fr: 'Impossible de mettre à jour', pt: 'Não foi possível atualizar' }), e instanceof Error ? e.message : localize({ es: 'Inténtalo de nuevo.', en: 'Please try again.', fr: 'Veuillez réessayer.', pt: 'Tente novamente.' }));
+      Alert.alert(localize({ es: 'No se pudo actualizar', en: 'Could not update', fr: 'Impossible de mettre à jour', pt: 'Não foi possível atualizar', de: 'Aktualisierung fehlgeschlagen', it: 'Impossibile aggiornare' }), e instanceof Error ? e.message : localize({ es: 'Inténtalo de nuevo.', en: 'Please try again.', fr: 'Veuillez réessayer.', pt: 'Tente novamente.' }));
     } finally {
       setIsUpdatingNationality(false);
     }
@@ -2048,6 +2058,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     en: 'Privacy Options',
                     fr: 'Options de confidentialité',
                     pt: 'Opções de privacidade',
+                    de: 'Datenschutzoptionen',
+                    it: 'Opzioni di privacy',
                   })}
                 </Text>
 
@@ -2070,6 +2082,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                         en: 'Manage',
                         fr: 'Gérer',
                         pt: 'Gerenciar',
+                        de: 'Verwalten',
+                        it: 'Gestisci',
                       })}
                     </Text>
                   )}
@@ -2082,6 +2096,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                   en: 'Manage your ad consent and privacy preferences.',
                   fr: 'Gérez vos préférences de consentement publicitaire et de confidentialité.',
                   pt: 'Gerencie suas preferências de consentimento de anúncios e privacidade.',
+                  de: 'Verwalte deine Werbeeinwilligungs- und Datenschutzeinstellungen.',
+                  it: 'Gestisci le tue preferenze di consenso pubblicitario e privacy.',
                 })}
               </Text>
             </View>
@@ -2123,7 +2139,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               showChevron={false}
               onPress={() => {
                 if (!authToken) {
-                  Alert.alert(localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória' }), localize({ es: 'Inicia sesión para eliminar tu cuenta.', en: 'Sign in to delete your account.', fr: 'Connectez-vous pour supprimer votre compte.', pt: 'Entre para excluir sua conta.' }));
+                  Alert.alert(localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória', de: 'Sitzung erforderlich', it: 'Sessione richiesta' }), localize({ es: 'Inicia sesión para eliminar tu cuenta.', en: 'Sign in to delete your account.', fr: 'Connectez-vous pour supprimer votre compte.', pt: 'Entre para excluir sua conta.' }));
                   return;
                 }
                 openDeleteAccountConfirm();
@@ -2206,7 +2222,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     setAdminBlockedSelfies(dedupeByEmailKeepLatest(blocked.items || [], 'blocked_at'));
                   } catch (e) {
                     const msg = e instanceof Error ? e.message : String(e);
-                    Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo actualizar', en: 'Could not refresh', fr: 'Impossible de mettre à jour', pt: 'Não foi possível atualizar' }));
+                    Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }), msg || localize({ es: 'No se pudo actualizar', en: 'Could not refresh', fr: 'Impossible de mettre à jour', pt: 'Não foi possível atualizar' }));
                   } finally {
                     setIsLoadingAdminSelfies(false);
                   }
@@ -2281,7 +2297,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                                     setAdminPendingSelfies((prev) => prev.filter((p: any) => String(p?.email || '').trim() !== email));
                                   } catch (e) {
                                     const msg = e instanceof Error ? e.message : String(e);
-                                    Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo aceptar', en: 'Could not accept', fr: 'Impossible d’accepter', pt: 'Não foi possível aceitar' }));
+                                    Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }), msg || localize({ es: 'No se pudo aceptar', en: 'Could not accept', fr: 'Impossible d’accepter', pt: 'Não foi possível aceitar' }));
                                   }
                                 }}
                               >
@@ -2297,7 +2313,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                                     setAdminPendingSelfies((prev) => prev.filter((p: any) => String(p?.email || '').trim() !== email));
                                   } catch (e) {
                                     const msg = e instanceof Error ? e.message : String(e);
-                                    Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo rechazar', en: 'Could not reject', fr: 'Impossible de rejeter', pt: 'Não foi possível rejeitar' }));
+                                    Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }), msg || localize({ es: 'No se pudo rechazar', en: 'Could not reject', fr: 'Impossible de rejeter', pt: 'Não foi possível rejeitar' }));
                                   }
                                 }}
                               >
@@ -2326,7 +2342,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                                     });
                                   } catch (e) {
                                     const msg = e instanceof Error ? e.message : String(e);
-                                    Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo bloquear', en: 'Could not block', fr: 'Impossible de bloquer', pt: 'Não foi possível bloquear' }));
+                                    Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }), msg || localize({ es: 'No se pudo bloquear', en: 'Could not block', fr: 'Impossible de bloquer', pt: 'Não foi possível bloquear' }));
                                   }
                                 }}
                               >
@@ -2368,7 +2384,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                                   setAdminBlockedSelfies((prev) => prev.filter((p: any) => String(p?.email || '').trim() !== email));
                                 } catch (e) {
                                   const msg = e instanceof Error ? e.message : String(e);
-                                  Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), msg || localize({ es: 'No se pudo desbloquear', en: 'Could not unblock', fr: 'Impossible de débloquer', pt: 'Não foi possível desbloquear' }));
+                                  Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }), msg || localize({ es: 'No se pudo desbloquear', en: 'Could not unblock', fr: 'Impossible de débloquer', pt: 'Não foi possível desbloquear' }));
                                 }
                               }}
                             >
@@ -2945,9 +2961,9 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                           Clipboard.setString(totpSecret);
                           if (Platform.OS === 'android') {
                             const { ToastAndroid } = require('react-native');
-                            ToastAndroid.show(localize({ es: '¡Copiado!', en: 'Copied!', fr: 'Copié !', pt: 'Copiado!' }), ToastAndroid.SHORT);
+                            ToastAndroid.show(localize({ es: '¡Copiado!', en: 'Copied!', fr: 'Copié !', pt: 'Copiado!', de: 'Kopiert!', it: 'Copiato!' }), ToastAndroid.SHORT);
                           } else {
-                            Alert.alert(localize({ es: '¡Copiado!', en: 'Copied!', fr: 'Copié !', pt: 'Copiado!' }));
+                            Alert.alert(localize({ es: '¡Copiado!', en: 'Copied!', fr: 'Copié !', pt: 'Copiado!', de: 'Kopiert!', it: 'Copiato!' }));
                           }
                         }}
                         style={[styles.passwordRow, { minHeight: 52, height: undefined, paddingVertical: 12, alignItems: 'flex-start' }]}
@@ -3034,7 +3050,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               onPress={() => openPolicyUrl('cookiesAdPolicy')}
             >
               <Text style={styles.checkButtonText}>
-                {localize({ es: 'Abrir versión web', en: 'Open web version', fr: 'Ouvrir la version web', pt: 'Abrir versão web' })}
+                {localize({ es: 'Abrir versión web', en: 'Open web version', fr: 'Ouvrir la version web', pt: 'Abrir versão web', de: 'Webversion öffnen', it: 'Apri versione web' })}
               </Text>
             </TouchableOpacity>
           </View>
@@ -3056,7 +3072,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               onPress={() => openPolicyUrl('termsOfUse')}
             >
               <Text style={styles.checkButtonText}>
-                {localize({ es: 'Abrir versión web', en: 'Open web version', fr: 'Ouvrir la version web', pt: 'Abrir versão web' })}
+                {localize({ es: 'Abrir versión web', en: 'Open web version', fr: 'Ouvrir la version web', pt: 'Abrir versão web', de: 'Webversion öffnen', it: 'Apri versione web' })}
               </Text>
             </TouchableOpacity>
           </View>
@@ -3078,7 +3094,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               onPress={() => openPolicyUrl('privacyPolicy')}
             >
               <Text style={styles.checkButtonText}>
-                {localize({ es: 'Abrir versión web', en: 'Open web version', fr: 'Ouvrir la version web', pt: 'Abrir versão web' })}
+                {localize({ es: 'Abrir versión web', en: 'Open web version', fr: 'Ouvrir la version web', pt: 'Abrir versão web', de: 'Webversion öffnen', it: 'Apri versione web' })}
               </Text>
             </TouchableOpacity>
           </View>
@@ -3093,6 +3109,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                   en: 'For more information about the use of cookies, advertising identifiers and consent management, the user can consult the ',
                   fr: 'Pour plus d’informations sur l’utilisation des cookies, des identifiants publicitaires et la gestion du consentement, l’utilisateur peut consulter la ',
                   pt: 'Para mais informações sobre o uso de cookies, identificadores publicitários e gestão do consentimento, o usuário pode consultar a ',
+                  de: 'Für weitere Informationen über die Verwendung von Cookies, Werbe-IDs und Einwilligungsverwaltung kann der Nutzer die ',
+                  it: 'Per maggiori informazioni sull\'uso dei cookie, degli identificatori pubblicitari e sulla gestione del consenso, l\'utente può consultare la ',
                 })}
                 <Text
                   style={styles.letterEmail}
@@ -3104,6 +3122,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     en: 'Keinti Cookies and Advertising Policy',
                     fr: 'Politique de cookies et de publicité de Keinti',
                     pt: 'Política de Cookies e Publicidade do Keinti',
+                    de: 'Cookie- und Werberichtlinie von Keinti',
+                    it: 'Politica sui cookie e pubblicità di Keinti',
                   })}
                 </Text>
                 .
@@ -3192,7 +3212,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     }
 
                     if (result.accountLocked) {
-                      Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), t('changePassword.accountLocked'));
+                      Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }), t('changePassword.accountLocked'));
                       onLogout();
                       return;
                     }
@@ -3341,7 +3361,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                 setShowCurrentPasswordError(false);
                 setScreen('securityControl');
               } catch (e: any) {
-                Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), e?.message || localize({ es: 'No se pudo cambiar la contraseña', en: 'Could not change the password', fr: 'Impossible de changer le mot de passe', pt: 'Não foi possível alterar a senha' }));
+                Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }), e?.message || localize({ es: 'No se pudo cambiar la contraseña', en: 'Could not change the password', fr: 'Impossible de changer le mot de passe', pt: 'Não foi possível alterar a senha' }));
               } finally {
                 setIsChangingPassword(false);
               }
@@ -3518,7 +3538,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       return;
                     }
                     if (!authToken) {
-                      Alert.alert(localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória' }), localize({ es: 'Inicia sesión para desbloquear.', en: 'Sign in to unblock.', fr: 'Connectez-vous pour débloquer.', pt: 'Entre para desbloquear.' }));
+                      Alert.alert(localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória', de: 'Sitzung erforderlich', it: 'Sessione richiesta' }), localize({ es: 'Inicia sesión para desbloquear.', en: 'Sign in to unblock.', fr: 'Connectez-vous pour débloquer.', pt: 'Entre para desbloquear.' }));
                       setUserToUnlock(null);
                       setUnlockPosition(null);
                       return;
@@ -3537,7 +3557,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       .then(async (resp) => {
                         if (!resp.ok) {
                           const err = await resp.json().catch(() => ({}));
-                          throw new Error(err?.error || localize({ es: 'No se pudo desbloquear', en: 'Could not unblock', fr: 'Impossible de débloquer', pt: 'Não foi possível desbloquear' }));
+                          throw new Error(err?.error || localize({ es: 'No se pudo desbloquear', en: 'Could not unblock', fr: 'Impossible de débloquer', pt: 'Não foi possível desbloquear', de: 'Konnte nicht entsperrt werden', it: 'Impossibile sbloccare' }));
                         }
                         setBlockedUsers(prev => prev.filter(u => !(u.email === target.email && u.group_id === target.group_id)));
                         setExpandedBlockedReasons(prev => {
@@ -3549,7 +3569,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                         setUnlockPosition(null);
                       })
                       .catch((e: any) => {
-                        Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), e?.message || localize({ es: 'No se pudo desbloquear', en: 'Could not unblock', fr: 'Impossible de débloquer', pt: 'Não foi possível desbloquear' }));
+                        Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }), e?.message || localize({ es: 'No se pudo desbloquear', en: 'Could not unblock', fr: 'Impossible de débloquer', pt: 'Não foi possível desbloquear' }));
                         setUserToUnlock(null);
                         setUnlockPosition(null);
                       })
@@ -3614,10 +3634,10 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
                   <View style={{ flex: 1 }}>
                     <Text style={styles.logoutTitle}>
-                      {localize({ es: '¿Cerrar sesión?', en: 'Log out?', fr: 'Se déconnecter ?', pt: 'Encerrar sessão?' })}
+                      {localize({ es: '¿Cerrar sesión?', en: 'Log out?', fr: 'Se déconnecter ?', pt: 'Encerrar sessão?', de: 'Abmelden?', it: 'Disconnettersi?' })}
                     </Text>
                     <Text style={styles.logoutSubtitle}>
-                      {localize({ es: 'Tendrás que iniciar sesión de nuevo en este dispositivo.', en: 'You’ll need to sign in again on this device.', fr: 'Vous devrez vous reconnecter sur cet appareil.', pt: 'Você precisará entrar novamente neste dispositivo.' })}
+                      {localize({ es: 'Tendrás que iniciar sesión de nuevo en este dispositivo.', en: 'You’ll need to sign in again on this device.', fr: 'Vous devrez vous reconnecter sur cet appareil.', pt: 'Você precisará entrar novamente neste dispositivo.', de: 'Du musst dich auf diesem Gerät erneut anmelden.', it: 'Dovrai accedere di nuovo su questo dispositivo.' })}
                     </Text>
                   </View>
                 </View>
@@ -3629,6 +3649,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       en: `Signed in as @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`,
                       fr: `Connecté en tant que @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`,
                       pt: `Conectado como @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`,
+                      de: `Du bist angemeldet als @`,
+                      it: `Hai effettuato l'accesso come @`,
                     })}
                   </Text>
                 </View>
@@ -3641,7 +3663,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     onPress={closeLogoutConfirm}
                   >
                     <Text style={styles.logoutButtonSecondaryText}>
-                      {localize({ es: 'Mantener sesión', en: 'Stay', fr: 'Rester connecté', pt: 'Continuar conectado' })}
+                      {localize({ es: 'Mantener sesión', en: 'Stay', fr: 'Rester connecté', pt: 'Continuar conectado', de: 'Angemeldet bleiben', it: 'Resta connesso' })}
                     </Text>
                   </TouchableOpacity>
 
@@ -3668,14 +3690,14 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       <ActivityIndicator color="#000000" />
                     ) : (
                       <Text style={styles.logoutButtonPrimaryText}>
-                        {localize({ es: 'Cerrar sesión', en: 'Log out', fr: 'Se déconnecter', pt: 'Sair' })}
+                        {localize({ es: 'Cerrar sesión', en: 'Log out', fr: 'Se déconnecter', pt: 'Sair', de: 'Abmelden', it: 'Disconnetti' })}
                       </Text>
                     )}
                   </TouchableOpacity>
                 </View>
 
                 <Text style={styles.logoutFootnote}>
-                  {localize({ es: 'Consejo: si estás en un dispositivo compartido, cerrar sesión protege tu cuenta.', en: 'Tip: If you’re on a shared device, logging out helps protect your account.', fr: 'Conseil : si vous utilisez un appareil partagé, vous déconnecter aide à protéger votre compte.', pt: 'Dica: se você estiver em um dispositivo compartilhado, sair ajuda a proteger sua conta.' })}
+                  {localize({ es: 'Consejo: si estás en un dispositivo compartido, cerrar sesión protege tu cuenta.', en: 'Tip: If you’re on a shared device, logging out helps protect your account.', fr: 'Conseil : si vous utilisez un appareil partagé, vous déconnecter aide à protéger votre compte.', pt: 'Dica: se você estiver em um dispositivo compartilhado, sair ajuda a proteger sua conta.', de: 'Tipp: Auf einem geteilten Gerät schützt das Abmelden dein Konto.', it: 'Consiglio: se sei su un dispositivo condiviso, disconnetterti protegge il tuo account.' })}
                 </Text>
               </View>
             </TouchableWithoutFeedback>
@@ -3738,7 +3760,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
                 <View style={styles.deleteAccountWarningBox}>
                   <Text style={styles.deleteAccountWarningText}>
-                    {localize({ es: 'Esta acción es irreversible. Tu cuenta y tus datos se eliminarán permanentemente.', en: 'This action is irreversible. Your account and data will be permanently removed.', fr: 'Cette action est irréversible. Votre compte et vos données seront supprimés définitivement.', pt: 'Esta ação é irreversível. Sua conta e seus dados serão removidos permanentemente.' })}
+                    {localize({ es: 'Esta acción es irreversible. Tu cuenta y tus datos se eliminarán permanentemente.', en: 'This action is irreversible. Your account and data will be permanently removed.', fr: 'Cette action est irréversible. Votre compte et vos données seront supprimés définitivement.', pt: 'Esta ação é irreversível. Sua conta e seus dados serão removidos permanentemente.', de: 'Diese Aktion ist unwiderruflich. Dein Konto und deine Daten werden dauerhaft gelöscht.', it: 'Questa azione è irreversibile. Il tuo account e i tuoi dati verranno rimossi permanentemente.' })}
                   </Text>
                 </View>
 
@@ -3787,7 +3809,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                           onLogout();
                         });
                       } catch (e: any) {
-                        Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro' }), e?.message || localize({ es: 'No se pudo eliminar la cuenta', en: 'Could not delete the account', fr: 'Impossible de supprimer le compte', pt: 'Não foi possível excluir a conta' }));
+                        Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }), e?.message || localize({ es: 'No se pudo eliminar la cuenta', en: 'Could not delete the account', fr: 'Impossible de supprimer le compte', pt: 'Não foi possível excluir a conta' }));
                       } finally {
                         setIsDeletingAccount(false);
                       }
@@ -3797,14 +3819,14 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       <ActivityIndicator color="#000000" />
                     ) : (
                       <Text style={styles.deleteAccountButtonDangerText}>
-                        {localize({ es: 'Eliminar', en: 'Delete', fr: 'Supprimer', pt: 'Excluir' })}
+                        {localize({ es: 'Eliminar', en: 'Delete', fr: 'Supprimer', pt: 'Excluir', de: 'Löschen', it: 'Elimina' })}
                       </Text>
                     )}
                   </TouchableOpacity>
                 </View>
 
                 <Text style={styles.deleteAccountFootnote}>
-                  {localize({ es: 'Si esto fue un error, cancela y revisa la política primero.', en: 'If this was a mistake, cancel and review the policy first.', fr: 'Si c’était une erreur, annulez et consultez d’abord la politique.', pt: 'Se isso foi um engano, cancele e revise a política primeiro.' })}
+                  {localize({ es: 'Si esto fue un error, cancela y revisa la política primero.', en: 'If this was a mistake, cancel and review the policy first.', fr: 'Si c’était une erreur, annulez et consultez d’abord la politique.', pt: 'Se isso foi um engano, cancele e revise a política primeiro.', de: 'Wenn dies ein Fehler war, breche ab und überprüfe zuerst die Richtlinie.', it: 'Se è stato un errore, annulla e rivedi prima la politica.' })}
                 </Text>
               </View>
             </TouchableWithoutFeedback>

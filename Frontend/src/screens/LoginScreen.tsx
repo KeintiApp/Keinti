@@ -230,7 +230,7 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
 
   const [resetVisible, setResetVisible] = useState(false);
 
-  const localize = (messages: Record<Language, string>) => messages[language] || messages.es;
+  const localize = (messages: Partial<Record<Language, string>> & { es: string }) => messages[language] || messages.en || messages.es;
 
   const forgotPasswordSegments = useMemo(
     () => parseMarkedText(String(t('common.forgotPassword') || '')),
@@ -343,6 +343,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           en: 'Could not sign in',
           fr: 'Impossible de se connecter',
           pt: 'Não foi possível entrar',
+          de: 'Anmeldung fehlgeschlagen',
+          it: 'Impossibile effettuare l\'accesso',
         }));
       }
 
@@ -353,6 +355,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           en: 'No access token was returned',
           fr: 'Aucun access token n’a été obtenu',
           pt: 'Nenhum access token foi obtido',
+          de: 'Kein Access-Token erhalten',
+          it: 'Nessun access token ottenuto',
         }));
       }
 
@@ -429,6 +433,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
               en: 'Your account exists, but the profile is not completed. Go back to signup and confirm the email on your phone.',
               fr: 'Votre compte existe, mais le profil n\'est pas terminé. Recommencez l\'inscription et confirmez l\'e-mail depuis votre téléphone.',
               pt: 'Sua conta existe, mas o perfil não está concluído. Volte ao cadastro e confirme o e-mail pelo celular.',
+              de: 'Dein Konto existiert, aber das Profil ist nicht vollständig. Gehe zurück zur Registrierung und bestätige die E-Mail auf deinem Handy.',
+              it: 'Il tuo account esiste, ma il profilo non è completo. Torna alla registrazione e conferma l\'e-mail dal telefono.',
             })
           );
         }
@@ -447,6 +453,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           en: 'Could not connect to the server.',
           fr: 'Impossible de se connecter au serveur.',
           pt: 'Não foi possível conectar ao servidor.',
+          de: 'Verbindung zum Server fehlgeschlagen.',
+          it: 'Impossibile connettersi al server.',
         }));
       } else if (lower.includes('email not confirmed') || (lower.includes('confirm') && lower.includes('email'))) {
         setErrorMessage(localize({
@@ -454,6 +462,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           en: 'Please confirm your email before signing in.',
           fr: 'Confirmez votre e-mail avant de vous connecter.',
           pt: 'Confirme seu e-mail antes de entrar.',
+          de: 'Bitte bestätige deine E-Mail, bevor du dich anmeldest.',
+          it: 'Conferma la tua e-mail prima di accedere.',
         }));
       } else if (lower.includes('invalid login credentials')) {
         setErrorMessage(
@@ -462,6 +472,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
             en: 'Invalid credentials. If you already confirmed the email, use "Forgot your password?" to set a password.',
             fr: 'Identifiants invalides. Si vous avez déjà confirmé votre e-mail, utilisez « Mot de passe oublié ? » pour définir un mot de passe.',
             pt: 'Credenciais inválidas. Se você já confirmou o e-mail, use "Esqueceu sua senha?" para definir uma senha.',
+            de: 'Ungültige Anmeldedaten. Wenn du die E-Mail bereits bestätigt hast, verwende "Passwort vergessen?", um ein Passwort festzulegen.',
+            it: 'Credenziali non valide. Se hai già confermato l\'e-mail, usa "Hai dimenticato la password?" per impostarne una.',
           })
         );
       } else {
@@ -483,6 +495,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           en: 'Supabase is not configured on the frontend (SUPABASE_URL / SUPABASE_ANON_KEY).',
           fr: 'Supabase n’est pas configuré dans le frontend (SUPABASE_URL / SUPABASE_ANON_KEY).',
           pt: 'O Supabase não está configurado no frontend (SUPABASE_URL / SUPABASE_ANON_KEY).',
+          de: 'Supabase ist im Frontend nicht konfiguriert (SUPABASE_URL / SUPABASE_ANON_KEY).',
+          it: 'Supabase non è configurato nel frontend (SUPABASE_URL / SUPABASE_ANON_KEY).',
         }));
       return;
     }
@@ -519,6 +533,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           en: 'Could not open Google',
           fr: 'Impossible d’ouvrir Google',
           pt: 'Não foi possível abrir o Google',
+          de: 'Google konnte nicht geöffnet werden',
+          it: 'Impossibile aprire Google',
         }));
       }
 
@@ -529,6 +545,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           en: 'Could not generate the authentication URL',
           fr: 'Impossible de générer l’URL d’authentification',
           pt: 'Não foi possível gerar a URL de autenticação',
+          de: 'Die Authentifizierungs-URL konnte nicht generiert werden',
+          it: 'Impossibile generare l\'URL di autenticazione',
         }));
       }
 
@@ -576,6 +594,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
             en: 'Could not open a browser to sign in with Google.',
             fr: 'Impossible d\'ouvrir un navigateur pour se connecter avec Google.',
             pt: 'Não foi possível abrir um navegador para entrar com o Google.',
+            de: 'Der Browser konnte nicht geöffnet werden, um sich mit Google anzumelden.',
+            it: 'Impossibile aprire un browser per accedere con Google.',
           }));
         }
 
@@ -589,6 +609,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           en: 'No authentication callback was received',
           fr: 'Aucun callback d’authentification n’a été reçu',
           pt: 'Nenhum callback de autenticação foi recebido',
+          de: 'Kein Authentifizierungs-Callback erhalten',
+          it: 'Nessun callback di autenticazione ricevuto',
         }));
       }
 
@@ -606,6 +628,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           en: 'OAuth was cancelled or is invalid',
           fr: 'OAuth a été annulé ou est invalide',
           pt: 'O OAuth foi cancelado ou é inválido',
+          de: 'OAuth wurde abgebrochen oder ist ungültig',
+          it: 'OAuth è stato annullato o non è valido',
         }));
       }
 
@@ -645,6 +669,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           en: 'No access token was returned',
           fr: 'Aucun access token n’a été obtenu',
           pt: 'Nenhum access token foi obtido',
+          de: 'Kein Access-Token erhalten',
+          it: 'Nessun access token ottenuto',
         }));
       }
 
@@ -681,6 +707,8 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
         en: 'Could not sign in with Google',
         fr: 'Impossible de se connecter avec Google',
         pt: 'Não foi possível entrar com o Google',
+        de: 'Anmeldung mit Google fehlgeschlagen',
+        it: 'Impossibile accedere con Google',
       });
       const lower = String(rawMessage || '').toLowerCase();
       const message = lower.includes('pkce') && lower.includes('code verifier')
@@ -826,7 +854,7 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
               ) : (
                 <View style={styles.googleButtonInner}>
                   <GradientGoogleIcon size={18} />
-                  <Text style={styles.googleButtonText}>{localize({ es: 'Iniciar con Google', en: 'Continue with Google', fr: 'Continuer avec Google', pt: 'Continuar com Google' })}</Text>
+                  <Text style={styles.googleButtonText}>{localize({ es: 'Iniciar con Google', en: 'Continue with Google', fr: 'Continuer avec Google', pt: 'Continuar com Google', de: 'Weiter mit Google', it: 'Continua con Google' })}</Text>
                 </View>
               )}
             </TouchableOpacity>

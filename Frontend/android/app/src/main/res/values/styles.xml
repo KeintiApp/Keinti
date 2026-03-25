@@ -1,22 +1,11 @@
 <resources>
 
-    <!-- Base application theme. -->
-    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <!-- Customize your theme here. -->
+    <!-- Base application theme.
+         Theme.EdgeToEdge is provided by react-native-edge-to-edge and handles
+         transparent system bars + Android 15 edge-to-edge rendering automatically,
+         replacing the deprecated statusBarColor / navigationBarColor APIs. -->
+    <style name="AppTheme" parent="Theme.EdgeToEdge">
         <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
-
-        <!--
-            Edge-to-edge: Starting with SDK 35 (Android 15), the system enforces
-            edge-to-edge rendering.  The old statusBarColor / navigationBarColor /
-            windowTranslucentStatus / windowTranslucentNavigation attributes are
-            ignored on Android 15+.  enableEdgeToEdge() in MainActivity sets the
-            bars to transparent and lets content draw behind them; insets are
-            handled on the JS side by react-native-safe-area-context.
-
-            We keep windowDrawsSystemBarBackgrounds=true so the Activity owns
-            the bar areas on older API levels as well.
-        -->
-        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
     </style>
 
 </resources>

@@ -1,29 +1,14 @@
 package com.keintiapp.keinti
 
-import android.os.Bundle
-import androidx.activity.enableEdgeToEdge
-import androidx.core.view.WindowCompat
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
 import com.facebook.react.defaults.DefaultReactActivityDelegate
 
+// Edge-to-edge rendering is handled by react-native-edge-to-edge via Theme.EdgeToEdge.
+// No manual enableEdgeToEdge() or WindowCompat calls needed.
+
 class MainActivity : ReactActivity() {
-
-  override fun onCreate(savedInstanceState: Bundle?) {
-      // Enable edge-to-edge rendering for Android 15+ (SDK 35) compatibility.
-      // This replaces the deprecated statusBarColor / navigationBarColor theme attributes.
-      // Insets are handled on the JS side by react-native-safe-area-context.
-      enableEdgeToEdge()
-      super.onCreate(savedInstanceState)
-
-      // Keep light system bar icons across the app so we don't need to drive
-      // status-bar appearance from JS, which routes through deprecated Android 15 APIs.
-      WindowCompat.getInsetsController(window, window.decorView)?.let { controller ->
-          controller.isAppearanceLightStatusBars = false
-          controller.isAppearanceLightNavigationBars = false
-      }
-  }
 
   /**
    * Returns the name of the main component registered from JavaScript. This is used to schedule

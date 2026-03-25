@@ -11,7 +11,7 @@ type LanguageSelectorProps = {
   compact?: boolean;
 };
 
-const LANGUAGE_ORDER: Language[] = ['es', 'en', 'fr', 'pt'];
+const LANGUAGE_ORDER: Language[] = ['es', 'en', 'fr', 'pt', 'de', 'it'];
 
 const LanguageSelector = ({ value, onSelect, disabled = false, compact = false }: LanguageSelectorProps) => {
   const { t } = useI18n();
@@ -23,6 +23,8 @@ const LanguageSelector = ({ value, onSelect, disabled = false, compact = false }
       { code: 'en' as Language, label: t('language.english'), shortLabel: 'EN' },
       { code: 'fr' as Language, label: t('language.french'), shortLabel: 'FR' },
       { code: 'pt' as Language, label: t('language.portuguese'), shortLabel: 'PT' },
+      { code: 'de' as Language, label: t('language.german'), shortLabel: 'DE' },
+      { code: 'it' as Language, label: t('language.italian'), shortLabel: 'IT' },
     ],
     [t],
   );
