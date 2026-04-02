@@ -5,6 +5,7 @@ import {
   StyleSheet,
   Pressable,
   TouchableOpacity,
+  RefreshControl,
   ScrollView,
   FlatList,
   Image,
@@ -28,7 +29,6 @@ import type { ImageSourcePropType } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { BlurView } from '@react-native-community/blur';
 import MapView, { PROVIDER_GOOGLE, type PoiClickEvent } from 'react-native-maps';
-import PagerView from 'react-native-pager-view';
 import Geolocation from '@react-native-community/geolocation';
 import {
   AdEventType,
@@ -188,6 +188,62 @@ const buildHomePublicationSequence = <T extends { createdAt?: unknown }>(items: 
   return ordered;
 };
 
+const getHomePagerNeighborIndices = (currentIndex: number, total: number) => {
+  if (total <= 1) {
+    return { left: 0, right: 0 };
+  }
+
+  return {
+    left: (currentIndex - 1 + total) % total,
+    right: (currentIndex + 1) % total,
+  };
+};
+
+/**
+ * Pick a random publication index from `pubs`, preferring unseen publications.
+ * `excludeIndices` lists indices to skip (e.g. current center and the other neighbor).
+ * Does NOT mutate the `seen` set — callers manage seen-tracking.
+ */
+const pickRandomPubNeighborIndex = (
+  pubs: Array<{ id?: unknown; createdAt?: unknown }>,
+  seen: Set<string>,
+  excludeIndices: number[],
+): number => {
+  const excludeSet = new Set(excludeIndices);
+
+  const pickFrom = (entries: Array<{ index: number; createdAtMs: number }>): number => {
+    if (entries.length === 0) return -1;
+    const sorted = [...entries].sort((a, b) => b.createdAtMs - a.createdAtMs);
+    const recentPool = sorted.slice(0, Math.min(HOME_DISCOVER_RECENT_POOL_SIZE, sorted.length));
+    const useRecent = recentPool.length === sorted.length || Math.random() < HOME_DISCOVER_RECENT_WEIGHT;
+    const pool = useRecent ? recentPool : sorted;
+    return pool[Math.floor(Math.random() * pool.length)]?.index ?? -1;
+  };
+
+  // Try unseen candidates first
+  const unseenCandidates = pubs
+    .map((p, i) => ({ index: i, idStr: String(p.id ?? ''), createdAtMs: getPublicationCreatedAtMs(p) }))
+    .filter(({ index, idStr }) => !excludeSet.has(index) && idStr && !seen.has(idStr));
+
+  if (unseenCandidates.length > 0) {
+    const idx = pickFrom(unseenCandidates);
+    if (idx >= 0) return idx;
+  }
+
+  // All seen — pick from any that is not excluded
+  const allCandidates = pubs
+    .map((p, i) => ({ index: i, idStr: String(p.id ?? ''), createdAtMs: getPublicationCreatedAtMs(p) }))
+    .filter(({ index, idStr }) => !excludeSet.has(index) && idStr);
+
+  if (allCandidates.length > 0) {
+    const idx = pickFrom(allCandidates);
+    if (idx >= 0) return idx;
+  }
+
+  // Ultimate fallback
+  return excludeIndices[0] === 0 ? Math.min(1, pubs.length - 1) : 0;
+};
+
 const GROUP_MEMBERS_VISIBLE_CARDS = 5;
 const GROUP_MEMBERS_CARD_GAP = 10;
 const GROUP_MEMBERS_LIST_BOTTOM_SPACER = 28;
@@ -323,6 +379,47 @@ const CarouselPaginationDot = ({ active }: { active: boolean }) => {
     </Svg>
   );
 };
+
+// ---------------------------------------------------------------------------
+// HomePresentationDotIndicator
+// Self-contained indicator whose active index is driven via an imperative ref.
+// Only the tiny dot row re-renders when the carousel scrolls — the massive
+// FrontScreen component is NOT involved, eliminating the 2-3 second lag.
+// ---------------------------------------------------------------------------
+type PresentationDotsHandle = { setIndex: (n: number) => void };
+
+const HomePresentationDotIndicator = React.memo(
+  React.forwardRef<
+    PresentationDotsHandle,
+    { count: number; onPress?: () => void }
+  >(({ count, onPress }, ref) => {
+    const [activeIndex, setActiveIndex] = React.useState(0);
+
+    React.useImperativeHandle(ref, () => ({
+      setIndex: (n: number) => setActiveIndex(n),
+    }), []);
+
+    const dots = (
+      <View style={styles.carouselDots}>
+        {Array.from({ length: count }).map((_, i) => (
+          <CarouselPaginationDot key={i} active={i === activeIndex} />
+        ))}
+      </View>
+    );
+
+    if (!onPress) return dots;
+
+    return (
+      <TouchableOpacity
+        onPress={onPress}
+        activeOpacity={0.7}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      >
+        {dots}
+      </TouchableOpacity>
+    );
+  })
+);
 
 const HOME_PROFILE_RING_DEFAULT_BANNER_SIZE = Platform.OS === 'android'
   ? BannerAdSize.BANNER
@@ -707,6 +804,8 @@ const CHAT_INPUT_KEYBOARD_GAP = Platform.OS === 'ios' ? 18 : 10;
 const CHAT_INPUT_MAX_HEIGHT = 140;
 const CHANNEL_CHAT_PAGE_SIZE = 40;
 const CHANNEL_CHAT_LOAD_OLDER_TOP_THRESHOLD = 100;
+const CHANNEL_CHAT_MAX_LOADED_CONVERSATIONS = 180;
+const CHANNEL_CHAT_TRIMMED_CONVERSATIONS = 120;
 const GROUP_CHAT_PAGE_SIZE = 40;
 const GROUP_CHAT_LOAD_OLDER_TOP_THRESHOLD = 100;
 
@@ -1361,11 +1460,14 @@ const FrontScreen = ({
   const sessionRequiredTitle = localize({ es: 'Sesión requerida', en: 'Session required', fr: 'Session requise', pt: 'Sessão obrigatória', de: 'Sitzung erforderlich', it: 'Sessione richiesta' });
   const permissionRequiredTitle = localize({ es: 'Permiso requerido', en: 'Permission required', fr: 'Autorisation requise', pt: 'Permissão obrigatória', de: 'Berechtigung erforderlich', it: 'Permesso richiesto' });
   const adUnavailableTitle = localize({ es: 'Anuncio no disponible', en: 'Ad unavailable', fr: 'Annonce indisponible', pt: 'Anúncio indisponível', de: 'Anzeige nicht verfügbar', it: 'Annuncio non disponibile' });
+  const fallbackUserLabel = localize({ es: 'usuario', en: 'user', fr: 'utilisateur', pt: 'usuário', de: 'Benutzer', it: 'utente' });
+  const fallbackHostLabel = localize({ es: 'anfitrión', en: 'host', fr: 'hôte', pt: 'anfitrião', de: 'Gastgeber', it: 'host' });
 
   const [homeProfileRingBannerReady, setHomeProfileRingBannerReady] = useState(false);
   const [homeProfileRingBannerSize, setHomeProfileRingBannerSize] = useState(HOME_PROFILE_RING_DEFAULT_BANNER_SIZE);
   const [homeProfileRingBannerRequestKey, setHomeProfileRingBannerRequestKey] = useState(0);
   const safeAreaInsets = useSafeAreaInsets();
+  const topSystemOffset = Math.max(safeAreaInsets.top, ANDROID_SAFE_TOP);
   const bottomSystemOffset = safeAreaInsets.bottom;
 
   const [keintiVerified, setKeintiVerified] = useState(false);
@@ -2384,8 +2486,8 @@ const FrontScreen = ({
   const [hasHomePostsLoadedOnce, setHasHomePostsLoadedOnce] = useState(false);
   const [isHomeMainScrollEnabled, setIsHomeMainScrollEnabled] = useState(true);
   const isHomeCarouselGestureActiveRef = useRef(false);
-  const homePagerRef = useRef<PagerView | null>(null);
-  const homePagerIndexRef = useRef(0);
+  const homePagerTransitionInFlightRef = useRef(false);
+  const presentationDotsRefsMap = useRef<Record<string, PresentationDotsHandle | null>>({});
   const prevHomeAnimatedIndexRef = useRef(0);
   const homeTabDidMountRef = useRef(false);
   const [homeRefreshCounter, setHomeRefreshCounter] = useState(0);
@@ -2642,7 +2744,27 @@ const FrontScreen = ({
     }, 0);
   }, [getChannelMessageSortKey, normalizeChannelMessageUsername]);
 
-  const channelChatRenderModel = useMemo(() => {
+  const currentChannelOwnerEmail = String(
+    (selectedChannel ? (selectedChannel as any)?.publisher_email : userEmail) ?? ''
+  ).trim();
+
+  const getChannelRawMessageKey = useCallback((msg: any, index: number) => (
+    String(msg?.id ?? `${msg?.sender_email ?? 'u'}:${msg?.created_at ?? ''}:${index}`)
+  ), []);
+
+  const buildChannelChatListSignature = useCallback((messages: any[]) => {
+    const firstId = messages.length ? String((messages[0] as any)?.id ?? '') : '';
+    const lastId = messages.length ? String((messages[messages.length - 1] as any)?.id ?? '') : '';
+    return `${messages.length}:${firstId}:${lastId}`;
+  }, []);
+
+  const buildChannelChatThreadArtifacts = useCallback((
+    sourceMessages: any[],
+    options?: {
+      ownerEmailForThisChat?: string | null;
+      viewerMode?: boolean;
+    }
+  ) => {
     type InlineReply = {
       id?: any;
       created_at?: any;
@@ -2652,58 +2774,61 @@ const FrontScreen = ({
 
     const repliesByMessageKey: Record<string, InlineReply[]> = {};
     const processedMessages: any[] = [];
+    const rawMessageKeysByConversationKey: Record<string, string[]> = {};
+    const isViewerMode = options?.viewerMode ?? !!selectedChannel;
+    const ownerEmailForThisChat = String(options?.ownerEmailForThisChat ?? currentChannelOwnerEmail).trim();
+    const lastMessageKeyByUsername: Record<string, string> = {};
+    const activeThreadKeyByUsername: Record<string, string> = {};
 
-    const isViewerMode = !!selectedChannel;
-    const ownerEmailForThisChat = selectedChannel ? (selectedChannel as any)?.publisher_email : userEmail;
+    sourceMessages.forEach((msg: any, rawIndex: number) => {
+      const rawKey = getChannelRawMessageKey(msg, rawIndex);
+      const isOwnerMessage = String(msg?.sender_email ?? '') === ownerEmailForThisChat;
+      const messageText = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
 
-    if (isViewerMode) {
-      // ── Viewer mode: thread messages the same way the host sees them ──
-      const lastMessageKeyByUsername: Record<string, string> = {};
-      const activeThreadKeyByUsername: Record<string, string> = {};
+      if (!isOwnerMessage) {
+        const senderHandle = normalizeChannelMessageUsername(msg);
+        const activeKey = senderHandle ? activeThreadKeyByUsername[senderHandle] : '';
+        if (activeKey) {
+          if (!repliesByMessageKey[activeKey]) repliesByMessageKey[activeKey] = [];
+          repliesByMessageKey[activeKey].push({ id: msg?.id, created_at: msg?.created_at, content: messageText, author: 'viewer' });
+          if (!rawMessageKeysByConversationKey[activeKey]) rawMessageKeysByConversationKey[activeKey] = [];
+          rawMessageKeysByConversationKey[activeKey].push(rawKey);
+          return;
+        }
+      }
 
-      chatMessages.forEach((msg: any, rawIndex: number) => {
-        const isOwnerMessage = String(msg?.sender_email ?? '') === String(ownerEmailForThisChat ?? '');
-        const messageText = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
-
-        // Link viewer messages as continuation of the active thread (if creator already replied).
-        if (!isOwnerMessage) {
-          const senderHandle = normalizeChannelMessageUsername(msg);
-          const activeKey = senderHandle ? activeThreadKeyByUsername[senderHandle] : '';
-          if (activeKey) {
-            if (!repliesByMessageKey[activeKey]) repliesByMessageKey[activeKey] = [];
-            repliesByMessageKey[activeKey].push({ id: msg?.id, created_at: msg?.created_at, content: messageText, author: 'viewer' });
+      if (isOwnerMessage && messageText.startsWith('@')) {
+        const firstSpaceIndex = messageText.indexOf(' ');
+        if (firstSpaceIndex > 0) {
+          const targetUsername = messageText.substring(0, firstSpaceIndex);
+          const content = messageText.substring(firstSpaceIndex + 1);
+          const targetMessageKey = activeThreadKeyByUsername[targetUsername] || lastMessageKeyByUsername[targetUsername];
+          if (targetMessageKey) {
+            if (!repliesByMessageKey[targetMessageKey]) repliesByMessageKey[targetMessageKey] = [];
+            repliesByMessageKey[targetMessageKey].push({ id: msg?.id, created_at: msg?.created_at, content, author: 'publisher' });
+            if (!rawMessageKeysByConversationKey[targetMessageKey]) rawMessageKeysByConversationKey[targetMessageKey] = [];
+            rawMessageKeysByConversationKey[targetMessageKey].push(rawKey);
+            activeThreadKeyByUsername[targetUsername] = targetMessageKey;
             return;
           }
         }
+      }
 
-        // Creator replies are detected by leading @mention.
-        if (isOwnerMessage && messageText.startsWith('@')) {
-          const firstSpaceIndex = messageText.indexOf(' ');
-          if (firstSpaceIndex > 0) {
-            const targetUsername = messageText.substring(0, firstSpaceIndex);
-            const content = messageText.substring(firstSpaceIndex + 1);
-            const targetMessageKey = activeThreadKeyByUsername[targetUsername] || lastMessageKeyByUsername[targetUsername];
-            if (targetMessageKey) {
-              if (!repliesByMessageKey[targetMessageKey]) repliesByMessageKey[targetMessageKey] = [];
-              repliesByMessageKey[targetMessageKey].push({ id: msg?.id, created_at: msg?.created_at, content, author: 'publisher' });
-              activeThreadKeyByUsername[targetUsername] = targetMessageKey;
-              return;
-            }
-          }
+      const key = String(msg?.id ?? `idx-${rawIndex}`);
+      const decorated = (typeof msg === 'string') ? msg : { ...msg, __key: key };
+      processedMessages.push(decorated);
+      if (!rawMessageKeysByConversationKey[key]) rawMessageKeysByConversationKey[key] = [];
+      rawMessageKeysByConversationKey[key].push(rawKey);
+
+      if (!isOwnerMessage) {
+        const senderHandle = normalizeChannelMessageUsername(msg);
+        if (senderHandle) {
+          lastMessageKeyByUsername[senderHandle] = key;
         }
+      }
+    });
 
-        const key = String(msg?.id ?? `idx-${rawIndex}`);
-        const decorated = (typeof msg === 'string') ? msg : { ...msg, __key: key };
-        processedMessages.push(decorated);
-
-        if (!isOwnerMessage) {
-          const senderHandle = normalizeChannelMessageUsername(msg);
-          if (senderHandle) {
-            lastMessageKeyByUsername[senderHandle] = key;
-          }
-        }
-      });
-
+    if (isViewerMode) {
       processedMessages.sort((a: any, b: any) => {
         const ta = getChannelMessageSortKey(a?.created_at, a?.id);
         const tb = getChannelMessageSortKey(b?.created_at, b?.id);
@@ -2713,62 +2838,15 @@ const FrontScreen = ({
         return ka.localeCompare(kb);
       });
     } else {
-      const lastMessageKeyByUsername: Record<string, string> = {};
-      const activeThreadKeyByUsername: Record<string, string> = {};
-
-      chatMessages.forEach((msg: any, rawIndex: number) => {
-        const isOwnerMessage = String(msg?.sender_email ?? '') === String(ownerEmailForThisChat ?? '');
-        const messageText = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
-
-        // Link viewer messages as continuation of the active thread (if creator already replied).
-        if (!isOwnerMessage) {
-          const senderHandle = normalizeChannelMessageUsername(msg);
-          const activeKey = senderHandle ? activeThreadKeyByUsername[senderHandle] : '';
-          if (activeKey) {
-            if (!repliesByMessageKey[activeKey]) repliesByMessageKey[activeKey] = [];
-            repliesByMessageKey[activeKey].push({ id: msg?.id, created_at: msg?.created_at, content: messageText, author: 'viewer' });
-            return;
-          }
-        }
-
-        // Creator replies are detected by leading @mention.
-        if (isOwnerMessage && messageText.startsWith('@')) {
-          const firstSpaceIndex = messageText.indexOf(' ');
-          if (firstSpaceIndex > 0) {
-            const targetUsername = messageText.substring(0, firstSpaceIndex);
-            const content = messageText.substring(firstSpaceIndex + 1);
-            const targetMessageKey = activeThreadKeyByUsername[targetUsername] || lastMessageKeyByUsername[targetUsername];
-            if (targetMessageKey) {
-              if (!repliesByMessageKey[targetMessageKey]) repliesByMessageKey[targetMessageKey] = [];
-              repliesByMessageKey[targetMessageKey].push({ id: msg?.id, created_at: msg?.created_at, content, author: 'publisher' });
-              activeThreadKeyByUsername[targetUsername] = targetMessageKey;
-              return;
-            }
-          }
-        }
-
-        const key = String(msg?.id ?? `idx-${rawIndex}`);
-        const decorated = (typeof msg === 'string') ? msg : { ...msg, __key: key };
-        processedMessages.push(decorated);
-
-        if (!isOwnerMessage) {
-          const senderHandle = normalizeChannelMessageUsername(msg);
-          if (senderHandle) {
-            lastMessageKeyByUsername[senderHandle] = key;
-          }
-        }
-      });
-
-      // Sort conversations (threads and non-threads) by last activity.
       const activityTimeByKey: Record<string, number> = {};
       processedMessages.forEach((m: any, idx: number) => {
-        const k = String(m?.__key ?? m?.id ?? `idx-${idx}`);
-        activityTimeByKey[k] = getChannelMessageSortKey(m?.created_at, m?.id);
+        const key = String(m?.__key ?? m?.id ?? `idx-${idx}`);
+        activityTimeByKey[key] = getChannelMessageSortKey(m?.created_at, m?.id);
       });
-      Object.keys(repliesByMessageKey).forEach((k) => {
-        const replies = repliesByMessageKey[k] || [];
-        replies.forEach((r) => {
-          activityTimeByKey[k] = Math.max(activityTimeByKey[k] || 0, getChannelMessageSortKey(r?.created_at, r?.id));
+      Object.keys(repliesByMessageKey).forEach((key) => {
+        const replies = repliesByMessageKey[key] || [];
+        replies.forEach((reply) => {
+          activityTimeByKey[key] = Math.max(activityTimeByKey[key] || 0, getChannelMessageSortKey(reply?.created_at, reply?.id));
         });
       });
       processedMessages.sort((a: any, b: any) => {
@@ -2781,8 +2859,65 @@ const FrontScreen = ({
       });
     }
 
-    const isChannelHostForThisView = !!userEmail && !!ownerEmailForThisChat && String(userEmail) === String(ownerEmailForThisChat);
-    const isJoinedChannelViewerForThisView = !!selectedChannel && !!userEmail && !!ownerEmailForThisChat && !isChannelHostForThisView;
+    return {
+      processedMessages,
+      repliesByMessageKey,
+      conversationKeysInOrder: processedMessages.map((msg: any, index: number) => String(msg?.__key ?? msg?.id ?? `idx-${index}`)),
+      rawMessageKeysByConversationKey,
+    };
+  }, [currentChannelOwnerEmail, getChannelMessageSortKey, getChannelRawMessageKey, normalizeChannelMessageUsername, selectedChannel]);
+
+  const trimChannelMessagesWindow = useCallback((
+    messages: any[],
+    options?: {
+      allowTrim?: boolean;
+      ownerEmailForThisChat?: string | null;
+      viewerMode?: boolean;
+    }
+  ) => {
+    if (!options?.allowTrim) {
+      return { messages, didTrim: false };
+    }
+
+    const artifacts = buildChannelChatThreadArtifacts(messages, options);
+    if (artifacts.conversationKeysInOrder.length <= CHANNEL_CHAT_MAX_LOADED_CONVERSATIONS) {
+      return { messages, didTrim: false };
+    }
+
+    const keepConversationKeys = new Set(artifacts.conversationKeysInOrder.slice(-CHANNEL_CHAT_TRIMMED_CONVERSATIONS));
+    const rawKeysToKeep = new Set<string>();
+    keepConversationKeys.forEach((key) => {
+      (artifacts.rawMessageKeysByConversationKey[key] || []).forEach((rawKey) => {
+        rawKeysToKeep.add(rawKey);
+      });
+    });
+
+    if (rawKeysToKeep.size === 0) {
+      const fallbackMessages = messages.slice(-CHANNEL_CHAT_TRIMMED_CONVERSATIONS);
+      return {
+        messages: fallbackMessages.length < messages.length ? fallbackMessages : messages,
+        didTrim: fallbackMessages.length < messages.length,
+      };
+    }
+
+    const trimmedMessages = messages.filter((msg: any, index: number) => rawKeysToKeep.has(getChannelRawMessageKey(msg, index)));
+    if (trimmedMessages.length >= messages.length) {
+      return { messages, didTrim: false };
+    }
+
+    return { messages: trimmedMessages, didTrim: true };
+  }, [buildChannelChatThreadArtifacts, getChannelRawMessageKey]);
+
+  const channelChatThreadArtifacts = useMemo(() => buildChannelChatThreadArtifacts(chatMessages, {
+    ownerEmailForThisChat: currentChannelOwnerEmail,
+    viewerMode: !!selectedChannel,
+  }), [buildChannelChatThreadArtifacts, chatMessages, currentChannelOwnerEmail, selectedChannel]);
+
+  const channelChatRenderModel = useMemo(() => {
+    const { processedMessages, repliesByMessageKey } = channelChatThreadArtifacts;
+
+    const isChannelHostForThisView = !!userEmail && !!currentChannelOwnerEmail && String(userEmail) === String(currentChannelOwnerEmail);
+    const isJoinedChannelViewerForThisView = !!selectedChannel && !!userEmail && !!currentChannelOwnerEmail && !isChannelHostForThisView;
     const baseMessagesToRender = (channelMessagesTab === 'Respuestas')
       ? processedMessages.filter((msg: any) => {
         const key = String(msg?.__key ?? msg?.id ?? '');
@@ -2806,12 +2941,10 @@ const FrontScreen = ({
       repliesByMessageKey,
     };
   }, [
-    chatMessages,
+    channelChatThreadArtifacts,
     selectedChannel,
     userEmail,
     channelMessagesTab,
-    getChannelMessageSortKey,
-    normalizeChannelMessageUsername,
   ]);
 
   const markSelectedJoinedChannelThreadsAsRead = useCallback(() => {
@@ -2867,8 +3000,9 @@ const FrontScreen = ({
 
   const setHomeCarouselGestureActive = (active: boolean) => {
     isHomeCarouselGestureActiveRef.current = active;
-    const nextScrollEnabled = !active;
-    setIsHomeMainScrollEnabled(prev => (prev === nextScrollEnabled ? prev : nextScrollEnabled));
+    // Home pager now uses vertical swipes, so carousel/social horizontal gestures
+    // no longer need to disable PagerView scrolling.
+    setIsHomeMainScrollEnabled(prev => (prev === true ? prev : true));
   };
 
   useEffect(() => {
@@ -3235,7 +3369,23 @@ const FrontScreen = ({
 
       if (response.ok) {
         const newMessage = await response.json();
-        setChatMessages(prev => [...prev, newMessage]);
+        setChatMessages(prev => {
+          const snapshot = resolveChannelChatStateSnapshot([...prev, newMessage], {
+            hasMoreOlderMessages: channelHasMoreOlderMessagesRef.current,
+            allowTrim: true,
+          });
+          channelOldestMessageIdRef.current = snapshot.oldestMessageId;
+          setChannelHasMoreOlderMessages(snapshot.hasMoreOlderMessages);
+          if (snapshot.didTrim) {
+            pendingChannelScrollToLatestAfterRefreshRef.current = true;
+          }
+          cacheChannelChatState(targetPostId, snapshot.messages, {
+            hasMoreOlderMessages: snapshot.hasMoreOlderMessages,
+            oldestMessageId: snapshot.oldestMessageId,
+            lastSig: snapshot.lastSig,
+          });
+          return snapshot.messages;
+        });
         setReplyingToUsername(null);
         setReplyingToMessageIndex(null);
         setShowChannelAttachmentPanel(false);
@@ -3310,13 +3460,23 @@ const FrontScreen = ({
       if (response.ok) {
         const data = await response.json();
         // Actualizar el estado local del mensaje
-        setChatMessages(prev =>
-          prev.map((msg: any) =>
+        setChatMessages(prev => {
+          const next = prev.map((msg: any) =>
             String(msg?.id) === String(messageId)
               ? { ...msg, hidden: data.hidden }
               : msg
-          )
-        );
+          );
+          const snapshot = resolveChannelChatStateSnapshot(next, {
+            hasMoreOlderMessages: channelHasMoreOlderMessagesRef.current,
+          });
+          channelOldestMessageIdRef.current = snapshot.oldestMessageId;
+          cacheChannelChatState(currentChannelPostIdRef.current, snapshot.messages, {
+            hasMoreOlderMessages: snapshot.hasMoreOlderMessages,
+            oldestMessageId: snapshot.oldestMessageId,
+            lastSig: snapshot.lastSig,
+          });
+          return snapshot.messages;
+        });
       }
     } catch (error) {
       console.error('Error toggling message visibility:', error);
@@ -3926,6 +4086,12 @@ const FrontScreen = ({
   const channelOldestMessageIdRef = useRef<number | null>(null);
   const channelOldestFetchInFlightRef = useRef<number | null>(null);
   const enteringChannelPostIdsRef = useRef<Set<string>>(new Set());
+  const channelChatStateCacheRef = useRef<Record<string, {
+    messages: any[];
+    hasMoreOlderMessages: boolean;
+    oldestMessageId: number | null;
+    lastSig: string;
+  }>>({});
 
   useEffect(() => {
     channelChatLoadingPostIdRef.current = channelChatLoadingPostId;
@@ -3936,12 +4102,75 @@ const FrontScreen = ({
     channelOldestMessageIdRef.current = null;
     channelOldestFetchInFlightRef.current = null;
     lastChatMessagesLengthRef.current = 0;
+    channelHasMoreOlderMessagesRef.current = true;
     setChannelHasMoreOlderMessages(true);
     setIsLoadingOlderChannelMessages(false);
     if (clearMessages) {
+      chatMessagesRef.current = [];
       setChatMessages([]);
     }
   };
+
+  const cacheChannelChatState = (
+    postIdLike: string | number | null | undefined,
+    messages: any[],
+    overrides?: {
+      hasMoreOlderMessages?: boolean;
+      oldestMessageId?: number | null;
+      lastSig?: string;
+    }
+  ) => {
+    const postId = String(postIdLike ?? '').trim();
+    if (!postId) return;
+
+    channelChatStateCacheRef.current[postId] = {
+      messages: [...messages],
+      hasMoreOlderMessages: overrides?.hasMoreOlderMessages ?? channelHasMoreOlderMessagesRef.current,
+      oldestMessageId: overrides?.oldestMessageId ?? channelOldestMessageIdRef.current,
+      lastSig: overrides?.lastSig ?? channelChatLastSigRef.current,
+    };
+  };
+
+  const restoreChannelChatState = (postIdLike: string | number | null | undefined) => {
+    const postId = String(postIdLike ?? '').trim();
+    if (!postId) return false;
+
+    const cached = channelChatStateCacheRef.current[postId];
+    if (!cached) return false;
+
+    currentChannelPostIdRef.current = postId;
+    channelChatLastSigRef.current = cached.lastSig || '';
+    channelOldestMessageIdRef.current = cached.oldestMessageId ?? null;
+    channelOldestFetchInFlightRef.current = null;
+    lastChatMessagesLengthRef.current = cached.messages.length;
+    chatMessagesRef.current = cached.messages;
+    channelHasMoreOlderMessagesRef.current = cached.hasMoreOlderMessages;
+    setChannelHasMoreOlderMessages(cached.hasMoreOlderMessages);
+    setIsLoadingOlderChannelMessages(false);
+    setChatMessages(cached.messages);
+    return true;
+  };
+
+  const resolveChannelChatStateSnapshot = useCallback((
+    messages: any[],
+    options: {
+      hasMoreOlderMessages: boolean;
+      allowTrim?: boolean;
+      ownerEmailForThisChat?: string | null;
+      viewerMode?: boolean;
+    }
+  ) => {
+    const trimResult = trimChannelMessagesWindow(messages, options);
+    const finalMessages = trimResult.messages;
+    const nextOldest = Number((finalMessages[0] as any)?.id);
+    return {
+      messages: finalMessages,
+      oldestMessageId: Number.isFinite(nextOldest) ? nextOldest : null,
+      hasMoreOlderMessages: trimResult.didTrim ? true : options.hasMoreOlderMessages,
+      lastSig: buildChannelChatListSignature(finalMessages),
+      didTrim: trimResult.didTrim,
+    };
+  }, [buildChannelChatListSignature, trimChannelMessagesWindow]);
 
   const openJoinedChannelChat = (channel: any) => {
     const postId = String(channel?.post_id ?? channel?.postId ?? channel?.id ?? '').trim();
@@ -4208,12 +4437,14 @@ const FrontScreen = ({
 
   const chatScrollViewRef = useRef<FlatList<any>>(null);
   const groupChatScrollViewRef = useRef<ScrollView>(null);
+  const chatMessagesRef = useRef<any[]>([]);
   const lastChatMessagesLengthRef = useRef(0);
   const lastGroupChatMessagesLengthRef = useRef(0);
   const channelScrollOffsetYRef = useRef(0);
   const channelContentHeightRef = useRef(0);
   const pendingChannelPrependAdjustRef = useRef<{ previousHeight: number; previousOffset: number } | null>(null);
   const pendingChannelScrollToLatestAfterRefreshRef = useRef(false);
+  const channelHasMoreOlderMessagesRef = useRef(true);
   const groupScrollOffsetYRef = useRef(0);
   const groupContentHeightRef = useRef(0);
   const pendingGroupPrependAdjustRef = useRef<{ previousHeight: number; previousOffset: number } | null>(null);
@@ -4238,6 +4469,14 @@ const FrontScreen = ({
   const groupScrollToLatestPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [groupHasMoreOlderMessages, setGroupHasMoreOlderMessages] = useState(true);
   const [isLoadingOlderGroupMessages, setIsLoadingOlderGroupMessages] = useState(false);
+
+  useEffect(() => {
+    chatMessagesRef.current = chatMessages;
+  }, [chatMessages]);
+
+  useEffect(() => {
+    channelHasMoreOlderMessagesRef.current = channelHasMoreOlderMessages;
+  }, [channelHasMoreOlderMessages]);
 
   useEffect(() => {
     return () => {
@@ -4323,6 +4562,8 @@ const FrontScreen = ({
   const [activeProfileImageIndex, setActiveProfileImageIndex] = useState(0);
   const editablePresentationActiveIndexRef = useRef(0);
   const profilePresentationActiveIndexRef = useRef(0);
+  const profileDotsRef = useRef<PresentationDotsHandle | null>(null);
+  const editDotsRef = useRef<PresentationDotsHandle | null>(null);
   const [profileViewMountKey, setProfileViewMountKey] = useState(0);
   const [profileCarouselMountKey, setProfileCarouselMountKey] = useState(0);
   const [profilePresentation, setProfilePresentation] = useState<PresentationContent | null>(null);
@@ -5497,8 +5738,16 @@ const FrontScreen = ({
   const nextPublicationIconOpacity = useRef(new Animated.Value(1)).current;
   const publicationTransitionOpacity = useRef(new Animated.Value(1)).current;
   const publicationTransitionTranslateY = useRef(new Animated.Value(0)).current;
+  const publicationTransitionVeilOpacity = useRef(new Animated.Value(0)).current;
+  const homePublicationExitAnimRef = useRef<Animated.CompositeAnimation | null>(null);
+  const homePullConfirmAnim = useRef(new Animated.Value(0)).current;
+  const homePullConfirmAnimRef = useRef<Animated.CompositeAnimation | null>(null);
   const prevIsNextPublicationAnimatingRef = useRef(false);
   const seenPublicationIdsRef = useRef<Set<string>>(new Set());
+  const homePublicationScrollYRef = useRef(0);
+  const homePublicationSwipeLockTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const homePublicationAdvanceQueuedRef = useRef(false);
+  const [isHomePublicationAtTop, setIsHomePublicationAtTop] = useState(true);
   const [myPublication, setMyPublication] = useState<Publication | undefined>(undefined);
   const isPublished = !!myPublication;
   const userPublication = myPublication;
@@ -5627,27 +5876,50 @@ const FrontScreen = ({
   useEffect(() => {
     if (prevHomeAnimatedIndexRef.current === currentPostIndex) return;
     prevHomeAnimatedIndexRef.current = currentPostIndex;
+    homePublicationScrollYRef.current = 0;
+    setIsHomePublicationAtTop(true);
+
+    if (homePublicationExitAnimRef.current) {
+      homePublicationExitAnimRef.current.stop();
+      homePublicationExitAnimRef.current = null;
+    }
 
     publicationTransitionOpacity.stopAnimation();
     publicationTransitionTranslateY.stopAnimation();
-    publicationTransitionOpacity.setValue(0.84);
-    publicationTransitionTranslateY.setValue(14);
+    publicationTransitionVeilOpacity.stopAnimation();
+    publicationTransitionOpacity.setValue(0.94);
+    publicationTransitionTranslateY.setValue(32);
+    publicationTransitionVeilOpacity.setValue(0.045);
+
+    // Reset the pull-confirm bar instantly so it doesn't show on the new publication.
+    if (homePullConfirmAnimRef.current) {
+      homePullConfirmAnimRef.current.stop();
+      homePullConfirmAnimRef.current = null;
+    }
+    homePullConfirmAnim.stopAnimation();
+    homePullConfirmAnim.setValue(0);
 
     Animated.parallel([
       Animated.timing(publicationTransitionOpacity, {
         toValue: 1,
-        duration: 210,
+        duration: 230,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
       Animated.timing(publicationTransitionTranslateY, {
         toValue: 0,
-        duration: 210,
+        duration: 230,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(publicationTransitionVeilOpacity, {
+        toValue: 0,
+        duration: 230,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
     ]).start();
-  }, [currentPostIndex, publicationTransitionOpacity, publicationTransitionTranslateY]);
+  }, [currentPostIndex, homePullConfirmAnim, publicationTransitionOpacity, publicationTransitionTranslateY, publicationTransitionVeilOpacity]);
 
   useEffect(() => {
     const wasAnimating = prevIsNextPublicationAnimatingRef.current;
@@ -5707,7 +5979,10 @@ const FrontScreen = ({
 
     if (isInOwnChannelChat && !enteredOwnChannelChatRef.current) {
       currentChannelPostIdRef.current = ownPostId;
-      resetChannelChatPaginationState(true);
+      const restoredFromCache = restoreChannelChatState(ownPostId);
+      if (!restoredFromCache) {
+        resetChannelChatPaginationState(true);
+      }
       pendingChannelScrollToLatestAfterRefreshRef.current = true;
       setIsChannelNearBottom(true);
       setShowChannelScrollToLatest(false);
@@ -5716,8 +5991,13 @@ const FrontScreen = ({
       setReplyingToMessageIndex(null);
       setReplyingToUsername(null);
       setExpandedMention(null);
-      channelChatLoadingPostIdRef.current = ownPostId;
-      setChannelChatLoadingPostId(ownPostId);
+      if (restoredFromCache) {
+        channelChatLoadingPostIdRef.current = null;
+        setChannelChatLoadingPostId(null);
+      } else {
+        channelChatLoadingPostIdRef.current = ownPostId;
+        setChannelChatLoadingPostId(ownPostId);
+      }
     }
 
     enteredOwnChannelChatRef.current = isInOwnChannelChat;
@@ -5776,34 +6056,6 @@ const FrontScreen = ({
       return { ...prev, [key]: !isVisible };
     });
   }, [startHomeRingIconPulse, stopHomeRingIconPulse]);
-
-  const handleHomePageSelected = useCallback((nextIndex: number) => {
-    homePagerIndexRef.current = nextIndex;
-    if (nextIndex === currentPostIndex) return;
-
-    if (hasSeenHomeSwipeTutorial === false) {
-      markHomeSwipeTutorialSeen();
-    }
-
-    // Hide rings & stop animation for the publication the user is leaving.
-    const leavingPublication = publications[currentPostIndex];
-    if (leavingPublication) {
-      const leavingId = String(leavingPublication.id);
-      setHomeProfileRingsVisibleByPostId(prev => {
-        if (prev[leavingId] !== true) return prev;
-        return { ...prev, [leavingId]: false };
-      });
-    }
-    stopHomeRingIconPulse();
-
-    setCurrentPostIndex(nextIndex);
-    const nextPublication = publications[nextIndex];
-    const nextPublicationId = nextPublication?.id != null ? String(nextPublication.id) : '';
-    if (nextPublicationId) {
-      seenPublicationIdsRef.current.add(nextPublicationId);
-    }
-    trackHomePublicationAdvanceForAds();
-  }, [currentPostIndex, hasSeenHomeSwipeTutorial, markHomeSwipeTutorialSeen, publications, stopHomeRingIconPulse]);
 
   const startNextPublicationProgressAnimation = () => {
     if (nextPublicationAnimRef.current) {
@@ -6040,6 +6292,10 @@ const FrontScreen = ({
 
   useEffect(() => {
     return () => {
+      if (homePublicationSwipeLockTimeoutRef.current) {
+        clearTimeout(homePublicationSwipeLockTimeoutRef.current);
+        homePublicationSwipeLockTimeoutRef.current = null;
+      }
       if (nextPublicationAnimRef.current) {
         nextPublicationAnimRef.current.stop();
         nextPublicationAnimRef.current = null;
@@ -6064,7 +6320,7 @@ const FrontScreen = ({
 
   useEffect(() => {
     if (publications.length === 0) {
-      homePagerIndexRef.current = 0;
+      homePagerTransitionInFlightRef.current = false;
       if (currentPostIndex !== 0) {
         setCurrentPostIndex(0);
       }
@@ -6074,17 +6330,8 @@ const FrontScreen = ({
     const maxIndex = Math.max(0, publications.length - 1);
     if (currentPostIndex > maxIndex) {
       setCurrentPostIndex(maxIndex);
-      return;
     }
-
-    if (homePagerIndexRef.current === currentPostIndex) return;
-
-    requestAnimationFrame(() => {
-      if (!homePagerRef.current) return;
-      homePagerRef.current.setPageWithoutAnimation(currentPostIndex);
-      homePagerIndexRef.current = currentPostIndex;
-    });
-  }, [currentPostIndex, publications.length]);
+  }, [currentPostIndex, publications]);
 
   const openGroupRequestPanel = async (targetUsername: string) => {
     if (!authToken) {
@@ -6800,11 +7047,18 @@ const FrontScreen = ({
           ? pageMessages.length >= CHANNEL_CHAT_PAGE_SIZE
           : Boolean((data as any)?.hasMore);
 
-        const getMsgKey = (msg: any, idx: number) => String(msg?.id ?? `${msg?.sender_email ?? 'u'}:${msg?.created_at ?? ''}:${idx}`);
-        const buildSig = (messages: any[]) => {
-          const firstId = messages.length ? String((messages[0] as any)?.id ?? '') : '';
-          const lastId = messages.length ? String((messages[messages.length - 1] as any)?.id ?? '') : '';
-          return `${messages.length}:${firstId}:${lastId}`;
+        const getMsgKey = getChannelRawMessageKey;
+        const mergeMessages = (baseMessages: any[], incomingMessages: any[]) => {
+          const byKey = new Map<string, any>();
+          baseMessages.forEach((m: any, i: number) => byKey.set(getMsgKey(m, i), m));
+          incomingMessages.forEach((m: any, i: number) => byKey.set(getMsgKey(m, i), m));
+
+          return Array.from(byKey.values()).sort((a: any, b: any) => {
+            const ai = Number(a?.id);
+            const bi = Number(b?.id);
+            if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) return ai - bi;
+            return String(a?.created_at ?? '').localeCompare(String(b?.created_at ?? ''));
+          });
         };
 
         if (mode === 'older') {
@@ -6820,50 +7074,113 @@ const FrontScreen = ({
             const seen = new Set(prev.map((m: any, i: number) => getMsgKey(m, i)));
             const toPrepend = pageMessages.filter((m: any, i: number) => !seen.has(getMsgKey(m, i)));
             if (toPrepend.length === 0) return prev;
-            const next = [...toPrepend, ...prev];
-            const nextOldest = Number((next[0] as any)?.id);
-            channelOldestMessageIdRef.current = Number.isFinite(nextOldest) ? nextOldest : null;
-            channelChatLastSigRef.current = buildSig(next);
-            return next;
+            const snapshot = resolveChannelChatStateSnapshot([...toPrepend, ...prev], {
+              hasMoreOlderMessages: hasMore,
+            });
+            channelOldestMessageIdRef.current = snapshot.oldestMessageId;
+            channelChatLastSigRef.current = snapshot.lastSig;
+            cacheChannelChatState(idToFetch, snapshot.messages, {
+              hasMoreOlderMessages: snapshot.hasMoreOlderMessages,
+              oldestMessageId: snapshot.oldestMessageId,
+              lastSig: snapshot.lastSig,
+            });
+            return snapshot.messages;
           });
           return;
         }
 
         if (mode === 'latest') {
-          const nextSig = buildSig(pageMessages);
-          const nextOldest = Number((pageMessages[0] as any)?.id);
-          channelOldestMessageIdRef.current = Number.isFinite(nextOldest) ? nextOldest : null;
-          setChannelHasMoreOlderMessages(hasMore);
-          if (nextSig !== channelChatLastSigRef.current) {
-            channelChatLastSigRef.current = nextSig;
-            setChatMessages(pageMessages);
+          const shouldPreserveLoadedHistory = chatMessagesRef.current.length > 0;
+
+          if (!shouldPreserveLoadedHistory) {
+            const snapshot = resolveChannelChatStateSnapshot(pageMessages, {
+              hasMoreOlderMessages: hasMore,
+            });
+            channelOldestMessageIdRef.current = snapshot.oldestMessageId;
+            setChannelHasMoreOlderMessages(snapshot.hasMoreOlderMessages);
+            cacheChannelChatState(idToFetch, snapshot.messages, {
+              hasMoreOlderMessages: snapshot.hasMoreOlderMessages,
+              oldestMessageId: snapshot.oldestMessageId,
+              lastSig: snapshot.lastSig,
+            });
+            if (snapshot.lastSig !== channelChatLastSigRef.current) {
+              channelChatLastSigRef.current = snapshot.lastSig;
+              setChatMessages(snapshot.messages);
+            }
+            return;
           }
+
+          setChatMessages((prev) => {
+            if (!prev.length) {
+              const snapshot = resolveChannelChatStateSnapshot(pageMessages, {
+                hasMoreOlderMessages: hasMore,
+              });
+              channelOldestMessageIdRef.current = snapshot.oldestMessageId;
+              setChannelHasMoreOlderMessages(snapshot.hasMoreOlderMessages);
+              cacheChannelChatState(idToFetch, snapshot.messages, {
+                hasMoreOlderMessages: snapshot.hasMoreOlderMessages,
+                oldestMessageId: snapshot.oldestMessageId,
+                lastSig: snapshot.lastSig,
+              });
+              channelChatLastSigRef.current = snapshot.lastSig;
+              return snapshot.messages;
+            }
+
+            const snapshot = resolveChannelChatStateSnapshot(mergeMessages(prev, pageMessages), {
+              hasMoreOlderMessages: channelHasMoreOlderMessagesRef.current,
+              allowTrim: isChannelNearBottom || pendingChannelScrollToLatestAfterRefreshRef.current,
+            });
+            channelOldestMessageIdRef.current = snapshot.oldestMessageId;
+            setChannelHasMoreOlderMessages(snapshot.hasMoreOlderMessages);
+            if (snapshot.didTrim) {
+              pendingChannelScrollToLatestAfterRefreshRef.current = true;
+            }
+            cacheChannelChatState(idToFetch, snapshot.messages, {
+              hasMoreOlderMessages: snapshot.hasMoreOlderMessages,
+              oldestMessageId: snapshot.oldestMessageId,
+              lastSig: snapshot.lastSig,
+            });
+            if (snapshot.lastSig === channelChatLastSigRef.current) return prev;
+            channelChatLastSigRef.current = snapshot.lastSig;
+            return snapshot.messages;
+          });
           return;
         }
 
         // poll: merge latest page into the currently loaded slice without dropping older loaded pages.
         setChatMessages((prev) => {
           if (!prev.length) {
-            const nextSig = buildSig(pageMessages);
-            channelChatLastSigRef.current = nextSig;
-            return pageMessages;
+            const snapshot = resolveChannelChatStateSnapshot(pageMessages, {
+              hasMoreOlderMessages: hasMore,
+            });
+            channelOldestMessageIdRef.current = snapshot.oldestMessageId;
+            setChannelHasMoreOlderMessages(snapshot.hasMoreOlderMessages);
+            cacheChannelChatState(idToFetch, snapshot.messages, {
+              hasMoreOlderMessages: snapshot.hasMoreOlderMessages,
+              oldestMessageId: snapshot.oldestMessageId,
+              lastSig: snapshot.lastSig,
+            });
+            channelChatLastSigRef.current = snapshot.lastSig;
+            return snapshot.messages;
           }
 
-          const byKey = new Map<string, any>();
-          prev.forEach((m: any, i: number) => byKey.set(getMsgKey(m, i), m));
-          pageMessages.forEach((m: any, i: number) => byKey.set(getMsgKey(m, i), m));
-
-          const merged = Array.from(byKey.values()).sort((a: any, b: any) => {
-            const ai = Number(a?.id);
-            const bi = Number(b?.id);
-            if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) return ai - bi;
-            return String(a?.created_at ?? '').localeCompare(String(b?.created_at ?? ''));
+          const snapshot = resolveChannelChatStateSnapshot(mergeMessages(prev, pageMessages), {
+            hasMoreOlderMessages: channelHasMoreOlderMessagesRef.current,
+            allowTrim: isChannelNearBottom || pendingChannelScrollToLatestAfterRefreshRef.current,
           });
-
-          const nextSig = buildSig(merged);
-          if (nextSig === channelChatLastSigRef.current) return prev;
-          channelChatLastSigRef.current = nextSig;
-          return merged;
+          channelOldestMessageIdRef.current = snapshot.oldestMessageId;
+          setChannelHasMoreOlderMessages(snapshot.hasMoreOlderMessages);
+          if (snapshot.didTrim) {
+            pendingChannelScrollToLatestAfterRefreshRef.current = true;
+          }
+          cacheChannelChatState(idToFetch, snapshot.messages, {
+            hasMoreOlderMessages: snapshot.hasMoreOlderMessages,
+            oldestMessageId: snapshot.oldestMessageId,
+            lastSig: snapshot.lastSig,
+          });
+          if (snapshot.lastSig === channelChatLastSigRef.current) return prev;
+          channelChatLastSigRef.current = snapshot.lastSig;
+          return snapshot.messages;
         });
       } else {
         // If we cannot fetch messages (expired/not authorized/etc.), avoid leaving the UI stuck behind a loader.
@@ -7036,6 +7353,7 @@ const FrontScreen = ({
 
   useEffect(() => {
     if (authToken) return;
+    channelChatStateCacheRef.current = {};
     resetChannelChatPaginationState(true);
     setChannelInteractions([]);
     setShowChannelScrollToLatest(false);
@@ -7540,8 +7858,7 @@ const FrontScreen = ({
     if (total <= 1) {
       homePresentationActiveIndexRef.current[key] = 0;
       setActivePresentationIndices(prev => {
-        const current = prev[key] ?? 0;
-        if (current === 0) return prev;
+        if ((prev[key] ?? 0) === 0) return prev;
         return { ...prev, [key]: 0 };
       });
       return;
@@ -7549,24 +7866,13 @@ const FrontScreen = ({
 
     const w = Math.max(1, Number(layoutWidth) || HOME_CARD_WIDTH);
     const x = Math.max(0, Number(contentOffsetX) || 0);
-    const progress = x / w;
-    const threshold = 0.12;
+    const nextIndex = Math.min(total - 1, Math.max(0, Math.round(x / w)));
 
-    let nextIndex = homePresentationActiveIndexRef.current[key] ?? 0;
-    while (nextIndex < total - 1 && progress > nextIndex + threshold) {
-      nextIndex += 1;
-    }
-    while (nextIndex > 0 && progress < nextIndex - threshold) {
-      nextIndex -= 1;
-    }
-
-    const prevIndex = homePresentationActiveIndexRef.current[key];
-    if (prevIndex === nextIndex) return;
+    if (homePresentationActiveIndexRef.current[key] === nextIndex) return;
     homePresentationActiveIndexRef.current[key] = nextIndex;
 
     setActivePresentationIndices(prev => {
-      const current = prev[key] ?? 0;
-      if (current === nextIndex) return prev;
+      if ((prev[key] ?? 0) === nextIndex) return prev;
       return { ...prev, [key]: nextIndex };
     });
   }, []);
@@ -7588,6 +7894,174 @@ const FrontScreen = ({
     return `${String(pub.id || '')}::${imageParts.join('|')}`;
   }, [activeHomePublication]);
 
+  const isActiveHomePublicationSwipeReady = useMemo(() => {
+    const pub = activeHomePublication;
+    if (!pub) return false;
+
+    const images = Array.isArray(pub.presentation?.images) ? pub.presentation.images : [];
+    if (images.length === 0) return true;
+
+    const pubId = String(pub.id || '');
+    if (!pubId) return true;
+
+    return homePresentationImagesLoaded[pubId]?.[0] === true;
+  }, [activeHomePublication, homePresentationImagesLoaded]);
+
+  const shouldShowHomePublicationSwipeHint =
+    activeBottomTab === 'home' &&
+    isActiveHomePublicationSwipeReady &&
+    isHomePublicationAtTop &&
+    publications.length > 1;
+
+  const advanceHomePublicationFromTopGesture = useCallback(() => {
+    if (homePagerTransitionInFlightRef.current) return;
+    if (!shouldShowHomePublicationSwipeHint) return;
+
+    const nextIndex = getHomePagerNeighborIndices(currentPostIndex, publications.length).right;
+    if (nextIndex === currentPostIndex) return;
+
+    homePagerTransitionInFlightRef.current = true;
+    if (homePublicationSwipeLockTimeoutRef.current) {
+      clearTimeout(homePublicationSwipeLockTimeoutRef.current);
+      homePublicationSwipeLockTimeoutRef.current = null;
+    }
+
+    if (hasSeenHomeSwipeTutorial === false) {
+      markHomeSwipeTutorialSeen();
+    }
+
+    const leavingPublication = publications[currentPostIndex];
+    if (leavingPublication) {
+      const leavingId = String(leavingPublication.id);
+      setHomeProfileRingsVisibleByPostId(prev => {
+        if (prev[leavingId] !== true) return prev;
+        return { ...prev, [leavingId]: false };
+      });
+    }
+    stopHomeRingIconPulse();
+
+    const seen = seenPublicationIdsRef.current;
+    const nextPublication = publications[nextIndex];
+    const nextPublicationId = nextPublication?.id != null ? String(nextPublication.id) : '';
+    if (nextPublicationId) {
+      seen.add(nextPublicationId);
+      homePresentationActiveIndexRef.current[nextPublicationId] = 0;
+    }
+
+    setActivePresentationIndices(prev => {
+      if (nextPublicationId && (prev[nextPublicationId] ?? 0) !== 0) {
+        return { ...prev, [nextPublicationId]: 0 };
+      }
+      return prev;
+    });
+
+    if (homePublicationExitAnimRef.current) {
+      homePublicationExitAnimRef.current.stop();
+      homePublicationExitAnimRef.current = null;
+    }
+
+    // Pull-confirm burst on the hint bar, then exit the publication
+    if (homePullConfirmAnimRef.current) {
+      homePullConfirmAnimRef.current.stop();
+      homePullConfirmAnimRef.current = null;
+    }
+    homePullConfirmAnim.stopAnimation();
+    homePullConfirmAnim.setValue(0);
+
+    publicationTransitionOpacity.stopAnimation();
+    publicationTransitionTranslateY.stopAnimation();
+    publicationTransitionVeilOpacity.stopAnimation();
+    publicationTransitionOpacity.setValue(1);
+    publicationTransitionTranslateY.setValue(0);
+    publicationTransitionVeilOpacity.setValue(0);
+
+    const burstAndExit = Animated.sequence([
+      // 1) Expand the hint bar fully on the current publication
+      Animated.timing(homePullConfirmAnim, {
+        toValue: 1,
+        duration: 200,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      // 2) Then slide out the publication
+      Animated.parallel([
+        Animated.timing(publicationTransitionOpacity, {
+          toValue: 0.97,
+          duration: 105,
+          easing: Easing.in(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(publicationTransitionTranslateY, {
+          toValue: -13,
+          duration: 105,
+          easing: Easing.in(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(publicationTransitionVeilOpacity, {
+          toValue: 0.045,
+          duration: 105,
+          easing: Easing.in(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]),
+    ]);
+    homePublicationExitAnimRef.current = burstAndExit;
+
+    burstAndExit.start(() => {
+      homePublicationExitAnimRef.current = null;
+      setCurrentPostIndex(nextIndex);
+      trackHomePublicationAdvanceForAds();
+
+      homePublicationSwipeLockTimeoutRef.current = setTimeout(() => {
+        homePagerTransitionInFlightRef.current = false;
+        homePublicationSwipeLockTimeoutRef.current = null;
+      }, 250);
+    });
+  }, [
+    currentPostIndex,
+    hasSeenHomeSwipeTutorial,
+    markHomeSwipeTutorialSeen,
+    publications,
+    publicationTransitionVeilOpacity,
+    shouldShowHomePublicationSwipeHint,
+    stopHomeRingIconPulse,
+  ]);
+
+  const handleHomePublicationRefreshTrigger = useCallback(() => {
+    if (activeBottomTab !== 'home' || publications.length <= 1) return;
+    if (homePagerTransitionInFlightRef.current) {
+      homePublicationAdvanceQueuedRef.current = true;
+      return;
+    }
+    if (!shouldShowHomePublicationSwipeHint) return;
+    advanceHomePublicationFromTopGesture();
+  }, [activeBottomTab, advanceHomePublicationFromTopGesture, publications.length, shouldShowHomePublicationSwipeHint]);
+
+  useEffect(() => {
+    if (!homePublicationAdvanceQueuedRef.current) return;
+    if (homePagerTransitionInFlightRef.current) return;
+    if (!shouldShowHomePublicationSwipeHint) return;
+
+    const queuedAdvanceFrame = requestAnimationFrame(() => {
+      if (!homePublicationAdvanceQueuedRef.current) return;
+      if (homePagerTransitionInFlightRef.current) return;
+      if (!shouldShowHomePublicationSwipeHint) return;
+      homePublicationAdvanceQueuedRef.current = false;
+      advanceHomePublicationFromTopGesture();
+    });
+
+    return () => {
+      cancelAnimationFrame(queuedAdvanceFrame);
+    };
+  }, [advanceHomePublicationFromTopGesture, currentPostIndex, shouldShowHomePublicationSwipeHint]);
+
+  useEffect(() => {
+    if (!shouldShowHomePublicationSwipeHint) {
+      homePullConfirmAnim.stopAnimation();
+      homePullConfirmAnim.setValue(0);
+    }
+  }, [homePullConfirmAnim, shouldShowHomePublicationSwipeHint]);
+
   const updateProfilePresentationActiveIndexFromScroll = useCallback((
     contentOffsetX: number,
     layoutWidth: number,
@@ -7601,17 +8075,12 @@ const FrontScreen = ({
     }
 
     const w = Math.max(1, Number(layoutWidth) || PROFILE_CONTENT_WIDTH);
+          if (homePublicationExitAnimRef.current) {
+            homePublicationExitAnimRef.current.stop();
+            homePublicationExitAnimRef.current = null;
+          }
     const x = Math.max(0, Number(contentOffsetX) || 0);
-    const progress = x / w;
-    const threshold = 0.12;
-
-    let nextIndex = profilePresentationActiveIndexRef.current;
-    while (nextIndex < total - 1 && progress > nextIndex + threshold) {
-      nextIndex += 1;
-    }
-    while (nextIndex > 0 && progress < nextIndex - threshold) {
-      nextIndex -= 1;
-    }
+    const nextIndex = Math.min(total - 1, Math.max(0, Math.round(x / w)));
 
     if (profilePresentationActiveIndexRef.current === nextIndex) return;
     profilePresentationActiveIndexRef.current = nextIndex;
@@ -7632,16 +8101,7 @@ const FrontScreen = ({
 
     const w = Math.max(1, Number(layoutWidth) || PROFILE_CONTENT_WIDTH);
     const x = Math.max(0, Number(contentOffsetX) || 0);
-    const progress = x / w;
-    const threshold = 0.12;
-
-    let nextIndex = editablePresentationActiveIndexRef.current;
-    while (nextIndex < total - 1 && progress > nextIndex + threshold) {
-      nextIndex += 1;
-    }
-    while (nextIndex > 0 && progress < nextIndex - threshold) {
-      nextIndex -= 1;
-    }
+    const nextIndex = Math.min(total - 1, Math.max(0, Math.round(x / w)));
 
     if (editablePresentationActiveIndexRef.current === nextIndex) return;
     editablePresentationActiveIndexRef.current = nextIndex;
@@ -8083,12 +8543,18 @@ const FrontScreen = ({
 
     if (source === 'manual') {
       // Manual delete: keep the previous behavior
+      if (postToDelete?.id != null) {
+        delete channelChatStateCacheRef.current[String(postToDelete.id)];
+      }
       setChatMessages([]);
       setChannelInteractions([]);
       setShowDeleteModal(false);
       setActiveBottomTab('profile');
     } else {
       // Auto-expire: keep automatic cleanup behavior (chat + notifications)
+      if (postToDelete?.id != null) {
+        delete channelChatStateCacheRef.current[String(postToDelete.id)];
+      }
       setChatMessages([]);
       setChannelInteractions([]);
       setActiveBottomTab('profile');
@@ -8532,25 +8998,13 @@ const FrontScreen = ({
   }, [activeBottomTab, profileView, profilePresentation, profileEmptyArrowAnim, hasSeenYourProfileHint]);
 
   useEffect(() => {
-    // Poll Home feed to reflect creator blocks without requiring app restart.
-    const shouldPoll = activeBottomTab === 'home' && !!authToken;
-
-    if (!shouldPoll) {
-      if (homePostsPollingTimerRef.current) {
-        clearInterval(homePostsPollingTimerRef.current);
-        homePostsPollingTimerRef.current = null;
-      }
-      return;
-    }
-
+    // Keep Home navigation fully user-driven. Automatic polling while the user
+    // is swiping can mutate the publications array mid-navigation and make the
+    // feed appear to advance on its own.
     if (homePostsPollingTimerRef.current) {
       clearInterval(homePostsPollingTimerRef.current);
       homePostsPollingTimerRef.current = null;
     }
-
-    homePostsPollingTimerRef.current = setInterval(() => {
-      fetchHomePosts({ preservePosition: true, showLoader: false });
-    }, 6000);
 
     return () => {
       if (homePostsPollingTimerRef.current) {
@@ -8559,7 +9013,7 @@ const FrontScreen = ({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeBottomTab, authToken, currentPostIndex, publications]);
+  }, [activeBottomTab, authToken]);
 
   // Cargar perfil editado (borrador) al iniciar
   useEffect(() => {
@@ -9986,7 +10440,16 @@ const FrontScreen = ({
       )}
       {/* Header superior izquierdo - Perfil */}
       {activeBottomTab !== 'notifications' && activeBottomTab !== 'home' && activeBottomTab !== 'chat' && (
-        <View style={styles.topLeftContainer}>
+        <View
+          style={{
+            position: 'absolute',
+            top: topSystemOffset,
+            left: 16,
+            zIndex: 20,
+            flexDirection: 'row',
+            alignItems: 'center',
+          }}
+        >
           <View style={{ position: 'relative' }}>
             <TouchableOpacity
               style={[styles.profileIconCircle, profilePhotoUri ? { shadowOpacity: 0, elevation: 0, borderWidth: 0 } : null]}
@@ -10277,8 +10740,6 @@ const FrontScreen = ({
                     latitudeDelta: 0.01,
                     longitudeDelta: 0.01,
                   }}
-                  showsUserLocation
-                  showsMyLocationButton
                   onRegionChangeComplete={(r) => {
                     const lat = Number((r as any)?.latitude);
                     const lng = Number((r as any)?.longitude);
@@ -10292,7 +10753,9 @@ const FrontScreen = ({
                     }
                   }}
                   onPoiClick={(e: PoiClickEvent) => {
-                    const { coordinate, name, placeId } = e.nativeEvent;
+                    const coordinate = (e as any)?.nativeEvent?.coordinate;
+                    const name = String((e as any)?.nativeEvent?.name || '').trim();
+                    const placeId = String((e as any)?.nativeEvent?.placeId || '').trim();
                     if (coordinate && Number.isFinite(coordinate.latitude) && Number.isFinite(coordinate.longitude)) {
                       setProfileRingPickedLocationLabel(name || null);
                       setProfileRingPickedLocationPlaceId(placeId || null);
@@ -10411,7 +10874,16 @@ const FrontScreen = ({
       {/* Header superior derecho - Descubre (visible cuando Home está activo) */}
       {
         activeBottomTab === 'home' && false && (
-          <View style={styles.topRightContainer}>
+          <View
+            style={{
+              position: 'absolute',
+              top: topSystemOffset + 10,
+              right: 16,
+              zIndex: 20,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
             <Text style={styles.discoverText}>Descubre</Text>
             <View style={styles.blueDot} />
           </View>
@@ -10421,7 +10893,14 @@ const FrontScreen = ({
       {
         activeBottomTab === 'profile' && (
           <TouchableOpacity
-            style={styles.topRightContainer}
+            style={{
+              position: 'absolute',
+              top: topSystemOffset + 10,
+              right: 16,
+              zIndex: 20,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
             activeOpacity={0.7}
             onPress={() => {
               if (profileView === 'profile') {
@@ -10450,7 +10929,15 @@ const FrontScreen = ({
         activeBottomTab === 'chat' && chatView !== 'groupChat' && !(chatView === 'channel' && !!selectedChannel) && (
           <View
             key={`chat-top-tabs-${chatTopTabsRenderKey}-${chatView}-${groupsTab}-${channelTab}`}
-            style={[styles.topCenterContainer, { top: ANDROID_SAFE_TOP + CHAT_TABS_TOP }]}
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: topSystemOffset + CHAT_TABS_TOP,
+              zIndex: 20,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
             onLayout={(e) => {
               const { height } = e.nativeEvent.layout;
               if (Number.isFinite(height) && height > 0 && height !== chatTopTabsHeight) {
@@ -10710,16 +11197,12 @@ const FrontScreen = ({
                 ))}
               </ScrollView>
             ) : (
-              <PagerView
-                ref={homePagerRef}
-                style={styles.homePager}
-                initialPage={0}
-                overdrag={false}
-                offscreenPageLimit={1}
-                scrollEnabled={isHomeMainScrollEnabled}
-                onPageSelected={(event) => handleHomePageSelected(event.nativeEvent.position)}
-              >
-                  {publications.map((pub, pageIndex) => {
+              <View style={styles.homePager}>
+                  {(() => {
+                    const pub = activeHomePublication;
+                    if (!pub) return null;
+                    const pageIndex = 0;
+
                     const activeIndex = activeIntimidadIndices[pub.id] || 0;
                     const activePresentationIndex = activePresentationIndices[pub.id] || 0;
                     const isOverlayVisible = presentationOverlayVisible[pub.id] !== false;
@@ -10774,25 +11257,60 @@ const FrontScreen = ({
                     const pubDoubleTap = publicationDoubleTapState[pub.id] || { visible: false, emoji: '' };
                     const homeCarouselLoadedMap = homePresentationImagesLoaded[String(pub.id)] || {};
                     const isHomeCarouselLoadingVisible = homeCarouselLoadingVisibleByPubId[String(pub.id)] !== false;
-                    const homeCarouselExtraData = `active:${activePresentationIndex}|rings:${ringsVisible ? 1 : 0}`;
+                    const homeCarouselExtraData = `rings:${ringsVisible ? 1 : 0}`;
+                    const isCurrentPage = true;
                     return (
-                      <View key={`home-page-${String(pub.id)}`} style={styles.homePagerPage} collapsable={false}>
+                      <View
+                        key={`home-page-${pageIndex}-${String(pub.id)}`}
+                        style={styles.homePagerPage}
+                        collapsable={false}
+                      >
+                        <Animated.View
+                          pointerEvents="none"
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            right: 0,
+                            bottom: 0,
+                            left: 0,
+                            backgroundColor: '#070b12',
+                            opacity: publicationTransitionVeilOpacity,
+                            zIndex: 2,
+                          }}
+                        />
                         <ScrollView
+                          key={`home-scroll-${String(pub.id)}`}
                           style={styles.homePageScroll}
                           contentContainerStyle={[styles.homePageContentContainer, { paddingBottom: bottomNavHeight + 16 }]}
                           nestedScrollEnabled
+                          refreshControl={
+                            <RefreshControl
+                              refreshing={false}
+                              onRefresh={handleHomePublicationRefreshTrigger}
+                              tintColor="transparent"
+                              colors={["transparent"]}
+                              progressBackgroundColor="transparent"
+                              progressViewOffset={-10000}
+                            />
+                          }
                           showsVerticalScrollIndicator={false}
                           scrollEventThrottle={16}
                           keyboardShouldPersistTaps="handled"
+                          onScroll={(event) => {
+                            const nextY = Math.max(0, Number(event.nativeEvent.contentOffset.y) || 0);
+                            homePublicationScrollYRef.current = nextY;
+                            const nextAtTop = nextY <= 6;
+                            setIsHomePublicationAtTop(prev => (prev === nextAtTop ? prev : nextAtTop));
+                          }}
                         >
                       <Animated.View
                         style={{
                           marginBottom: 0,
-                          opacity: pageIndex === currentPostIndex ? publicationTransitionOpacity : 1,
-                          transform: [{ translateY: pageIndex === currentPostIndex ? publicationTransitionTranslateY : 0 }],
+                          opacity: publicationTransitionOpacity,
+                          transform: [{ translateY: publicationTransitionTranslateY }],
                         }}
                       >
-                        {shouldShowHomeSwipeTutorial && pageIndex === currentPostIndex && (
+                        {shouldShowHomeSwipeTutorial && isCurrentPage && (
                           <Pressable
                             style={styles.homeSwipeTutorialContainer}
                             onPress={markHomeSwipeTutorialSeen}
@@ -10808,13 +11326,50 @@ const FrontScreen = ({
                                 },
                               ]}
                             >
-                              <MaterialIcons name="swap-horiz" size={22} color="#FFB74D" />
+                              <MaterialIcons name="keyboard-double-arrow-down" size={22} color="#FFB74D" />
                             </Animated.View>
 
                             <Text style={styles.homeSwipeTutorialText}>
                               {t('front.homeSwipeTutorialHint' as TranslationKey)}
                             </Text>
                           </Pressable>
+                        )}
+                        {shouldShowHomePublicationSwipeHint && isCurrentPage && (
+                          <View style={styles.homePublicationSwipeHintContainer} pointerEvents="none">
+                            <Animated.View
+                              style={{
+                                opacity: homePullConfirmAnim.interpolate({
+                                  inputRange: [0, 0.5, 1],
+                                  outputRange: [0.85, 1, 0],
+                                }),
+                                transform: [
+                                  {
+                                    scaleX: homePullConfirmAnim.interpolate({
+                                      inputRange: [0, 1],
+                                      outputRange: [1, 4.5],
+                                    }),
+                                  },
+                                  {
+                                    scaleY: homePullConfirmAnim.interpolate({
+                                      inputRange: [0, 0.6, 1],
+                                      outputRange: [1, 1.1, 0.7],
+                                    }),
+                                  },
+                                ],
+                              }}
+                            >
+                              <Svg width={76} height={6}>
+                                <Defs>
+                                  <LinearGradient id="home_publication_swipe_hint_grad" x1="0" y1="0" x2="1" y2="0">
+                                    <Stop offset="0" stopColor="#FFB74D" stopOpacity="0.15" />
+                                    <Stop offset="0.5" stopColor="#FFB74D" stopOpacity="0.95" />
+                                    <Stop offset="1" stopColor="#ffe45c" stopOpacity="0.18" />
+                                  </LinearGradient>
+                                </Defs>
+                                <Rect x="0" y="0" width="76" height="6" rx="3" ry="3" fill="url(#home_publication_swipe_hint_grad)" />
+                              </Svg>
+                            </Animated.View>
+                          </View>
                         )}
                         <View style={styles.presentationHeaderContainer}>
                           <View style={styles.presentationUserInfo}>
@@ -10881,41 +11436,40 @@ const FrontScreen = ({
                                       }}
                                     >
                                       <View style={{ width: homeSocialIconsViewportWidth, height: 24, overflow: 'hidden' }}>
-                                      <ScrollView
-                                        horizontal
-                                        nestedScrollEnabled
-                                        directionalLockEnabled
-                                        showsHorizontalScrollIndicator={false}
-                                        scrollEnabled={totalRenderablePublicationSocials > HOME_SOCIAL_ICONS_VIEWPORT_COUNT}
-                                        style={{ height: 24 }}
-                                        scrollEventThrottle={16}
-                                        onTouchStart={() => setHomeCarouselGestureActive(true)}
-                                        onTouchEnd={() => setHomeCarouselGestureActive(false)}
-                                        onTouchCancel={() => setHomeCarouselGestureActive(false)}
-                                        onScrollBeginDrag={() => setHomeCarouselGestureActive(true)}
-                                        onScrollEndDrag={() => setHomeCarouselGestureActive(false)}
-                                        onMomentumScrollBegin={() => setHomeCarouselGestureActive(true)}
-                                        onMomentumScrollEnd={() => setHomeCarouselGestureActive(false)}
-                                        contentContainerStyle={{ alignItems: 'center', paddingVertical: 2, paddingRight: 4 }}
-                                      >
-                                        {renderablePublicationSocials.map(({ key, link, iconSource }, socialIndex) => {
-                                          const isLast = socialIndex === renderablePublicationSocials.length - 1;
-                                          return (
-                                            <TouchableOpacity
-                                              key={key}
-                                              onPress={() => openExternalLink(link)}
-                                              activeOpacity={0.7}
-                                              style={{ marginRight: isLast ? 0 : HOME_SOCIAL_ICON_GAP, paddingVertical: 2 }}
-                                            >
-                                              <Image
-                                                source={iconSource}
-                                                style={{ width: HOME_SOCIAL_ICON_SIZE, height: HOME_SOCIAL_ICON_SIZE, resizeMode: 'contain' }}
-                                              />
-                                            </TouchableOpacity>
-                                          );
-                                        })}
-                                      </ScrollView>
-                                    </View>
+                                        <ScrollView
+                                          horizontal
+                                          directionalLockEnabled
+                                          showsHorizontalScrollIndicator={false}
+                                          scrollEnabled={totalRenderablePublicationSocials > HOME_SOCIAL_ICONS_VIEWPORT_COUNT}
+                                          style={{ height: 24 }}
+                                          scrollEventThrottle={16}
+                                          onTouchStart={() => setHomeCarouselGestureActive(true)}
+                                          onTouchEnd={() => setHomeCarouselGestureActive(false)}
+                                          onTouchCancel={() => setHomeCarouselGestureActive(false)}
+                                          onScrollBeginDrag={() => setHomeCarouselGestureActive(true)}
+                                          onScrollEndDrag={() => setHomeCarouselGestureActive(false)}
+                                          onMomentumScrollBegin={() => setHomeCarouselGestureActive(true)}
+                                          onMomentumScrollEnd={() => setHomeCarouselGestureActive(false)}
+                                          contentContainerStyle={{ alignItems: 'center', paddingVertical: 2, paddingRight: 4 }}
+                                        >
+                                          {renderablePublicationSocials.map(({ key, link, iconSource }, socialIndex) => {
+                                            const isLast = socialIndex === renderablePublicationSocials.length - 1;
+                                            return (
+                                              <TouchableOpacity
+                                                key={key}
+                                                onPress={() => openExternalLink(link)}
+                                                activeOpacity={0.7}
+                                                style={{ marginRight: isLast ? 0 : HOME_SOCIAL_ICON_GAP, paddingVertical: 2 }}
+                                              >
+                                                <Image
+                                                  source={iconSource}
+                                                  style={{ width: HOME_SOCIAL_ICON_SIZE, height: HOME_SOCIAL_ICON_SIZE, resizeMode: 'contain' }}
+                                                />
+                                              </TouchableOpacity>
+                                            );
+                                          })}
+                                        </ScrollView>
+                                      </View>
                                     </View>
                                     <Text style={{ marginLeft: 6, color: 'rgba(255, 255, 255, 0.7)', fontSize: 12 }}>
                                       {totalRenderablePublicationSocials}
@@ -10954,7 +11508,6 @@ const FrontScreen = ({
                                 >
                                   <MaterialIcons name="more-vert" size={18} color="rgba(255,255,255,0.9)" />
                                 </TouchableOpacity>
-
                                 {activePublicationOptionsId === pub.id && (
                                   <View style={styles.publicationOptionsMenu}>
                                     <TouchableOpacity
@@ -10981,7 +11534,12 @@ const FrontScreen = ({
 
                         {pub.presentation.images.length > 0 && (
                           <View>
-                            <View style={[styles.profilePresentationCarousel, { width: HOME_CARD_WIDTH }]}>
+                            <View
+                              style={[styles.profilePresentationCarousel, { width: HOME_CARD_WIDTH }]}
+                              onTouchStart={() => setHomeCarouselGestureActive(true)}
+                              onTouchEnd={() => setHomeCarouselGestureActive(false)}
+                              onTouchCancel={() => setHomeCarouselGestureActive(false)}
+                            >
                               {(() => {
                                 const total = pub.presentation.images.length;
                                 const loadedMap = homeCarouselLoadedMap;
@@ -11006,12 +11564,14 @@ const FrontScreen = ({
                                 );
                               })()}
                               <FlatList
+                                key={`home-carousel-${String(pub.id)}`}
                                 data={pub.presentation.images}
                                 keyExtractor={(_item, index) => `pub-${pub.id}-image-${index}`}
                                 extraData={homeCarouselExtraData}
                                 horizontal
                                 pagingEnabled
                                 bounces={false}
+                                directionalLockEnabled
                                 showsHorizontalScrollIndicator={false}
                                 snapToAlignment="center"
                                 snapToInterval={HOME_CARD_WIDTH}
@@ -11025,12 +11585,13 @@ const FrontScreen = ({
                                 onScrollEndDrag={() => setHomeCarouselGestureActive(false)}
                                 onMomentumScrollBegin={() => setHomeCarouselGestureActive(true)}
                                 onScroll={(event) => {
-                                  updateHomePresentationActiveIndexFromScroll(
-                                    pub.id,
-                                    event.nativeEvent.contentOffset.x,
-                                    event.nativeEvent.layoutMeasurement.width,
-                                    pub.presentation.images.length
-                                  );
+                                  // Drive the indicator imperatively so only the tiny dot component
+                                  // re-renders — NOT the entire FrontScreen (eliminates 2-3s lag).
+                                  const x = Math.max(0, event.nativeEvent.contentOffset.x);
+                                  const w = Math.max(1, event.nativeEvent.layoutMeasurement.width || HOME_CARD_WIDTH);
+                                  const total = pub.presentation.images.length;
+                                  const nextIdx = Math.min(total - 1, Math.max(0, Math.round(x / w)));
+                                  presentationDotsRefsMap.current[String(pub.id)]?.setIndex(nextIdx);
                                 }}
                                 onMomentumScrollEnd={(event) => {
                                   updateHomePresentationActiveIndexFromScroll(
@@ -11168,25 +11729,17 @@ const FrontScreen = ({
                                 )}
 
                                 <View style={styles.carouselPagination}>
-                                  <TouchableOpacity
+                                  <HomePresentationDotIndicator
+                                    key={`pub-dots-${String(pub.id)}`}
+                                    ref={(r) => { presentationDotsRefsMap.current[String(pub.id)] = r; }}
+                                    count={pub.presentation.images.length}
                                     onPress={() => {
                                       setPresentationOverlayVisible(prev => ({
                                         ...prev,
-                                        [pub.id]: !isOverlayVisible
+                                        [pub.id]: !isOverlayVisible,
                                       }));
                                     }}
-                                    activeOpacity={0.7}
-                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                  >
-                                    <View style={styles.carouselDots}>
-                                      {pub.presentation.images.map((_, dotIndex) => (
-                                        <CarouselPaginationDot
-                                          key={`pub-${pub.id}-dot-${dotIndex}`}
-                                          active={dotIndex === activePresentationIndex}
-                                        />
-                                      ))}
-                                    </View>
-                                  </TouchableOpacity>
+                                  />
                                 </View>
 
                                 {pub.presentation.category && pub.presentation.category !== 'Sin categoría' && (
@@ -11761,8 +12314,8 @@ const FrontScreen = ({
                         </ScrollView>
                       </View>
                     );
-                  })}
-              </PagerView>
+                  })()}
+              </View>
             )}
           </View >
         )}
@@ -11898,11 +12451,10 @@ const FrontScreen = ({
                               showsHorizontalScrollIndicator={false}
                               removeClippedSubviews={false}
                               onScroll={(event) => {
-                                updateProfilePresentationActiveIndexFromScroll(
-                                  event.nativeEvent.contentOffset.x,
-                                  event.nativeEvent.layoutMeasurement.width,
-                                  profilePresentation.images.length
-                                );
+                                const x = Math.max(0, event.nativeEvent.contentOffset.x);
+                                const w = Math.max(1, event.nativeEvent.layoutMeasurement.width || PROFILE_CONTENT_WIDTH);
+                                const total = profilePresentation.images.length;
+                                profileDotsRef.current?.setIndex(Math.min(total - 1, Math.max(0, Math.round(x / w))));
                               }}
                               onMomentumScrollEnd={(event) => {
                                 updateProfilePresentationActiveIndexFromScroll(
@@ -12012,20 +12564,11 @@ const FrontScreen = ({
                                 </View>
                               )}
                               <View style={styles.carouselPagination}>
-                                <TouchableOpacity
+                                <HomePresentationDotIndicator
+                                  ref={profileDotsRef}
+                                  count={profilePresentation.images.length}
                                   onPress={() => setIsPresentationOverlayVisible(prev => !prev)}
-                                  activeOpacity={0.7}
-                                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                >
-                                  <View style={styles.carouselDots}>
-                                    {profilePresentation.images.map((_, index) => (
-                                      <CarouselPaginationDot
-                                        key={`profile-dot-${index}`}
-                                        active={index === activeProfileImageIndex}
-                                      />
-                                    ))}
-                                  </View>
-                                </TouchableOpacity>
+                                />
                               </View>
                               {profilePresentation.category && profilePresentation.category !== 'Sin categoría' && (
                                 <View style={styles.categoryBelowIndicator}>
@@ -12454,11 +12997,10 @@ const FrontScreen = ({
                         showsHorizontalScrollIndicator={false}
                         removeClippedSubviews={false}
                         onScroll={(event) => {
-                          updateEditablePresentationActiveIndexFromScroll(
-                            event.nativeEvent.contentOffset.x,
-                            event.nativeEvent.layoutMeasurement.width,
-                            carouselImages.length
-                          );
+                          const x = Math.max(0, event.nativeEvent.contentOffset.x);
+                          const w = Math.max(1, event.nativeEvent.layoutMeasurement.width || PROFILE_CONTENT_WIDTH);
+                          const total = carouselImages.length;
+                          editDotsRef.current?.setIndex(Math.min(total - 1, Math.max(0, Math.round(x / w))));
                         }}
                         onMomentumScrollEnd={(event) => {
                           updateEditablePresentationActiveIndexFromScroll(
@@ -12542,14 +13084,10 @@ const FrontScreen = ({
                         style={styles.carouselFlatList}
                       />
                       <View style={styles.carouselPagination}>
-                        <View style={styles.carouselDots}>
-                          {carouselImages.map((_, index) => (
-                            <CarouselPaginationDot
-                              key={`carousel-dot-${index}`}
-                              active={index === activeCarouselImageIndex}
-                            />
-                          ))}
-                        </View>
+                        <HomePresentationDotIndicator
+                          ref={editDotsRef}
+                          count={carouselImages.length}
+                        />
                       </View>
                     </View>
                   )}
@@ -14108,7 +14646,7 @@ const FrontScreen = ({
                         onPress={async () => {
                           if (isSendingGroupMessage) return;
                           if (!authToken) {
-                            Alert.alert('Sesión requerida', 'Inicia sesión para enviar mensajes.');
+                            Alert.alert(sessionRequiredTitle, t('chat.signInToSendMessages' as TranslationKey));
                             return;
                           }
                           if (!selectedGroup?.id) return;
@@ -14144,15 +14682,15 @@ const FrontScreen = ({
                               const err = await resp.json().catch(() => ({}));
                               const errorMessage = String(err?.error || '').trim();
                               if (errorMessage.toLowerCase().includes('limitado') || errorMessage.toLowerCase().includes('limitada') || errorMessage.toLowerCase().includes('restricted')) {
-                                const host = groupOwnerUsername || 'anfitrión';
+                                const host = groupOwnerUsername || fallbackHostLabel;
                                 showActionToast(formatHostLimitedInteractions(host));
                               } else {
-                                Alert.alert('Aviso', errorMessage || 'No se pudo enviar el mensaje');
+                                Alert.alert(warningTitle, errorMessage || t('chat.unableToSendMessage' as TranslationKey));
                               }
                             }
                           } catch (e) {
                             console.error('Error sending group message:', e);
-                            Alert.alert('Error', 'Error de conexión al enviar el mensaje');
+                            Alert.alert(errorTitle, t('chat.connectionErrorSendingMessage' as TranslationKey));
                           } finally {
                             setIsSendingGroupMessage(false);
                           }
@@ -14232,7 +14770,7 @@ const FrontScreen = ({
                               backgroundColor: 'rgba(255,255,255,0.12)',
                               color: '#FFFFFF',
                             }}
-                            placeholder="Añade un pie de foto..."
+                            placeholder={t('chat.addCaptionPlaceholder' as TranslationKey)}
                             placeholderTextColor="rgba(255,255,255,0.55)"
                             value={groupDraftCaption}
                             onChangeText={setGroupDraftCaption}
@@ -14303,9 +14841,11 @@ const FrontScreen = ({
                       position: 'absolute',
                       top: ANDROID_STATUS_BAR_HEIGHT + 10,
                       left: 10,
+                      right: 10,
                       zIndex: 10,
                       flexDirection: 'row',
-                      alignItems: 'center'
+                      alignItems: 'center',
+                      justifyContent: 'space-between'
                     }}>
                       <TouchableOpacity
                         onPress={() => {
@@ -14325,6 +14865,42 @@ const FrontScreen = ({
                         <MaterialIcons name="arrow-back" size={24} color="#FFB74D" />
                         <Text style={{ color: '#FFF', marginLeft: 5 }}>{t('chat.back' as TranslationKey)}</Text>
                       </TouchableOpacity>
+
+                      {/* Host info badge */}
+                      <View style={{
+                        backgroundColor: '#101010',
+                        borderRadius: 12,
+                        paddingVertical: 4,
+                        paddingHorizontal: 8,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                      }}>
+                        {selectedChannel.profile_photo_uri ? (
+                          <Image
+                            source={{ uri: getServerResourceUrl(selectedChannel.profile_photo_uri) }}
+                            style={{ width: 24, height: 24, borderRadius: 12, marginRight: 4 }}
+                          />
+                        ) : (
+                          <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: '#444', marginRight: 4, alignItems: 'center', justifyContent: 'center' }}>
+                            <MaterialIcons name="person" size={12} color="#FFF" />
+                          </View>
+                        )}
+                        {selectedChannel.account_verified ? (
+                          <View style={{ marginRight: 2 }}>
+                            <VerifiedBadgeIcon size={8} solidColor="#FFFFFF" solidOpacity={0.6} />
+                          </View>
+                        ) : null}
+                        <Text style={{ color: '#FFF', fontSize: 8, fontWeight: 'bold', marginRight: selectedChannel.keinti_verified ? 2 : 0 }}>
+                          {(String(selectedChannel.username || 'Usuario').startsWith('@'))
+                            ? String(selectedChannel.username || 'Usuario')
+                            : `@${String(selectedChannel.username || 'Usuario')}`}
+                        </Text>
+                        {selectedChannel.keinti_verified ? (
+                          <View>
+                            <VerifiedBadgeIcon size={8} variant="gradient" />
+                          </View>
+                        ) : null}
+                      </View>
                     </View>
                   )}
 
@@ -15277,9 +15853,8 @@ const FrontScreen = ({
                                 );
 
                                 if (targetPostId) {
-                                  resetChannelChatPaginationState(false);
                                   pendingChannelScrollToLatestAfterRefreshRef.current = true;
-                                  await fetchChannelMessages(targetPostId, 'latest');
+                                  await fetchChannelMessages(targetPostId, 'poll');
                                 }
 
                                 // Fallback: scroll with increasing delays to handle varied render timings.
@@ -15395,7 +15970,7 @@ const FrontScreen = ({
                               {viewerTurnMustWait && (
                                 <View style={{ marginBottom: 5 }}>
                                   <Text style={{ color: '#FFFFFF', fontSize: 12, textAlign: 'center', fontWeight: 'bold' }}>
-                                    Espera la respuesta del anfitrión para continuar con el hilo
+                                    {t('chat.waitHostReplyThread' as TranslationKey)}
                                   </Text>
                                 </View>
                               )}
@@ -15516,7 +16091,23 @@ const FrontScreen = ({
                                       });
                                       if (response.ok) {
                                         const newMessage = await response.json();
-                                        setChatMessages(prev => [...prev, newMessage]);
+                                        setChatMessages(prev => {
+                                          const snapshot = resolveChannelChatStateSnapshot([...prev, newMessage], {
+                                            hasMoreOlderMessages: channelHasMoreOlderMessagesRef.current,
+                                            allowTrim: true,
+                                          });
+                                          channelOldestMessageIdRef.current = snapshot.oldestMessageId;
+                                          setChannelHasMoreOlderMessages(snapshot.hasMoreOlderMessages);
+                                          if (snapshot.didTrim) {
+                                            pendingChannelScrollToLatestAfterRefreshRef.current = true;
+                                          }
+                                          cacheChannelChatState(targetPostId, snapshot.messages, {
+                                            hasMoreOlderMessages: snapshot.hasMoreOlderMessages,
+                                            oldestMessageId: snapshot.oldestMessageId,
+                                            lastSig: snapshot.lastSig,
+                                          });
+                                          return snapshot.messages;
+                                        });
                                         setChatInputValue('');
                                         setReplyingToUsername(null);
                                         setReplyingToMessageIndex(null);
@@ -15526,30 +16117,30 @@ const FrontScreen = ({
                                         const errorMessage = errorData.error || '';
 
                                         if (errorData?.code === 'WAIT_FOR_PUBLISHER_REPLY') {
-                                          showActionToast('Espera la respuesta del creador para poder responder de nuevo');
+                                          showActionToast(t('chat.waitCreatorReplyAgain' as TranslationKey));
                                           return;
                                         }
 
                                         if (response.status === 403) {
                                           if (errorMessage.toLowerCase().includes('limitado') || errorMessage.includes('restricted')) {
-                                            const publisherName = selectedChannel ? selectedChannel.username : (userPublication?.user?.username || 'usuario');
+                                            const publisherName = selectedChannel ? selectedChannel.username : (userPublication?.user?.username || fallbackUserLabel);
                                             showHostLimitWarning(publisherName);
                                           } else {
-                                            const publisherName = selectedChannel ? selectedChannel.username : 'usuario';
+                                            const publisherName = selectedChannel ? selectedChannel.username : fallbackUserLabel;
                                             showLimitWarning(publisherName);
                                           }
                                         } else {
                                           if (errorMessage.toLowerCase().includes('limitado')) {
-                                            const publisherName = selectedChannel ? selectedChannel.username : (userPublication?.user?.username || 'usuario');
+                                            const publisherName = selectedChannel ? selectedChannel.username : (userPublication?.user?.username || fallbackUserLabel);
                                             showHostLimitWarning(publisherName);
                                           } else {
-                                            Alert.alert('Aviso', errorMessage || 'No se pudo enviar el mensaje');
+                                            Alert.alert(warningTitle, errorMessage || t('chat.unableToSendMessage' as TranslationKey));
                                           }
                                         }
                                       }
                                     } catch (error) {
                                       console.error('Error sending message:', error);
-                                      Alert.alert('Error', 'Error de conexión al enviar el mensaje');
+                                      Alert.alert(errorTitle, t('chat.connectionErrorSendingMessage' as TranslationKey));
                                     } finally {
                                       setIsSendingChannelMessage(false);
                                     }
@@ -15593,14 +16184,20 @@ const FrontScreen = ({
                                   }}
                                   style={{ paddingHorizontal: 8, paddingVertical: 2, alignItems: 'center' }}
                                 >
+                                  {(() => {
+                                    const currentTabLabel = channelMessagesTab === 'General'
+                                      ? t('chat.generalTab' as TranslationKey)
+                                      : t('chat.yourThreadsTab' as TranslationKey);
+                                    const indicatorWidth = Math.max(26, Math.min(120, currentTabLabel.length * 7));
+
+                                    return (
+                                      <>
                                   <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' }}>
-                                    {channelMessagesTab === 'General'
-                                      ? 'General'
-                                      : 'Tus hilos'}
+                                    {currentTabLabel}
                                   </Text>
                                   <Svg
                                     height="3"
-                                    width={channelMessagesTab === 'General' ? 26 : 60}
+                                    width={indicatorWidth}
                                     style={{ marginTop: 3 }}
                                   >
                                     <Defs>
@@ -15612,12 +16209,15 @@ const FrontScreen = ({
                                     <Rect
                                       x="0"
                                       y="0"
-                                      width={channelMessagesTab === 'General' ? 26 : 60}
+                                      width={indicatorWidth}
                                       height="3"
                                       fill="url(#grad_line_channel_toggle)"
                                       rx="1.5"
                                     />
                                   </Svg>
+                                      </>
+                                    );
+                                  })()}
                                 </TouchableOpacity>
                               </View>
                             )}
@@ -15658,7 +16258,6 @@ const FrontScreen = ({
                               <TouchableOpacity
                                 onPress={handleCloseChannelImageComposer}
                                 disabled={isSendingChannelImage}
-                                style={{ padding: 8 }}
                               >
                                 <MaterialIcons name="arrow-back" size={24} color="#FFF" />
                               </TouchableOpacity>
@@ -15696,7 +16295,7 @@ const FrontScreen = ({
                                     borderRadius: 18,
                                     marginRight: 10,
                                   }}
-                                  placeholder="Pie de imagen..."
+                                  placeholder={t('chat.imageCaptionPlaceholder' as TranslationKey)}
                                   placeholderTextColor="rgba(255,255,255,0.6)"
                                   value={channelDraftCaption}
                                   onChangeText={setChannelDraftCaption}
@@ -18479,29 +19078,27 @@ const styles = StyleSheet.create({
   },
   topLeftContainer: {
     position: 'absolute',
-    top: ANDROID_SAFE_TOP + 20,
-    left: 20,
-    zIndex: 10,
+    top: ANDROID_SAFE_TOP,
+    left: 16,
+    zIndex: 20,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  topCenterContainer: {
-    position: 'absolute',
-    top: ANDROID_SAFE_TOP + 10,
-    left: 0,
-    right: 0,
-    zIndex: 1000,
-    elevation: 1000,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#000000',
-  },
   topRightContainer: {
     position: 'absolute',
-    top: ANDROID_SAFE_TOP + 20,
-    right: 20,
-    zIndex: 10,
+    top: ANDROID_SAFE_TOP + 10,
+    right: 16,
+    zIndex: 20,
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topCenterContainer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   discoverText: {
     color: '#FFFFFF',
@@ -18640,6 +19237,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textAlign: 'center',
     paddingHorizontal: 8,
+  },
+  homePublicationSwipeHintContainer: {
+    alignItems: 'center',
+    marginHorizontal: 14,
+    marginBottom: 12,
   },
   modalOverlay: {
     flex: 1,

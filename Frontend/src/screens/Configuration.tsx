@@ -1875,7 +1875,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       <View style={[styles.header, { height: 56 + safeAreaInsets.top, paddingTop: safeAreaInsets.top }]}>
         <TouchableOpacity style={styles.backButton} onPress={handleBack} activeOpacity={0.7}>
           <MaterialIcons name="arrow-back" size={24} color="#FFFFFF" />
@@ -2780,8 +2780,6 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     marginHorizontal: 20,
                     backgroundColor: '#1E1E1E',
                     borderRadius: 12,
-                    borderWidth: 1,
-                    borderColor: '#FFB74D',
                     padding: 16,
                     shadowColor: '#000',
                     shadowOffset: { width: 0, height: 4 },
@@ -2792,7 +2790,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                   }}
                 >
                   <Text style={{ color: '#FFFFFF', fontSize: 13, lineHeight: 18, textAlign: 'center' }}>
-                    Los usuarios que obtengan la verificación de su cuenta en Keinti no podrán monetizar por ahora. Para recibir sus primeros ingresos, deberán esperar a la próxima actualización de Keinti, que se lanzará en los próximos meses.
+                    {t('verifyKeinti.importantNoticeBody')}
                   </Text>
                   <TouchableOpacity
                     style={{ position: 'absolute', top: 5, right: 5, padding: 5 }}

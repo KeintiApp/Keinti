@@ -4,6 +4,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Modal,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
@@ -15,7 +16,6 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import Svg, { Defs, LinearGradient, Stop, Rect, Circle } from 'react-native-svg';
 import { COUNTRIES } from '../constants/countries';
 import {
@@ -99,7 +99,7 @@ const GradientLoader = () => {
 
 const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenProps) => {
   const PENDING_SIGNUP_PREFIX = 'keinti:pendingSignup:';
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const safeAreaInsets = useSafeAreaInsets();
   const USERNAME_MAX_LENGTH = 22; // Incluye el '@'
   const RECTIFICATION_MAX_LENGTH = 220;
@@ -122,6 +122,15 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   const [isCheckingUsername, setIsCheckingUsername] = useState(false);
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
   const [showBirthDatePicker, setShowBirthDatePicker] = useState(false);
+  const [showBirthDateYearPicker, setShowBirthDateYearPicker] = useState(false);
+  const [birthDatePickerMonth, setBirthDatePickerMonth] = useState(() => {
+    const today = new Date();
+    return new Date(today.getFullYear() - 18, today.getMonth(), 1);
+  });
+  const [pendingBirthDate, setPendingBirthDate] = useState(() => {
+    const today = new Date();
+    return new Date(today.getFullYear() - 18, today.getMonth(), today.getDate());
+  });
 
   const [activePolicy, setActivePolicy] = useState<'privacy' | 'cookiesAds' | 'terms' | null>(null);
 
@@ -423,6 +432,151 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
     return new Date(today.getFullYear() - 18, today.getMonth(), today.getDate());
   };
 
+  const birthDatePickerMinDate = new Date(1900, 0, 1);
+  const birthDatePickerMaxDate = getDefaultBirthDate();
+
+  const getLocaleTag = () => {
+    if (language === 'en') return 'en-US';
+    if (language === 'fr') return 'fr-FR';
+    if (language === 'pt') return 'pt-PT';
+    if (language === 'de') return 'de-DE';
+    if (language === 'it') return 'it-IT';
+    return 'es-ES';
+  };
+
+  const capitalizeLabel = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
+
+  const clampBirthDatePickerDate = (date: Date) => {
+    const normalized = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    if (normalized.getTime() < birthDatePickerMinDate.getTime()) {
+      return new Date(birthDatePickerMinDate.getFullYear(), birthDatePickerMinDate.getMonth(), birthDatePickerMinDate.getDate());
+    }
+    if (normalized.getTime() > birthDatePickerMaxDate.getTime()) {
+      return new Date(birthDatePickerMaxDate.getFullYear(), birthDatePickerMaxDate.getMonth(), birthDatePickerMaxDate.getDate());
+    }
+    return normalized;
+  };
+
+  const openBirthDatePicker = () => {
+    const initialDate = clampBirthDatePickerDate(parseBirthDateToDate(birthDate) || getDefaultBirthDate());
+    setPendingBirthDate(initialDate);
+    setBirthDatePickerMonth(new Date(initialDate.getFullYear(), initialDate.getMonth(), 1));
+    setShowBirthDateYearPicker(false);
+    setShowBirthDatePicker(true);
+  };
+
+  const closeBirthDatePicker = () => {
+    setShowBirthDateYearPicker(false);
+    setShowBirthDatePicker(false);
+  };
+
+  const confirmBirthDatePicker = () => {
+    const nextDate = clampBirthDatePickerDate(pendingBirthDate);
+    const day = String(nextDate.getDate()).padStart(2, '0');
+    const month = String(nextDate.getMonth() + 1).padStart(2, '0');
+    const year = String(nextDate.getFullYear());
+    setBirthDate(`${day}/${month}/${year}`);
+    setShowBirthDateYearPicker(false);
+    setShowBirthDatePicker(false);
+  };
+
+  const selectBirthDatePickerYear = (year: number) => {
+    const candidate = clampBirthDatePickerDate(
+      new Date(year, pendingBirthDate.getMonth(), pendingBirthDate.getDate()),
+    );
+    setPendingBirthDate(candidate);
+    setBirthDatePickerMonth(new Date(candidate.getFullYear(), candidate.getMonth(), 1));
+    setShowBirthDateYearPicker(false);
+  };
+
+  const shiftBirthDatePickerMonth = (offset: number) => {
+    const candidate = new Date(
+      birthDatePickerMonth.getFullYear(),
+      birthDatePickerMonth.getMonth() + offset,
+      1,
+    );
+
+    const minMonth = new Date(birthDatePickerMinDate.getFullYear(), birthDatePickerMinDate.getMonth(), 1);
+    const maxMonth = new Date(birthDatePickerMaxDate.getFullYear(), birthDatePickerMaxDate.getMonth(), 1);
+
+    if (candidate.getTime() < minMonth.getTime() || candidate.getTime() > maxMonth.getTime()) {
+      return;
+    }
+
+    setBirthDatePickerMonth(candidate);
+  };
+
+  const birthDatePickerCanGoPrev = (() => {
+    const minMonth = new Date(birthDatePickerMinDate.getFullYear(), birthDatePickerMinDate.getMonth(), 1);
+    return birthDatePickerMonth.getTime() > minMonth.getTime();
+  })();
+
+  const birthDatePickerCanGoNext = (() => {
+    const maxMonth = new Date(birthDatePickerMaxDate.getFullYear(), birthDatePickerMaxDate.getMonth(), 1);
+    return birthDatePickerMonth.getTime() < maxMonth.getTime();
+  })();
+
+  const birthDatePickerWeekdayLabels = (() => {
+    const locale = getLocaleTag();
+    const baseMonday = new Date(2024, 0, 1);
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(baseMonday.getFullYear(), baseMonday.getMonth(), baseMonday.getDate() + index);
+      return capitalizeLabel(
+        new Intl.DateTimeFormat(locale, { weekday: 'narrow' }).format(date),
+      );
+    });
+  })();
+
+  const birthDatePickerMonthLabel = capitalizeLabel(
+    new Intl.DateTimeFormat(getLocaleTag(), { month: 'long', year: 'numeric' }).format(birthDatePickerMonth),
+  );
+
+  const birthDatePickerSummaryYear = new Intl.DateTimeFormat(getLocaleTag(), { year: 'numeric' }).format(pendingBirthDate);
+  const birthDatePickerSummaryDate = capitalizeLabel(
+    new Intl.DateTimeFormat(getLocaleTag(), {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+    }).format(pendingBirthDate),
+  );
+
+  const birthDatePickerYears = (() => {
+    const years: number[] = [];
+    for (let year = birthDatePickerMaxDate.getFullYear(); year >= birthDatePickerMinDate.getFullYear(); year -= 1) {
+      years.push(year);
+    }
+    return years;
+  })();
+
+  const birthDatePickerDays = (() => {
+    const year = birthDatePickerMonth.getFullYear();
+    const month = birthDatePickerMonth.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const firstWeekday = (firstDay.getDay() + 6) % 7;
+    const gridStart = new Date(year, month, 1 - firstWeekday);
+
+    return Array.from({ length: 42 }, (_, index) => {
+      const date = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + index);
+      const isCurrentMonth = date.getMonth() === month;
+      const isSelected =
+        date.getFullYear() === pendingBirthDate.getFullYear() &&
+        date.getMonth() === pendingBirthDate.getMonth() &&
+        date.getDate() === pendingBirthDate.getDate();
+      const isDisabled =
+        date.getTime() < birthDatePickerMinDate.getTime() ||
+        date.getTime() > birthDatePickerMaxDate.getTime();
+
+      return {
+        key: `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`,
+        date,
+        label: String(date.getDate()),
+        isCurrentMonth,
+        isSelected,
+        isDisabled,
+      };
+    });
+  })();
+
   const handleBirthDateChange = (text: string) => {
     const prev = birthDate;
     const prevDigits = prev.replace(/\D/g, '');
@@ -435,23 +589,6 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
     }
 
     setBirthDate(formatBirthDateDigits(nextDigits));
-  };
-
-  const handleBirthDatePicked = (event: DateTimePickerEvent, selectedDate?: Date) => {
-    if (Platform.OS !== 'ios') {
-      setShowBirthDatePicker(false);
-    }
-
-    if (event.type === 'dismissed') {
-      return;
-    }
-
-    if (selectedDate) {
-      const day = String(selectedDate.getDate()).padStart(2, '0');
-      const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
-      const year = String(selectedDate.getFullYear());
-      setBirthDate(`${day}/${month}/${year}`);
-    }
   };
 
   const isValidBirthDate = (date: string) => {
@@ -1186,7 +1323,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
                       />
                       <TouchableOpacity
                         style={styles.dateIconButton}
-                        onPress={() => setShowBirthDatePicker(true)}
+                        onPress={openBirthDatePicker}
                         activeOpacity={0.7}
                         disabled={isUiBlocked}>
                         <Icon name="calendar-month" size={20} color="#ffffffff" />
@@ -1194,26 +1331,6 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
                     </View>
                     {getBirthDateError() !== '' && (
                       <Text style={styles.errorText}>{getBirthDateError()}</Text>
-                    )}
-                    {showBirthDatePicker && (
-                      <View style={{ marginTop: 8 }}>
-                        <DateTimePicker
-                          value={parseBirthDateToDate(birthDate) || getDefaultBirthDate()}
-                          mode="date"
-                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                          minimumDate={new Date(1900, 0, 1)}
-                          maximumDate={getDefaultBirthDate()}
-                          onChange={handleBirthDatePicked}
-                        />
-                        {Platform.OS === 'ios' && (
-                          <TouchableOpacity
-                            style={[styles.resendButton, { marginTop: 8 }]}
-                            onPress={() => setShowBirthDatePicker(false)}
-                            activeOpacity={0.8}>
-                            <Text style={styles.resendButtonText}>{t('common.confirm')}</Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
                     )}
                   </View>
                 </>
@@ -1574,6 +1691,152 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
         </KeyboardAvoidingView>
       </View>
 
+      <Modal
+        visible={showBirthDatePicker}
+        transparent
+        animationType="fade"
+        onRequestClose={closeBirthDatePicker}
+      >
+        <View style={styles.birthDatePickerOverlay}>
+          <View style={styles.birthDatePickerPanel}>
+            <View style={styles.birthDatePickerHero}>
+              <TouchableOpacity
+                style={styles.birthDatePickerYearButton}
+                onPress={() => setShowBirthDateYearPicker((prev) => !prev)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.birthDatePickerYear}>{birthDatePickerSummaryYear}</Text>
+                <Icon
+                  name={showBirthDateYearPicker ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                  size={18}
+                  color="rgba(255,255,255,0.62)"
+                />
+              </TouchableOpacity>
+              <Text style={styles.birthDatePickerSelectedDate}>{birthDatePickerSummaryDate}</Text>
+            </View>
+
+            <View style={styles.birthDatePickerCalendarBody}>
+              {showBirthDateYearPicker ? (
+                <ScrollView
+                  style={styles.birthDatePickerYearList}
+                  contentContainerStyle={styles.birthDatePickerYearListContent}
+                  showsVerticalScrollIndicator={false}
+                >
+                  {birthDatePickerYears.map((year) => {
+                    const isSelected = year === pendingBirthDate.getFullYear();
+
+                    return (
+                      <TouchableOpacity
+                        key={String(year)}
+                        style={[
+                          styles.birthDatePickerYearChip,
+                          isSelected && styles.birthDatePickerYearChipSelected,
+                        ]}
+                        onPress={() => selectBirthDatePickerYear(year)}
+                        activeOpacity={0.8}
+                      >
+                        <Text
+                          style={[
+                            styles.birthDatePickerYearChipText,
+                            isSelected && styles.birthDatePickerYearChipTextSelected,
+                          ]}
+                        >
+                          {year}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              ) : (
+                <>
+                  <View style={styles.birthDatePickerMonthRow}>
+                    <TouchableOpacity
+                      style={styles.birthDatePickerMonthButton}
+                      onPress={() => shiftBirthDatePickerMonth(-1)}
+                      disabled={!birthDatePickerCanGoPrev}
+                      activeOpacity={0.75}
+                    >
+                      <Icon
+                        name="chevron-left"
+                        size={24}
+                        color={birthDatePickerCanGoPrev ? '#FFB74D' : 'rgba(255,255,255,0.25)'}
+                      />
+                    </TouchableOpacity>
+
+                    <Text style={styles.birthDatePickerMonthText}>{birthDatePickerMonthLabel}</Text>
+
+                    <TouchableOpacity
+                      style={styles.birthDatePickerMonthButton}
+                      onPress={() => shiftBirthDatePickerMonth(1)}
+                      disabled={!birthDatePickerCanGoNext}
+                      activeOpacity={0.75}
+                    >
+                      <Icon
+                        name="chevron-right"
+                        size={24}
+                        color={birthDatePickerCanGoNext ? '#FFB74D' : 'rgba(255,255,255,0.25)'}
+                      />
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.birthDatePickerWeekdayRow}>
+                    {birthDatePickerWeekdayLabels.map((label, index) => (
+                      <Text key={`${label}-${index}`} style={styles.birthDatePickerWeekdayText}>{label}</Text>
+                    ))}
+                  </View>
+
+                  <View style={styles.birthDatePickerGrid}>
+                    {birthDatePickerDays.map((day) => (
+                      <TouchableOpacity
+                        key={day.key}
+                        style={[
+                          styles.birthDatePickerDayCell,
+                          day.isSelected && styles.birthDatePickerDayCellSelected,
+                          !day.isCurrentMonth && styles.birthDatePickerDayCellOutsideMonth,
+                          day.isDisabled && styles.birthDatePickerDayCellDisabled,
+                        ]}
+                        onPress={() => setPendingBirthDate(day.date)}
+                        disabled={day.isDisabled}
+                        activeOpacity={0.75}
+                      >
+                        <Text
+                          style={[
+                            styles.birthDatePickerDayText,
+                            !day.isCurrentMonth && styles.birthDatePickerDayTextOutsideMonth,
+                            day.isSelected && styles.birthDatePickerDayTextSelected,
+                            day.isDisabled && styles.birthDatePickerDayTextDisabled,
+                          ]}
+                        >
+                          {day.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </>
+              )}
+            </View>
+
+            <View style={styles.birthDatePickerActions}>
+              <TouchableOpacity
+                style={[styles.birthDatePickerActionButton, styles.birthDatePickerCancelButton]}
+                onPress={closeBirthDatePicker}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.birthDatePickerCancelText}>{t('common.cancel')}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.birthDatePickerActionButton, styles.birthDatePickerConfirmButton]}
+                onPress={confirmBirthDatePicker}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.birthDatePickerConfirmText}>{t('common.confirm')}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {isUiBlocked && (
         <View style={styles.blockingOverlay} pointerEvents="auto">
           <GradientLoader />
@@ -1687,6 +1950,195 @@ const styles = StyleSheet.create({
   dateIconButton: {
     padding: 8,
   },
+  birthDatePickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  birthDatePickerPanel: {
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: 28,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,183,77,0.28)',
+    backgroundColor: '#101010',
+  },
+  birthDatePickerHero: {
+    backgroundColor: '#1A1A1A',
+    paddingHorizontal: 22,
+    paddingTop: 22,
+    paddingBottom: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.07)',
+  },
+  birthDatePickerYearButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 2,
+    marginBottom: 8,
+  },
+  birthDatePickerYear: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  birthDatePickerSelectedDate: {
+    color: '#FFFFFF',
+    fontSize: 34,
+    fontWeight: '800',
+    lineHeight: 40,
+  },
+  birthDatePickerCalendarBody: {
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 12,
+    backgroundColor: '#121212',
+    minHeight: 380,
+  },
+  birthDatePickerMonthRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  birthDatePickerMonthButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  birthDatePickerMonthText: {
+    flex: 1,
+    textAlign: 'center',
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '800',
+    marginHorizontal: 8,
+  },
+  birthDatePickerWeekdayRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+  },
+  birthDatePickerWeekdayText: {
+    flex: 1,
+    textAlign: 'center',
+    color: '#1a1a1a',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  birthDatePickerGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  birthDatePickerYearList: {
+    maxHeight: 338,
+  },
+  birthDatePickerYearListContent: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    paddingBottom: 4,
+  },
+  birthDatePickerYearChip: {
+    width: '31%',
+    minHeight: 46,
+    borderRadius: 16,
+    backgroundColor: '#181818',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  birthDatePickerYearChipSelected: {
+    backgroundColor: '#FFB74D',
+    borderColor: '#FFB74D',
+  },
+  birthDatePickerYearChipText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  birthDatePickerYearChipTextSelected: {
+    color: '#000000',
+    fontWeight: '800',
+  },
+  birthDatePickerDayCell: {
+    width: '14.2857%',
+    aspectRatio: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 18,
+    marginBottom: 6,
+  },
+  birthDatePickerDayCellSelected: {
+    backgroundColor: '#FFB74D',
+    shadowColor: '#FFB74D',
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
+  },
+  birthDatePickerDayCellOutsideMonth: {
+    opacity: 0.42,
+  },
+  birthDatePickerDayCellDisabled: {
+    opacity: 0.18,
+  },
+  birthDatePickerDayText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  birthDatePickerDayTextSelected: {
+    color: '#000000',
+    fontWeight: '800',
+  },
+  birthDatePickerDayTextOutsideMonth: {
+    color: 'rgba(255, 145, 0, 0.42)',
+  },
+  birthDatePickerDayTextDisabled: {
+    color: 'rgba(255,255,255,0.25)',
+  },
+  birthDatePickerActions: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingBottom: 18,
+    paddingTop: 6,
+    backgroundColor: '#121212',
+  },
+  birthDatePickerActionButton: {
+    flex: 1,
+    height: 48,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  birthDatePickerCancelButton: {
+    backgroundColor: '#181818',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  birthDatePickerConfirmButton: {
+    backgroundColor: '#FFB74D',
+  },
+  birthDatePickerCancelText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+    opacity: 0.9,
+  },
+  birthDatePickerConfirmText: {
+    color: '#000000',
+    fontSize: 14,
+    fontWeight: '800',
+  },
   errorText: {
     color: '#D84315',
     fontSize: 12,
@@ -1771,7 +2223,7 @@ const styles = StyleSheet.create({
   },
   genderPickerContainer: {
     marginTop: 8,
-    backgroundColor: '#353535ff',
+    backgroundColor: '#161616',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#353535ff',
@@ -1789,14 +2241,14 @@ const styles = StyleSheet.create({
   },
   nationalityPickerContainer: {
     marginTop: 8,
-    backgroundColor: '#353535ff',
+    backgroundColor: '#161616',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#353535ff',
     overflow: 'hidden',
   },
   nationalitySearchInput: {
-    backgroundColor: '#494949ff',
+    backgroundColor: '#191919',
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 16,
