@@ -65,6 +65,591 @@ function generateAccessToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+const HOME_INTIMIDADES_DAILY_GOAL_MAX_PROGRESS = 20;
+const HOME_INTIMIDADES_DAILY_GOAL_REWARD_STEP = 2;
+const HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS = 24 * 60 * 60 * 1000;
+const CHANNEL_HOST_THREAD_GOAL_MAX_PROGRESS = 20;
+const CHANNEL_HOST_IMAGE_GOAL_MAX_PROGRESS = 50;
+const CHANNEL_HOST_IMAGE_GOAL_REWARD_STEP = 10;
+const PROFILE_PUBLISH_GOAL_MAX_PROGRESS = 10;
+const CHANNEL_EVENT_CREATE_GOAL_MAX_PROGRESS = 10;
+const CHANNEL_IMAGE_SHARE_GOAL_MAX_PROGRESS = 10;
+const CHANNEL_AUDIENCE_100_GOAL_MAX_PROGRESS = 100;
+const CHANNEL_AUDIENCE_100_GOAL_REWARD = 1000;
+const CHANNEL_AUDIENCE_1000_GOAL_MAX_PROGRESS = 1000;
+const CHANNEL_AUDIENCE_1000_GOAL_REWARD = 10000;
+const CHANNEL_AUDIENCE_10000_GOAL_MAX_PROGRESS = 10000;
+const CHANNEL_AUDIENCE_10000_GOAL_REWARD = 100000;
+const WHITE_TO_GRADIENT_KEYS_RATE = 10;
+
+function sanitizeNonNegativeInteger(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.floor(numeric));
+}
+
+function parseIsoTimestamp(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
+function sanitizeUnlockSignatures(value) {
+  if (!Array.isArray(value)) return [];
+
+  const seen = new Set();
+  const next = [];
+  value.forEach((entry) => {
+    const signature = String(entry || '').trim();
+    if (!signature || seen.has(signature)) return;
+    seen.add(signature);
+    next.push(signature);
+  });
+
+  return next;
+}
+
+function getDefaultWhiteKeysDailyGoalsState() {
+  return {
+    homeIntimidadesUnlockSignatures: [],
+    homeIntimidadesWindowStartedAt: null,
+    homeIntimidadesGoalRewardClaimed: false,
+    channelHostThreadCompletedAt: null,
+    channelHostThreadRewardClaimed: false,
+    channelHostImageUnlockKeys: [],
+    channelHostImageWindowStartedAt: null,
+    channelHostImageRewardClaimed: false,
+    profilePublishCompletedAt: null,
+    profilePublishRewardClaimed: false,
+    channelEventCreateCompletedAt: null,
+    channelEventCreateRewardClaimed: false,
+    channelImageShareCompletedAt: null,
+    channelImageShareRewardClaimed: false,
+    channelAudience100BaselineCount: 0,
+    channelAudience100CompletedAt: null,
+    channelAudience100RewardClaimed: false,
+    channelAudience1000BaselineCount: 0,
+    channelAudience1000CompletedAt: null,
+    channelAudience1000RewardClaimed: false,
+    channelAudience10000BaselineCount: 0,
+    channelAudience10000CompletedAt: null,
+    channelAudience10000RewardClaimed: false,
+  };
+}
+
+function sanitizeWhiteKeysDailyGoalsState(value) {
+  const raw = value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : {};
+
+  return {
+    homeIntimidadesUnlockSignatures: sanitizeUnlockSignatures(raw.homeIntimidadesUnlockSignatures),
+    homeIntimidadesWindowStartedAt: parseIsoTimestamp(raw.homeIntimidadesWindowStartedAt)?.toISOString() ?? null,
+    homeIntimidadesGoalRewardClaimed: raw.homeIntimidadesGoalRewardClaimed === true,
+    channelHostThreadCompletedAt: parseIsoTimestamp(raw.channelHostThreadCompletedAt)?.toISOString() ?? null,
+    channelHostThreadRewardClaimed: raw.channelHostThreadRewardClaimed === true,
+    channelHostImageUnlockKeys: sanitizeUnlockSignatures(raw.channelHostImageUnlockKeys),
+    channelHostImageWindowStartedAt: parseIsoTimestamp(raw.channelHostImageWindowStartedAt)?.toISOString() ?? null,
+    channelHostImageRewardClaimed: raw.channelHostImageRewardClaimed === true,
+    profilePublishCompletedAt: parseIsoTimestamp(raw.profilePublishCompletedAt)?.toISOString() ?? null,
+    profilePublishRewardClaimed: raw.profilePublishRewardClaimed === true,
+    channelEventCreateCompletedAt: parseIsoTimestamp(raw.channelEventCreateCompletedAt)?.toISOString() ?? null,
+    channelEventCreateRewardClaimed: raw.channelEventCreateRewardClaimed === true,
+    channelImageShareCompletedAt: parseIsoTimestamp(raw.channelImageShareCompletedAt)?.toISOString() ?? null,
+    channelImageShareRewardClaimed: raw.channelImageShareRewardClaimed === true,
+    channelAudience100BaselineCount: sanitizeNonNegativeInteger(raw.channelAudience100BaselineCount),
+    channelAudience100CompletedAt: parseIsoTimestamp(raw.channelAudience100CompletedAt)?.toISOString() ?? null,
+    channelAudience100RewardClaimed: raw.channelAudience100RewardClaimed === true,
+    channelAudience1000BaselineCount: sanitizeNonNegativeInteger(raw.channelAudience1000BaselineCount),
+    channelAudience1000CompletedAt: parseIsoTimestamp(raw.channelAudience1000CompletedAt)?.toISOString() ?? null,
+    channelAudience1000RewardClaimed: raw.channelAudience1000RewardClaimed === true,
+    channelAudience10000BaselineCount: sanitizeNonNegativeInteger(raw.channelAudience10000BaselineCount),
+    channelAudience10000CompletedAt: parseIsoTimestamp(raw.channelAudience10000CompletedAt)?.toISOString() ?? null,
+    channelAudience10000RewardClaimed: raw.channelAudience10000RewardClaimed === true,
+  };
+}
+
+function resetHomeIntimidadesGoalWindow(state) {
+  return {
+    ...state,
+    homeIntimidadesUnlockSignatures: [],
+    homeIntimidadesWindowStartedAt: null,
+    homeIntimidadesGoalRewardClaimed: false,
+  };
+}
+
+function resetChannelHostThreadGoalWindow(state) {
+  return {
+    ...state,
+    channelHostThreadCompletedAt: null,
+    channelHostThreadRewardClaimed: false,
+  };
+}
+
+function resetChannelHostImageGoalWindow(state) {
+  return {
+    ...state,
+    channelHostImageUnlockKeys: [],
+    channelHostImageWindowStartedAt: null,
+    channelHostImageRewardClaimed: false,
+  };
+}
+
+function resetProfilePublishGoalWindow(state) {
+  return {
+    ...state,
+    profilePublishCompletedAt: null,
+    profilePublishRewardClaimed: false,
+  };
+}
+
+function resetChannelEventCreateGoalWindow(state) {
+  return {
+    ...state,
+    channelEventCreateCompletedAt: null,
+    channelEventCreateRewardClaimed: false,
+  };
+}
+
+function resetChannelImageShareGoalWindow(state) {
+  return {
+    ...state,
+    channelImageShareCompletedAt: null,
+    channelImageShareRewardClaimed: false,
+  };
+}
+
+function resetChannelAudienceGoalWindow(state, baselineKey, completedAtKey, rewardClaimedKey, baselineCount) {
+  return {
+    ...state,
+    [baselineKey]: sanitizeNonNegativeInteger(baselineCount),
+    [completedAtKey]: null,
+    [rewardClaimedKey]: false,
+  };
+}
+
+async function getCurrentChannelAudienceCount(email) {
+  const result = await pool.query(
+    `SELECT COALESCE((
+        SELECT COUNT(*)::int
+        FROM channel_subscriptions cs
+        WHERE cs.post_id = p.id
+      ), 0) AS subscriber_count
+     FROM Post_users p
+     WHERE lower(p.user_email) = $1
+       AND p.deleted_at IS NULL
+       AND p.created_at >= NOW() - ($2 * INTERVAL '1 minute')
+     ORDER BY p.created_at DESC
+     LIMIT 1`,
+    [email, Number(process.env.POST_TTL_MINUTES || 60 * 24)]
+  );
+
+  return sanitizeNonNegativeInteger(result.rows?.[0]?.subscriber_count);
+}
+
+function applyChannelAudienceGoalState({
+  state,
+  whiteKeysBalance,
+  currentAudienceCount,
+  progressMax,
+  rewardAmount,
+  baselineKey,
+  completedAtKey,
+  rewardClaimedKey,
+  nowMs,
+}) {
+  let nextState = {
+    ...state,
+    [baselineKey]: sanitizeNonNegativeInteger(state[baselineKey]),
+  };
+  let nextWhiteKeysBalance = sanitizeNonNegativeInteger(whiteKeysBalance);
+  let parsedCompletedAt = parseIsoTimestamp(nextState[completedAtKey]);
+
+  if (parsedCompletedAt) {
+    const expiresAtMs = parsedCompletedAt.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS;
+    if (nowMs >= expiresAtMs) {
+      if (nextState[rewardClaimedKey] !== true) {
+        nextWhiteKeysBalance += rewardAmount;
+      }
+      nextState = resetChannelAudienceGoalWindow(
+        nextState,
+        baselineKey,
+        completedAtKey,
+        rewardClaimedKey,
+        currentAudienceCount,
+      );
+      parsedCompletedAt = null;
+    }
+  }
+
+  const baselineCount = sanitizeNonNegativeInteger(nextState[baselineKey]);
+  const progress = Math.min(
+    Math.max(0, sanitizeNonNegativeInteger(currentAudienceCount) - baselineCount),
+    progressMax,
+  );
+
+  if (!parsedCompletedAt && progress >= progressMax) {
+    nextState = {
+      ...nextState,
+      [completedAtKey]: new Date(nowMs).toISOString(),
+      [rewardClaimedKey]: false,
+    };
+    parsedCompletedAt = parseIsoTimestamp(nextState[completedAtKey]);
+  }
+
+  const expiresAtMs = parsedCompletedAt
+    ? parsedCompletedAt.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS
+    : null;
+
+  return {
+    state: nextState,
+    whiteKeysBalance: nextWhiteKeysBalance,
+    progress,
+    completed: progress >= progressMax,
+    rewardClaimed: nextState[rewardClaimedKey] === true,
+    windowStartedAt: parsedCompletedAt ? parsedCompletedAt.toISOString() : null,
+    expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : null,
+    timeRemainingMs: expiresAtMs ? Math.max(0, expiresAtMs - nowMs) : 0,
+  };
+}
+
+function normalizeWhiteKeysSnapshot(rawRow, nowMs = Date.now()) {
+  const rawState = rawRow?.white_keys_daily_goals_state;
+  let state = sanitizeWhiteKeysDailyGoalsState(rawState);
+  let whiteKeysBalance = sanitizeNonNegativeInteger(rawRow?.white_keys_balance);
+  const gradientKeysBalance = sanitizeNonNegativeInteger(rawRow?.gradient_keys_balance);
+  const hasGoalState = state.homeIntimidadesUnlockSignatures.length > 0 || state.homeIntimidadesGoalRewardClaimed;
+
+  if (!state.homeIntimidadesWindowStartedAt && hasGoalState) {
+    state = resetHomeIntimidadesGoalWindow(state);
+  }
+
+  const parsedWindowStart = parseIsoTimestamp(state.homeIntimidadesWindowStartedAt);
+  if (parsedWindowStart) {
+    const expiresAtMs = parsedWindowStart.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS;
+    if (nowMs >= expiresAtMs) {
+      state = resetHomeIntimidadesGoalWindow(state);
+    }
+  }
+
+  const parsedChannelHostThreadCompletedAt = parseIsoTimestamp(state.channelHostThreadCompletedAt);
+  if (parsedChannelHostThreadCompletedAt) {
+    const expiresAtMs = parsedChannelHostThreadCompletedAt.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS;
+    if (nowMs >= expiresAtMs) {
+      if (!state.channelHostThreadRewardClaimed) {
+        whiteKeysBalance += CHANNEL_HOST_THREAD_GOAL_MAX_PROGRESS;
+      }
+      state = resetChannelHostThreadGoalWindow(state);
+    }
+  }
+
+  const hasGoal3State = state.channelHostImageUnlockKeys.length > 0 || state.channelHostImageRewardClaimed;
+  if (!state.channelHostImageWindowStartedAt && hasGoal3State) {
+    state = resetChannelHostImageGoalWindow(state);
+  }
+
+  const parsedChannelHostImageWindowStartedAt = parseIsoTimestamp(state.channelHostImageWindowStartedAt);
+  if (parsedChannelHostImageWindowStartedAt) {
+    const expiresAtMs = parsedChannelHostImageWindowStartedAt.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS;
+    if (nowMs >= expiresAtMs) {
+      if (!state.channelHostImageRewardClaimed) {
+        whiteKeysBalance += CHANNEL_HOST_IMAGE_GOAL_MAX_PROGRESS;
+      }
+      state = resetChannelHostImageGoalWindow(state);
+    }
+  }
+
+  const parsedProfilePublishCompletedAt = parseIsoTimestamp(state.profilePublishCompletedAt);
+  if (parsedProfilePublishCompletedAt) {
+    const expiresAtMs = parsedProfilePublishCompletedAt.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS;
+    if (nowMs >= expiresAtMs) {
+      if (!state.profilePublishRewardClaimed) {
+        whiteKeysBalance += PROFILE_PUBLISH_GOAL_MAX_PROGRESS;
+      }
+      state = resetProfilePublishGoalWindow(state);
+    }
+  }
+
+  const parsedChannelEventCreateCompletedAt = parseIsoTimestamp(state.channelEventCreateCompletedAt);
+  if (parsedChannelEventCreateCompletedAt) {
+    const expiresAtMs = parsedChannelEventCreateCompletedAt.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS;
+    if (nowMs >= expiresAtMs) {
+      if (!state.channelEventCreateRewardClaimed) {
+        whiteKeysBalance += CHANNEL_EVENT_CREATE_GOAL_MAX_PROGRESS;
+      }
+      state = resetChannelEventCreateGoalWindow(state);
+    }
+  }
+
+  const parsedChannelImageShareCompletedAt = parseIsoTimestamp(state.channelImageShareCompletedAt);
+  if (parsedChannelImageShareCompletedAt) {
+    const expiresAtMs = parsedChannelImageShareCompletedAt.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS;
+    if (nowMs >= expiresAtMs) {
+      if (!state.channelImageShareRewardClaimed) {
+        whiteKeysBalance += CHANNEL_IMAGE_SHARE_GOAL_MAX_PROGRESS;
+      }
+      state = resetChannelImageShareGoalWindow(state);
+    }
+  }
+
+  return {
+    state,
+    whiteKeysBalance,
+    gradientKeysBalance,
+  };
+}
+
+function buildWhiteKeysResponse(row, nowMs = Date.now(), currentAudienceCount = 0) {
+  const snapshot = normalizeWhiteKeysSnapshot(row, nowMs);
+  let state = snapshot.state;
+  let whiteKeysBalance = snapshot.whiteKeysBalance;
+  const channelAudienceCount = sanitizeNonNegativeInteger(currentAudienceCount);
+  const parsedWindowStart = parseIsoTimestamp(state.homeIntimidadesWindowStartedAt);
+  const expiresAtMs = parsedWindowStart
+    ? parsedWindowStart.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS
+    : null;
+  const timeRemainingMs = expiresAtMs ? Math.max(0, expiresAtMs - nowMs) : 0;
+  const progress = Math.min(
+    state.homeIntimidadesUnlockSignatures.length * HOME_INTIMIDADES_DAILY_GOAL_REWARD_STEP,
+    HOME_INTIMIDADES_DAILY_GOAL_MAX_PROGRESS,
+  );
+  const parsedChannelHostThreadCompletedAt = parseIsoTimestamp(state.channelHostThreadCompletedAt);
+  const channelHostThreadExpiresAtMs = parsedChannelHostThreadCompletedAt
+    ? parsedChannelHostThreadCompletedAt.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS
+    : null;
+  const channelHostThreadTimeRemainingMs = channelHostThreadExpiresAtMs
+    ? Math.max(0, channelHostThreadExpiresAtMs - nowMs)
+    : 0;
+  const channelHostThreadProgress = parsedChannelHostThreadCompletedAt ? CHANNEL_HOST_THREAD_GOAL_MAX_PROGRESS : 0;
+  const parsedChannelHostImageWindowStartedAt = parseIsoTimestamp(state.channelHostImageWindowStartedAt);
+  const channelHostImageExpiresAtMs = parsedChannelHostImageWindowStartedAt
+    ? parsedChannelHostImageWindowStartedAt.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS
+    : null;
+  const channelHostImageTimeRemainingMs = channelHostImageExpiresAtMs
+    ? Math.max(0, channelHostImageExpiresAtMs - nowMs)
+    : 0;
+  const channelHostImageProgress = Math.min(
+    state.channelHostImageUnlockKeys.length * CHANNEL_HOST_IMAGE_GOAL_REWARD_STEP,
+    CHANNEL_HOST_IMAGE_GOAL_MAX_PROGRESS,
+  );
+  const parsedProfilePublishCompletedAt = parseIsoTimestamp(state.profilePublishCompletedAt);
+  const profilePublishExpiresAtMs = parsedProfilePublishCompletedAt
+    ? parsedProfilePublishCompletedAt.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS
+    : null;
+  const profilePublishTimeRemainingMs = profilePublishExpiresAtMs
+    ? Math.max(0, profilePublishExpiresAtMs - nowMs)
+    : 0;
+  const profilePublishProgress = parsedProfilePublishCompletedAt ? PROFILE_PUBLISH_GOAL_MAX_PROGRESS : 0;
+  const parsedChannelEventCreateCompletedAt = parseIsoTimestamp(state.channelEventCreateCompletedAt);
+  const channelEventCreateExpiresAtMs = parsedChannelEventCreateCompletedAt
+    ? parsedChannelEventCreateCompletedAt.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS
+    : null;
+  const channelEventCreateTimeRemainingMs = channelEventCreateExpiresAtMs
+    ? Math.max(0, channelEventCreateExpiresAtMs - nowMs)
+    : 0;
+  const channelEventCreateProgress = parsedChannelEventCreateCompletedAt ? CHANNEL_EVENT_CREATE_GOAL_MAX_PROGRESS : 0;
+  const parsedChannelImageShareCompletedAt = parseIsoTimestamp(state.channelImageShareCompletedAt);
+  const channelImageShareExpiresAtMs = parsedChannelImageShareCompletedAt
+    ? parsedChannelImageShareCompletedAt.getTime() + HOME_INTIMIDADES_DAILY_GOAL_WINDOW_MS
+    : null;
+  const channelImageShareTimeRemainingMs = channelImageShareExpiresAtMs
+    ? Math.max(0, channelImageShareExpiresAtMs - nowMs)
+    : 0;
+  const channelImageShareProgress = parsedChannelImageShareCompletedAt ? CHANNEL_IMAGE_SHARE_GOAL_MAX_PROGRESS : 0;
+  const channelAudience100Goal = applyChannelAudienceGoalState({
+    state,
+    whiteKeysBalance,
+    currentAudienceCount: channelAudienceCount,
+    progressMax: CHANNEL_AUDIENCE_100_GOAL_MAX_PROGRESS,
+    rewardAmount: CHANNEL_AUDIENCE_100_GOAL_REWARD,
+    baselineKey: 'channelAudience100BaselineCount',
+    completedAtKey: 'channelAudience100CompletedAt',
+    rewardClaimedKey: 'channelAudience100RewardClaimed',
+    nowMs,
+  });
+  state = channelAudience100Goal.state;
+  whiteKeysBalance = channelAudience100Goal.whiteKeysBalance;
+  const channelAudience1000Goal = applyChannelAudienceGoalState({
+    state,
+    whiteKeysBalance,
+    currentAudienceCount: channelAudienceCount,
+    progressMax: CHANNEL_AUDIENCE_1000_GOAL_MAX_PROGRESS,
+    rewardAmount: CHANNEL_AUDIENCE_1000_GOAL_REWARD,
+    baselineKey: 'channelAudience1000BaselineCount',
+    completedAtKey: 'channelAudience1000CompletedAt',
+    rewardClaimedKey: 'channelAudience1000RewardClaimed',
+    nowMs,
+  });
+  state = channelAudience1000Goal.state;
+  whiteKeysBalance = channelAudience1000Goal.whiteKeysBalance;
+  const channelAudience10000Goal = applyChannelAudienceGoalState({
+    state,
+    whiteKeysBalance,
+    currentAudienceCount: channelAudienceCount,
+    progressMax: CHANNEL_AUDIENCE_10000_GOAL_MAX_PROGRESS,
+    rewardAmount: CHANNEL_AUDIENCE_10000_GOAL_REWARD,
+    baselineKey: 'channelAudience10000BaselineCount',
+    completedAtKey: 'channelAudience10000CompletedAt',
+    rewardClaimedKey: 'channelAudience10000RewardClaimed',
+    nowMs,
+  });
+  state = channelAudience10000Goal.state;
+  whiteKeysBalance = channelAudience10000Goal.whiteKeysBalance;
+
+  return {
+    progress,
+    completed: progress >= HOME_INTIMIDADES_DAILY_GOAL_MAX_PROGRESS,
+    rewardClaimed: state.homeIntimidadesGoalRewardClaimed === true,
+    whiteKeysBalance,
+    gradientKeysBalance: snapshot.gradientKeysBalance,
+    unlockedPublicationSignatures: state.homeIntimidadesUnlockSignatures,
+    windowStartedAt: parsedWindowStart ? parsedWindowStart.toISOString() : null,
+    expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : null,
+    timeRemainingMs,
+    channelHostThreadProgress,
+    channelHostThreadCompleted: channelHostThreadProgress >= CHANNEL_HOST_THREAD_GOAL_MAX_PROGRESS,
+    channelHostThreadRewardClaimed: state.channelHostThreadRewardClaimed === true,
+    channelHostThreadWindowStartedAt: parsedChannelHostThreadCompletedAt ? parsedChannelHostThreadCompletedAt.toISOString() : null,
+    channelHostThreadExpiresAt: channelHostThreadExpiresAtMs ? new Date(channelHostThreadExpiresAtMs).toISOString() : null,
+    channelHostThreadTimeRemainingMs,
+    channelHostImageProgress,
+    channelHostImageCompleted: channelHostImageProgress >= CHANNEL_HOST_IMAGE_GOAL_MAX_PROGRESS,
+    channelHostImageRewardClaimed: state.channelHostImageRewardClaimed === true,
+    channelHostImageUnlockKeys: state.channelHostImageUnlockKeys,
+    channelHostImageWindowStartedAt: parsedChannelHostImageWindowStartedAt ? parsedChannelHostImageWindowStartedAt.toISOString() : null,
+    channelHostImageExpiresAt: channelHostImageExpiresAtMs ? new Date(channelHostImageExpiresAtMs).toISOString() : null,
+    channelHostImageTimeRemainingMs,
+    profilePublishProgress,
+    profilePublishCompleted: profilePublishProgress >= PROFILE_PUBLISH_GOAL_MAX_PROGRESS,
+    profilePublishRewardClaimed: state.profilePublishRewardClaimed === true,
+    profilePublishWindowStartedAt: parsedProfilePublishCompletedAt ? parsedProfilePublishCompletedAt.toISOString() : null,
+    profilePublishExpiresAt: profilePublishExpiresAtMs ? new Date(profilePublishExpiresAtMs).toISOString() : null,
+    profilePublishTimeRemainingMs,
+    channelEventCreateProgress,
+    channelEventCreateCompleted: channelEventCreateProgress >= CHANNEL_EVENT_CREATE_GOAL_MAX_PROGRESS,
+    channelEventCreateRewardClaimed: state.channelEventCreateRewardClaimed === true,
+    channelEventCreateWindowStartedAt: parsedChannelEventCreateCompletedAt ? parsedChannelEventCreateCompletedAt.toISOString() : null,
+    channelEventCreateExpiresAt: channelEventCreateExpiresAtMs ? new Date(channelEventCreateExpiresAtMs).toISOString() : null,
+    channelEventCreateTimeRemainingMs,
+    channelImageShareProgress,
+    channelImageShareCompleted: channelImageShareProgress >= CHANNEL_IMAGE_SHARE_GOAL_MAX_PROGRESS,
+    channelImageShareRewardClaimed: state.channelImageShareRewardClaimed === true,
+    channelImageShareWindowStartedAt: parsedChannelImageShareCompletedAt ? parsedChannelImageShareCompletedAt.toISOString() : null,
+    channelImageShareExpiresAt: channelImageShareExpiresAtMs ? new Date(channelImageShareExpiresAtMs).toISOString() : null,
+    channelImageShareTimeRemainingMs,
+    channelAudienceCount,
+    channelAudience100Progress: channelAudience100Goal.progress,
+    channelAudience100Completed: channelAudience100Goal.completed,
+    channelAudience100RewardClaimed: channelAudience100Goal.rewardClaimed,
+    channelAudience100WindowStartedAt: channelAudience100Goal.windowStartedAt,
+    channelAudience100ExpiresAt: channelAudience100Goal.expiresAt,
+    channelAudience100TimeRemainingMs: channelAudience100Goal.timeRemainingMs,
+    channelAudience1000Progress: channelAudience1000Goal.progress,
+    channelAudience1000Completed: channelAudience1000Goal.completed,
+    channelAudience1000RewardClaimed: channelAudience1000Goal.rewardClaimed,
+    channelAudience1000WindowStartedAt: channelAudience1000Goal.windowStartedAt,
+    channelAudience1000ExpiresAt: channelAudience1000Goal.expiresAt,
+    channelAudience1000TimeRemainingMs: channelAudience1000Goal.timeRemainingMs,
+    channelAudience10000Progress: channelAudience10000Goal.progress,
+    channelAudience10000Completed: channelAudience10000Goal.completed,
+    channelAudience10000RewardClaimed: channelAudience10000Goal.rewardClaimed,
+    channelAudience10000WindowStartedAt: channelAudience10000Goal.windowStartedAt,
+    channelAudience10000ExpiresAt: channelAudience10000Goal.expiresAt,
+    channelAudience10000TimeRemainingMs: channelAudience10000Goal.timeRemainingMs,
+    whiteKeysDailyGoalsState: state,
+  };
+}
+
+async function buildWhiteKeysResponseForEmail(email, row, nowMs = Date.now()) {
+  const currentAudienceCount = await getCurrentChannelAudienceCount(email);
+  return buildWhiteKeysResponse(row, nowMs, currentAudienceCount);
+}
+
+async function getUserKeysRow(email) {
+  const result = await pool.query(
+    `SELECT email, white_keys_balance, gradient_keys_balance, white_keys_daily_goals_state
+       FROM users
+      WHERE lower(email) = $1
+      LIMIT 1`,
+    [email]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  return result.rows[0];
+}
+
+async function saveUserKeysState(email, next) {
+  const result = await pool.query(
+    `UPDATE users
+        SET white_keys_balance = $1,
+            gradient_keys_balance = $2,
+            white_keys_daily_goals_state = $3::jsonb,
+            updated_at = CURRENT_TIMESTAMP
+      WHERE lower(email) = $4
+      RETURNING email, white_keys_balance, gradient_keys_balance, white_keys_daily_goals_state`,
+    [
+      sanitizeNonNegativeInteger(next.whiteKeysBalance),
+      sanitizeNonNegativeInteger(next.gradientKeysBalance),
+      JSON.stringify(normalizeWhiteKeysSnapshot({
+        white_keys_balance: next.whiteKeysBalance,
+        gradient_keys_balance: next.gradientKeysBalance,
+        white_keys_daily_goals_state: next.whiteKeysDailyGoalsState,
+      }).state),
+      email,
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+
+router.get('/search-by-username', async (req, res) => {
+  try {
+    const normalizedQuery = String(req.query?.q || '').trim().replace(/^@+/, '').toLowerCase();
+    const requestedLimit = Number.parseInt(String(req.query?.limit || '5'), 10);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.min(Math.max(requestedLimit, 1), 10)
+      : 5;
+
+    if (!normalizedQuery) {
+      return res.json({ items: [] });
+    }
+
+    const likeValue = `${normalizedQuery}%`;
+    const result = await pool.query(
+      `SELECT username, profile_photo_uri, social_networks
+         FROM users
+        WHERE username IS NOT NULL
+          AND btrim(username) <> ''
+          AND lower(ltrim(username, '@')) LIKE $1
+        ORDER BY CASE
+                   WHEN lower(ltrim(username, '@')) = $2 THEN 0
+                   ELSE 1
+                 END,
+                 char_length(ltrim(username, '@')) ASC,
+                 lower(ltrim(username, '@')) ASC
+        LIMIT $3`,
+      [likeValue, normalizedQuery, limit]
+    );
+
+    return res.json({
+      items: result.rows.map((row) => ({
+        username: row.username,
+        profile_photo_uri: row.profile_photo_uri || null,
+        social_networks: Array.isArray(row.social_networks) ? row.social_networks : [],
+      })),
+    });
+  } catch (error) {
+    console.error('Error al buscar usuarios por username:', error);
+    return res.status(500).json({ error: 'Error al buscar usuarios' });
+  }
+});
+
 // Obtener perfil de usuario
 router.get('/profile/:username', async (req, res) => {
   try {
@@ -340,6 +925,684 @@ router.get('/me', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error al obtener mis datos:', error);
     return res.status(500).json({ error: 'Error al obtener mis datos' });
+  }
+});
+
+router.get('/me/keys-progress', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const payload = await buildWhiteKeysResponseForEmail(email, row, Date.now());
+    const normalizedState = payload.whiteKeysDailyGoalsState;
+    const currentState = sanitizeWhiteKeysDailyGoalsState(row.white_keys_daily_goals_state);
+
+    if (
+      JSON.stringify(currentState) !== JSON.stringify(normalizedState)
+      || sanitizeNonNegativeInteger(row.white_keys_balance) !== payload.whiteKeysBalance
+      || sanitizeNonNegativeInteger(row.gradient_keys_balance) !== payload.gradientKeysBalance
+    ) {
+      await saveUserKeysState(email, {
+        whiteKeysBalance: payload.whiteKeysBalance,
+        gradientKeysBalance: payload.gradientKeysBalance,
+        whiteKeysDailyGoalsState: normalizedState,
+      });
+    }
+
+    return res.json(payload);
+  } catch (error) {
+    console.error('Error al obtener progreso de llaves:', error);
+    return res.status(500).json({ error: 'Error al obtener progreso de llaves' });
+  }
+});
+
+router.put('/me/keys-progress', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+
+    const nextState = {
+      whiteKeysBalance: current.whiteKeysBalance,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: req.body?.whiteKeysDailyGoalsState,
+    };
+
+    const saved = await saveUserKeysState(email, nextState);
+    return res.json(await buildWhiteKeysResponseForEmail(email, saved, nowMs));
+  } catch (error) {
+    console.error('Error al sincronizar progreso de llaves:', error);
+    return res.status(500).json({ error: 'Error al sincronizar progreso de llaves' });
+  }
+});
+
+router.post('/me/keys-progress/home-intimidades/unlock', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const unlockSignature = String(req.body?.unlockSignature || '').trim();
+    if (!unlockSignature) {
+      return res.status(400).json({ error: 'unlockSignature requerido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (state.homeIntimidadesUnlockSignatures.includes(unlockSignature)) {
+      return res.json({ alreadyRecorded: true, ...current });
+    }
+
+    const nextState = {
+      ...state,
+      homeIntimidadesWindowStartedAt: state.homeIntimidadesWindowStartedAt || new Date(nowMs).toISOString(),
+      homeIntimidadesUnlockSignatures: [...state.homeIntimidadesUnlockSignatures, unlockSignature],
+    };
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: nextState,
+    });
+
+    return res.json({ alreadyRecorded: false, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al registrar desbloqueo de intimidades:', error);
+    return res.status(500).json({ error: 'Error al registrar desbloqueo de intimidades' });
+  }
+});
+
+router.post('/me/keys-progress/home-intimidades/claim', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (!current.completed || current.rewardClaimed) {
+      return res.json({ claimedNow: false, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance + HOME_INTIMIDADES_DAILY_GOAL_MAX_PROGRESS,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        homeIntimidadesGoalRewardClaimed: true,
+      },
+    });
+
+    return res.json({ claimedNow: true, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al reclamar recompensa de llaves:', error);
+    return res.status(500).json({ error: 'Error al reclamar recompensa de llaves' });
+  }
+});
+
+router.post('/me/keys-progress/channel-host-thread/complete', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (current.channelHostThreadCompleted) {
+      return res.json({ alreadyCompleted: true, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        channelHostThreadCompletedAt: new Date(nowMs).toISOString(),
+        channelHostThreadRewardClaimed: false,
+      },
+    });
+
+    return res.json({ alreadyCompleted: false, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al completar objetivo de hilo con anfitrión:', error);
+    return res.status(500).json({ error: 'Error al completar objetivo de hilo con anfitrión' });
+  }
+});
+
+router.post('/me/keys-progress/channel-host-thread/claim', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (!current.channelHostThreadCompleted || current.channelHostThreadRewardClaimed) {
+      return res.json({ claimedNow: false, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance + CHANNEL_HOST_THREAD_GOAL_MAX_PROGRESS,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        channelHostThreadRewardClaimed: true,
+      },
+    });
+
+    return res.json({ claimedNow: true, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al reclamar objetivo de hilo con anfitrión:', error);
+    return res.status(500).json({ error: 'Error al reclamar objetivo de hilo con anfitrión' });
+  }
+});
+
+router.post('/me/keys-progress/channel-host-images/unlock', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const unlockKey = String(req.body?.unlockKey || '').trim();
+    if (!unlockKey) {
+      return res.status(400).json({ error: 'unlockKey requerido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (state.channelHostImageUnlockKeys.includes(unlockKey)) {
+      return res.json({ alreadyRecorded: true, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        channelHostImageWindowStartedAt: state.channelHostImageWindowStartedAt || new Date(nowMs).toISOString(),
+        channelHostImageUnlockKeys: [...state.channelHostImageUnlockKeys, unlockKey],
+      },
+    });
+
+    return res.json({ alreadyRecorded: false, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al registrar desbloqueo de imagen de canal:', error);
+    return res.status(500).json({ error: 'Error al registrar desbloqueo de imagen de canal' });
+  }
+});
+
+router.post('/me/keys-progress/channel-host-images/claim', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (!current.channelHostImageCompleted || current.channelHostImageRewardClaimed) {
+      return res.json({ claimedNow: false, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance + CHANNEL_HOST_IMAGE_GOAL_MAX_PROGRESS,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        channelHostImageRewardClaimed: true,
+      },
+    });
+
+    return res.json({ claimedNow: true, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al reclamar objetivo de imágenes de canal:', error);
+    return res.status(500).json({ error: 'Error al reclamar objetivo de imágenes de canal' });
+  }
+});
+
+router.post('/me/keys-progress/profile-publish/complete', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (current.profilePublishCompleted) {
+      return res.json({ alreadyCompleted: true, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        profilePublishCompletedAt: new Date(nowMs).toISOString(),
+        profilePublishRewardClaimed: false,
+      },
+    });
+
+    return res.json({ alreadyCompleted: false, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al completar objetivo de publicar perfil:', error);
+    return res.status(500).json({ error: 'Error al completar objetivo de publicar perfil' });
+  }
+});
+
+router.post('/me/keys-progress/profile-publish/claim', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (!current.profilePublishCompleted || current.profilePublishRewardClaimed) {
+      return res.json({ claimedNow: false, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance + PROFILE_PUBLISH_GOAL_MAX_PROGRESS,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        profilePublishRewardClaimed: true,
+      },
+    });
+
+    return res.json({ claimedNow: true, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al reclamar objetivo de publicar perfil:', error);
+    return res.status(500).json({ error: 'Error al reclamar objetivo de publicar perfil' });
+  }
+});
+
+router.post('/me/keys-progress/channel-event-create/complete', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (current.channelEventCreateCompleted) {
+      return res.json({ alreadyCompleted: true, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        channelEventCreateCompletedAt: new Date(nowMs).toISOString(),
+        channelEventCreateRewardClaimed: false,
+      },
+    });
+
+    return res.json({ alreadyCompleted: false, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al completar objetivo de crear evento en canal:', error);
+    return res.status(500).json({ error: 'Error al completar objetivo de crear evento en canal' });
+  }
+});
+
+router.post('/me/keys-progress/channel-event-create/claim', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (!current.channelEventCreateCompleted || current.channelEventCreateRewardClaimed) {
+      return res.json({ claimedNow: false, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance + CHANNEL_EVENT_CREATE_GOAL_MAX_PROGRESS,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        channelEventCreateRewardClaimed: true,
+      },
+    });
+
+    return res.json({ claimedNow: true, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al reclamar objetivo de crear evento en canal:', error);
+    return res.status(500).json({ error: 'Error al reclamar objetivo de crear evento en canal' });
+  }
+});
+
+router.post('/me/keys-progress/channel-image-share/complete', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (current.channelImageShareCompleted) {
+      return res.json({ alreadyCompleted: true, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        channelImageShareCompletedAt: new Date(nowMs).toISOString(),
+        channelImageShareRewardClaimed: false,
+      },
+    });
+
+    return res.json({ alreadyCompleted: false, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al completar objetivo de compartir imagen en canal:', error);
+    return res.status(500).json({ error: 'Error al completar objetivo de compartir imagen en canal' });
+  }
+});
+
+router.post('/me/keys-progress/channel-image-share/claim', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (!current.channelImageShareCompleted || current.channelImageShareRewardClaimed) {
+      return res.json({ claimedNow: false, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance + CHANNEL_IMAGE_SHARE_GOAL_MAX_PROGRESS,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        channelImageShareRewardClaimed: true,
+      },
+    });
+
+    return res.json({ claimedNow: true, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+
+router.post('/me/keys-progress/channel-audience-100/claim', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (!current.channelAudience100Completed || current.channelAudience100RewardClaimed) {
+      return res.json({ claimedNow: false, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance + CHANNEL_AUDIENCE_100_GOAL_REWARD,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        channelAudience100RewardClaimed: true,
+      },
+    });
+
+    return res.json({ claimedNow: true, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al reclamar objetivo de audiencia 100 del canal:', error);
+    return res.status(500).json({ error: 'Error al reclamar objetivo de audiencia 100 del canal' });
+  }
+});
+
+router.post('/me/keys-progress/channel-audience-1000/claim', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (!current.channelAudience1000Completed || current.channelAudience1000RewardClaimed) {
+      return res.json({ claimedNow: false, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance + CHANNEL_AUDIENCE_1000_GOAL_REWARD,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        channelAudience1000RewardClaimed: true,
+      },
+    });
+
+    return res.json({ claimedNow: true, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al reclamar objetivo de audiencia 1000 del canal:', error);
+    return res.status(500).json({ error: 'Error al reclamar objetivo de audiencia 1000 del canal' });
+  }
+});
+
+router.post('/me/keys-progress/channel-audience-10000/claim', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+    const state = current.whiteKeysDailyGoalsState;
+
+    if (!current.channelAudience10000Completed || current.channelAudience10000RewardClaimed) {
+      return res.json({ claimedNow: false, ...current });
+    }
+
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance + CHANNEL_AUDIENCE_10000_GOAL_REWARD,
+      gradientKeysBalance: current.gradientKeysBalance,
+      whiteKeysDailyGoalsState: {
+        ...state,
+        channelAudience10000RewardClaimed: true,
+      },
+    });
+
+    return res.json({ claimedNow: true, ...(await buildWhiteKeysResponseForEmail(email, saved, nowMs)) });
+  } catch (error) {
+    console.error('Error al reclamar objetivo de audiencia 10000 del canal:', error);
+    return res.status(500).json({ error: 'Error al reclamar objetivo de audiencia 10000 del canal' });
+  }
+});
+  } catch (error) {
+    console.error('Error al reclamar objetivo de compartir imagen en canal:', error);
+    return res.status(500).json({ error: 'Error al reclamar objetivo de compartir imagen en canal' });
+  }
+});
+
+router.post('/me/keys-progress/convert-white-to-gradient', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    const row = await getUserKeysRow(email);
+    if (!row) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nowMs = Date.now();
+    const whiteKeysAmount = sanitizeNonNegativeInteger(req.body?.whiteKeysAmount);
+    const current = await buildWhiteKeysResponseForEmail(email, row, nowMs);
+
+    if (whiteKeysAmount <= 0 || whiteKeysAmount % WHITE_TO_GRADIENT_KEYS_RATE !== 0) {
+      return res.json({
+        converted: false,
+        convertedWhiteKeys: 0,
+        receivedGradientKeys: 0,
+        reason: 'invalid-amount',
+        ...current,
+      });
+    }
+
+    if (whiteKeysAmount > current.whiteKeysBalance) {
+      return res.json({
+        converted: false,
+        convertedWhiteKeys: 0,
+        receivedGradientKeys: 0,
+        reason: 'insufficient-balance',
+        ...current,
+      });
+    }
+
+    const receivedGradientKeys = whiteKeysAmount / WHITE_TO_GRADIENT_KEYS_RATE;
+    const saved = await saveUserKeysState(email, {
+      whiteKeysBalance: current.whiteKeysBalance - whiteKeysAmount,
+      gradientKeysBalance: current.gradientKeysBalance + receivedGradientKeys,
+      whiteKeysDailyGoalsState: current.whiteKeysDailyGoalsState,
+    });
+
+    return res.json({
+      converted: true,
+      convertedWhiteKeys: whiteKeysAmount,
+      receivedGradientKeys,
+      reason: null,
+      ...buildWhiteKeysResponse(saved, nowMs),
+    });
+  } catch (error) {
+    console.error('Error al convertir llaves blancas a gradient:', error);
+    return res.status(500).json({ error: 'Error al convertir llaves blancas a gradient' });
   }
 });
 

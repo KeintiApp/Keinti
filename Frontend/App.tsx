@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Image, Linking, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Image, Linking, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { SystemBars } from 'react-native-edge-to-edge';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -7,8 +7,12 @@ import LoginScreen from './src/screens/LoginScreen';
 import RegisterScreen from './src/screens/RegisterScreen';
 import FrontScreen from './src/screens/FrontScreen';
 import Configuration from './src/screens/Configuration';
+import KeysScreen from './src/screens/KeysScreen';
+import NotificationScreen from './src/screens/NotificationScreen';
+import ReadingScreen from './src/screens/ReadingScreen';
 import { I18nProvider } from './src/i18n/I18nProvider';
 import { type Language, isSupportedLanguage } from './src/i18n/translations';
+import { fetchUnreadNotificationsCount } from './src/services/notificationService';
 import { clearKeintiAuthSession, loadKeintiAuthSession, saveKeintiAuthSession } from './src/services/authSessionStorage';
 import { completeSupabaseProfile, exchangeSupabaseSession, getAccountAuthStatus, getMyPersonalData, getUserByUsername, updatePreferredLanguage } from './src/services/userService';
 import { isSupabaseConfigured, supabase } from './src/config/supabase';
@@ -18,7 +22,9 @@ interface SocialNetwork {
   link: string;
 }
 
-type Screen = 'login' | 'register' | 'front' | 'configuration';
+type FrontScreenInitialTab = 'home' | 'chat' | 'profile';
+
+type Screen = 'login' | 'register' | 'front' | 'configuration' | 'keys' | 'notifications' | 'reading';
 const PENDING_SIGNUP_PREFIX = 'keinti:pendingSignup:';
 
 function App() {
@@ -33,8 +39,44 @@ function App() {
   const [language, setLanguage] = useState<Language>('en');
   const [accountVerified, setAccountVerified] = useState<boolean>(false);
   const [loginNotice, setLoginNotice] = useState<{ message: string; token: number } | null>(null);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+  const [pendingJoinedGroupsRedirect, setPendingJoinedGroupsRedirect] = useState<{
+    groupHashtag: string;
+    requesterUsername: string;
+  } | null>(null);
+  const [pendingJoinedChannelRedirect, setPendingJoinedChannelRedirect] = useState<{
+    postId: number;
+    publisherUsername: string;
+  } | null>(null);
+  const [frontScreenInitialTab, setFrontScreenInitialTab] = useState<FrontScreenInitialTab | undefined>(undefined);
+  const [configurationInitialScreen, setConfigurationInitialScreen] = useState<'main' | 'accountAuth'>('main');
+  const [readingChannelPostId, setReadingChannelPostId] = useState<number | null>(null);
+  const languageRef = useRef<Language>(language);
 
   const pendingKeyForEmail = (e: string) => `keinti:pendingSignup:${String(e || '').trim().toLowerCase()}`;
+
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
+
+  const refreshNotificationUnreadCount = useCallback(async () => {
+    const token = String(authToken || '').trim();
+    if (!token) {
+      setNotificationUnreadCount(0);
+      return;
+    }
+
+    try {
+      const nextCount = await fetchUnreadNotificationsCount(token);
+      setNotificationUnreadCount(nextCount);
+    } catch {
+      setNotificationUnreadCount(0);
+    }
+  }, [authToken]);
+
+  useEffect(() => {
+    refreshNotificationUnreadCount();
+  }, [refreshNotificationUnreadCount]);
 
   // Global deep-link handler for Supabase PKCE callbacks.
   // Needed for email confirmation links (Confirm your email) because the app may open on Login.
@@ -48,10 +90,10 @@ function App() {
     const tryFinalizePendingSignup = async (accessToken: string) => {
       const session = (await supabase!.auth.getSession().catch(() => null))?.data?.session || null;
       const sessionEmail = session?.user?.email ? String(session.user.email).trim().toLowerCase() : '';
-      if (!sessionEmail) return null;
+      if (!sessionEmail) {return null;}
 
       const raw = await AsyncStorage.getItem(pendingKeyForEmail(sessionEmail)).catch(() => null);
-      if (!raw) return null;
+      if (!raw) {return null;}
 
       let pending: any = null;
       try {
@@ -61,12 +103,12 @@ function App() {
       }
 
       const password = String(pending?.password || '');
-      const username = String(pending?.username || '').trim();
+      const pendingUsername = String(pending?.username || '').trim();
       const birthDate = String(pending?.birthDate || '').trim();
       const gender = String(pending?.gender || '').trim();
-      const nationality = String(pending?.nationality || '').trim();
+      const pendingNationality = String(pending?.nationality || '').trim();
 
-      if (!username || !birthDate || !nationality) {
+      if (!pendingUsername || !birthDate || !pendingNationality) {
         // Pending data is incomplete; don't block the user.
         return null;
       }
@@ -90,10 +132,10 @@ function App() {
       }
 
       const completed = await completeSupabaseProfile(accessToken, {
-        username,
+        username: pendingUsername,
         birthDate,
         gender,
-        nationality,
+        nationality: pendingNationality,
       });
 
       await AsyncStorage.removeItem(pendingKeyForEmail(sessionEmail)).catch(() => {});
@@ -101,9 +143,9 @@ function App() {
     };
 
     const handleSupabaseCallback = async (url: string) => {
-      if (cancelled) return;
+      if (cancelled) {return;}
       const raw = String(url || '').trim();
-      if (!raw) return;
+      if (!raw) {return;}
 
       let parsed: URL;
       try {
@@ -131,7 +173,7 @@ function App() {
       // We use it to avoid showing signup-related notices for OAuth callbacks.
       const typeFromQuery = String(parsed.searchParams.get('type') || '').trim().toLowerCase();
       const typeFromHash = (() => {
-        if (!hash) return '';
+        if (!hash) {return '';}
         try {
           return String(new URLSearchParams(hash).get('type') || '').trim().toLowerCase();
         } catch {
@@ -143,7 +185,7 @@ function App() {
 
       // Some Supabase flows may return tokens in the hash.
       const trySetSessionFromHash = async () => {
-        if (!hash) return;
+        if (!hash) {return;}
         const params = new URLSearchParams(hash);
         const access_token = params.get('access_token');
         const refresh_token = params.get('refresh_token');
@@ -200,7 +242,7 @@ function App() {
       // 2) Otherwise, treat as a normal Supabase login (e.g. OAuth) and exchange to backend.
       try {
         const exchanged = await exchangeSupabaseSession(accessToken);
-        if (cancelled) return;
+        if (cancelled) {return;}
         handleLogin(
           exchanged.user.email,
           exchanged.user.profile_photo_uri || undefined,
@@ -246,7 +288,7 @@ function App() {
       const initialUrl = await (typeof anyLinking.getInitialURL === 'function'
         ? anyLinking.getInitialURL()
         : Promise.resolve(null)).catch(() => null);
-      if (cancelled) return;
+      if (cancelled) {return;}
       if (initialUrl) {
         await handleSupabaseCallback(initialUrl);
       }
@@ -322,7 +364,7 @@ function App() {
     };
 
     const applyStoredSessionOptimistically = (stored: any) => {
-      if (!stored?.token) return;
+      if (!stored?.token) {return;}
       applySessionToState({
         token: stored.token,
         email: stored.user?.email || '',
@@ -365,7 +407,7 @@ function App() {
       email?: string;
     }) => {
       const cleanToken = String(token || '').trim();
-      if (!cleanToken) return false;
+      if (!cleanToken) {return false;}
 
       const me = await getMyPersonalData(cleanToken);
       const email = String(me.email || '').trim() || String(fallback?.email || '').trim();
@@ -392,7 +434,7 @@ function App() {
         // non-fatal
       }
 
-      if (cancelled) return false;
+      if (cancelled) {return false;}
 
       applySessionToState({
         token: cleanToken,
@@ -441,12 +483,13 @@ function App() {
           accountVerified: stored.user?.accountVerified,
         }).catch(async (err) => {
           if (isLikelyAuthError(err)) {
+            const currentLanguage = languageRef.current;
             await forceToLogin(
-              language === 'es'
+              currentLanguage === 'es'
                 ? 'Sesión expirada. Inicia sesión de nuevo.'
-                : language === 'fr'
+                : currentLanguage === 'fr'
                   ? 'Session expirée. Connectez-vous à nouveau.'
-                  : language === 'pt'
+                  : currentLanguage === 'pt'
                     ? 'Sessão expirada. Entre novamente.'
                     : 'Session expired. Please sign in again.'
             );
@@ -475,10 +518,10 @@ function App() {
           .getSession()
           .then(async ({ data }) => {
             const accessToken = data?.session?.access_token;
-            if (!accessToken || cancelled) return;
+            if (!accessToken || cancelled) {return;}
 
             const exchanged = await exchangeSupabaseSession(accessToken);
-            if (cancelled) return;
+            if (cancelled) {return;}
 
             const preferredLanguage = String(exchanged.user?.preferred_language || '').trim().toLowerCase();
             const normalizedPreferredLanguage =
@@ -552,7 +595,7 @@ function App() {
     if (targetLanguage) {
       setLanguage(targetLanguage);
     }
-    
+
     if (token) {
       setAuthToken(token);
     } else {
@@ -583,7 +626,7 @@ function App() {
         },
       }).catch(() => {});
     }
-    
+
     setCurrentScreen('front');
   }
 
@@ -664,7 +707,25 @@ function App() {
           onLogout={handleLogout}
           giveAways={[]}
           authToken={authToken}
-          onNavigateToConfiguration={() => setCurrentScreen('configuration')}
+          onNavigateToConfiguration={() => {
+            setConfigurationInitialScreen('main');
+            setCurrentScreen('configuration');
+          }}
+          onNavigateToNotifications={() => setCurrentScreen('notifications')}
+          onNavigateToKeys={() => setCurrentScreen('keys')}
+          onNavigateToReading={(options) => {
+            const parsedPostId = Number(options?.channelPostId);
+            setReadingChannelPostId(Number.isFinite(parsedPostId) ? parsedPostId : null);
+            setCurrentScreen('reading');
+          }}
+          unreadNotificationsCount={notificationUnreadCount}
+          initialBottomTab={frontScreenInitialTab}
+          onConsumeInitialBottomTab={() => setFrontScreenInitialTab(undefined)}
+          joinedGroupsRedirect={pendingJoinedGroupsRedirect}
+          onConsumeJoinedGroupsRedirect={() => setPendingJoinedGroupsRedirect(null)}
+          joinedChannelRedirect={pendingJoinedChannelRedirect}
+          onConsumeJoinedChannelRedirect={() => setPendingJoinedChannelRedirect(null)}
+          onNotificationsChanged={refreshNotificationUnreadCount}
         />
       )}
 
@@ -672,8 +733,55 @@ function App() {
         <Configuration
           onBack={() => setCurrentScreen('front')}
           authToken={authToken}
+          initialScreen={configurationInitialScreen}
           onLogout={handleLogout}
           onAccountVerifiedChange={(v) => setAccountVerified(!!v)}
+        />
+      )}
+
+      {!isBootstrapping && currentScreen === 'keys' && (
+        <KeysScreen
+          onBack={() => setCurrentScreen('front')}
+          authToken={authToken}
+          accountVerified={accountVerified}
+          onNavigateToAccountAuth={() => {
+            setConfigurationInitialScreen('accountAuth');
+            setCurrentScreen('configuration');
+          }}
+          userEmail={userEmail}
+        />
+      )}
+
+      {!isBootstrapping && currentScreen === 'notifications' && (
+        <NotificationScreen
+          onBack={() => {
+            setFrontScreenInitialTab('profile');
+            setCurrentScreen('front');
+          }}
+          authToken={authToken}
+          onNotificationsChanged={refreshNotificationUnreadCount}
+          onGroupJoinAccepted={(payload) => {
+            setPendingJoinedGroupsRedirect(payload);
+            setFrontScreenInitialTab('chat');
+            setCurrentScreen('front');
+          }}
+          onChannelReplyNavigate={(payload) => {
+            setPendingJoinedChannelRedirect(payload);
+            setFrontScreenInitialTab('chat');
+            setCurrentScreen('front');
+          }}
+        />
+      )}
+
+      {!isBootstrapping && currentScreen === 'reading' && (
+        <ReadingScreen
+          onBack={() => {
+            setReadingChannelPostId(null);
+            setFrontScreenInitialTab('chat');
+            setCurrentScreen('front');
+          }}
+          authToken={authToken}
+          channelPostId={readingChannelPostId}
         />
       )}
     </I18nProvider>

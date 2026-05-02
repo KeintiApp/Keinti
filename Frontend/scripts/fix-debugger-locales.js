@@ -1,9 +1,9 @@
-/* eslint-disable no-console */
+
 const fs = require('fs');
 const path = require('path');
 
 function ensureFileCopy(src, dest) {
-  if (fs.existsSync(dest)) return;
+  if (fs.existsSync(dest)) {return;}
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.copyFileSync(src, dest);
 }

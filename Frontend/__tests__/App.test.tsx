@@ -9,31 +9,31 @@ import React from 'react';
 import {it} from '@jest/globals';
 
 // Note: test renderer must be required after react-native.
-import renderer, {act} from 'react-test-renderer';
+import renderer, {act, type ReactTestRenderer} from 'react-test-renderer';
 
 // This is a smoke test: we just verify the app entry renders.
 // Mock heavy screens to avoid native-module rendering issues in Jest.
 jest.mock('../src/screens/LoginScreen', () => {
-  const React = require('react');
-  const Mock = () => React.createElement('LoginScreen');
+  const ReactMock = require('react');
+  const Mock = () => ReactMock.createElement('LoginScreen');
   return { __esModule: true, default: Mock };
 });
 
 jest.mock('../src/screens/RegisterScreen', () => {
-  const React = require('react');
-  const Mock = () => React.createElement('RegisterScreen');
+  const ReactMock = require('react');
+  const Mock = () => ReactMock.createElement('RegisterScreen');
   return { __esModule: true, default: Mock };
 });
 
 jest.mock('../src/screens/FrontScreen', () => {
-  const React = require('react');
-  const Mock = () => React.createElement('FrontScreen');
+  const ReactMock = require('react');
+  const Mock = () => ReactMock.createElement('FrontScreen');
   return { __esModule: true, default: Mock };
 });
 
 jest.mock('../src/screens/Configuration', () => {
-  const React = require('react');
-  const Mock = () => React.createElement('Configuration');
+  const ReactMock = require('react');
+  const Mock = () => ReactMock.createElement('Configuration');
   return { __esModule: true, default: Mock };
 });
 
@@ -41,7 +41,7 @@ jest.mock('../src/screens/Configuration', () => {
 const App = require('../App').default;
 
 it('renders correctly', async () => {
-  let tree: renderer.ReactTestRenderer | null = null;
+  let tree: ReactTestRenderer | null = null;
 
   await act(async () => {
     tree = renderer.create(<App />);
@@ -49,5 +49,6 @@ it('renders correctly', async () => {
     await Promise.resolve();
   });
 
-  tree?.unmount();
+  expect(tree).not.toBeNull();
+  tree!.unmount();
 });

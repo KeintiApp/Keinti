@@ -69,10 +69,10 @@ export const uploadImage = async (
   try {
     const normalizeUploadUri = (raw: string) => {
       const uri = String(raw || '').trim();
-      if (!uri) return uri;
+      if (!uri) {return uri;}
 
       // Keep already-valid schemes.
-      if (/^(https?:|content:|data:)/i.test(uri)) return uri;
+      if (/^(https?:|content:|data:)/i.test(uri)) {return uri;}
 
       // Normalize file URIs. Some Android stacks fail when the URI is malformed
       // (e.g. `file://storage/...` treating `storage` as host, or `file:/...`).
@@ -113,11 +113,11 @@ export const uploadImage = async (
 
     const guessMimeType = (uri: string) => {
       const u = uri.toLowerCase();
-      if (u.endsWith('.png')) return 'image/png';
-      if (u.endsWith('.webp')) return 'image/webp';
-      if (u.endsWith('.heic')) return 'image/heic';
-      if (u.endsWith('.heif')) return 'image/heif';
-      if (u.endsWith('.jpg') || u.endsWith('.jpeg')) return 'image/jpeg';
+      if (u.endsWith('.png')) {return 'image/png';}
+      if (u.endsWith('.webp')) {return 'image/webp';}
+      if (u.endsWith('.heic')) {return 'image/heic';}
+      if (u.endsWith('.heif')) {return 'image/heif';}
+      if (u.endsWith('.jpg') || u.endsWith('.jpeg')) {return 'image/jpeg';}
       return 'image/jpeg';
     };
 
@@ -199,7 +199,7 @@ export const deleteDraftUploadedImageByUrl = async (
   token: string
 ): Promise<{ ok: boolean; skipped?: boolean }> => {
   const url = String(imageUrl || '').trim();
-  if (!url) return { ok: false, skipped: true };
+  if (!url) {return { ok: false, skipped: true };}
 
   // Only handle images served through our backend uploader.
   const match = url.match(/\/api\/upload\/image\/(\d+)(?:\?|$)/i);
@@ -217,8 +217,8 @@ export const deleteDraftUploadedImageByUrl = async (
   });
 
   // Treat not-found as already deleted.
-  if (response.status === 404) return { ok: true };
-  if (response.ok) return { ok: true };
+  if (response.status === 404) {return { ok: true };}
+  if (response.ok) {return { ok: true };}
 
   // 409 can mean "still in use" or "belongs to post/group"; caller may ignore.
   const data = await response.json().catch(() => ({}));
@@ -228,7 +228,7 @@ export const deleteDraftUploadedImageByUrl = async (
 export const loginUser = async (credentials: LoginPayload) => {
   try {
     console.log('🔍 Intentando conectar a:', `${API_URL}/api/auth/login`);
-    
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos timeout
 
@@ -365,7 +365,7 @@ export const completeSupabaseProfile = async (
 export const registerUser = async (userData: RegisterPayload) => {
   try {
     console.log('Intentando conectar a:', `${API_URL}/api/auth/register`);
-    
+
     const response = await fetch(`${API_URL}/api/auth/register`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -659,10 +659,10 @@ export const submitEmailRectification = async (params: { email: string; message:
 export const updateProfilePhoto = async (data: {token: string; photoUri: string}) => {
   const normalizeUploadUri = (raw: string) => {
     const uri = String(raw || '').trim();
-    if (!uri) return uri;
+    if (!uri) {return uri;}
 
     // Keep already-valid schemes.
-    if (/^(https?:|content:|data:)/i.test(uri)) return uri;
+    if (/^(https?:|content:|data:)/i.test(uri)) {return uri;}
 
     // Normalize file URIs.
     if (/^file:/i.test(uri)) {
@@ -695,11 +695,11 @@ export const updateProfilePhoto = async (data: {token: string; photoUri: string}
 
   const guessMimeType = (uri: string) => {
     const u = uri.toLowerCase();
-    if (u.endsWith('.png')) return 'image/png';
-    if (u.endsWith('.webp')) return 'image/webp';
-    if (u.endsWith('.heic')) return 'image/heic';
-    if (u.endsWith('.heif')) return 'image/heif';
-    if (u.endsWith('.jpg') || u.endsWith('.jpeg')) return 'image/jpeg';
+    if (u.endsWith('.png')) {return 'image/png';}
+    if (u.endsWith('.webp')) {return 'image/webp';}
+    if (u.endsWith('.heic')) {return 'image/heic';}
+    if (u.endsWith('.heif')) {return 'image/heif';}
+    if (u.endsWith('.jpg') || u.endsWith('.jpeg')) {return 'image/jpeg';}
     return 'image/jpeg';
   };
 
@@ -897,8 +897,8 @@ export const getMyGroupsActiveMembersProgress = async (
 export const uploadAccountSelfie = async (imageUri: string, token: string) => {
   const normalizeUploadUri = (raw: string) => {
     const uri = String(raw || '').trim();
-    if (!uri) return uri;
-    if (/^(https?:|content:|data:)/i.test(uri)) return uri;
+    if (!uri) {return uri;}
+    if (/^(https?:|content:|data:)/i.test(uri)) {return uri;}
     if (/^file:/i.test(uri)) {
       let fileUri = uri;
       fileUri = fileUri.replace(/^file:\/*/i, 'file:///');
@@ -917,11 +917,11 @@ export const uploadAccountSelfie = async (imageUri: string, token: string) => {
 
   const guessMimeType = (uri: string) => {
     const u = uri.toLowerCase();
-    if (u.endsWith('.png')) return 'image/png';
-    if (u.endsWith('.webp')) return 'image/webp';
-    if (u.endsWith('.heic')) return 'image/heic';
-    if (u.endsWith('.heif')) return 'image/heif';
-    if (u.endsWith('.jpg') || u.endsWith('.jpeg')) return 'image/jpeg';
+    if (u.endsWith('.png')) {return 'image/png';}
+    if (u.endsWith('.webp')) {return 'image/webp';}
+    if (u.endsWith('.heic')) {return 'image/heic';}
+    if (u.endsWith('.heif')) {return 'image/heif';}
+    if (u.endsWith('.jpg') || u.endsWith('.jpeg')) {return 'image/jpeg';}
     return 'image/jpeg';
   };
 
@@ -1089,6 +1089,56 @@ export const getUserByUsername = async (username: string) => {
   }
 
   return response.json();
+};
+
+export type UsernameSuggestion = {
+  username: string;
+  profile_photo_uri?: string | null;
+  social_networks?: Array<{ network: string; link?: string | null }>;
+};
+
+export const searchUsersByUsername = async (query: string, limit = 5): Promise<UsernameSuggestion[]> => {
+  const normalizedQuery = String(query || '').trim().replace(/^@+/, '');
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const response = await fetch(
+    `${API_URL}/api/users/search-by-username?q=${encodeURIComponent(normalizedQuery)}&limit=${encodeURIComponent(String(limit))}`,
+    {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    }
+  );
+
+  const data = (await response.json().catch(() => ({}))) as ApiErrorShape & {
+    items?: Array<{
+      username?: string;
+      profile_photo_uri?: string | null;
+      social_networks?: Array<{ network?: string; id?: string; link?: string | null }>;
+    }>;
+  };
+
+  if (!response.ok) {
+    throw new ApiError(data?.error || 'No se pudieron buscar usuarios', response.status, data);
+  }
+
+  return Array.isArray(data?.items)
+    ? data.items
+        .map((item) => ({
+          username: String(item?.username || '').trim(),
+          profile_photo_uri: item?.profile_photo_uri ?? null,
+          social_networks: Array.isArray(item?.social_networks)
+            ? item.social_networks
+                .map((social) => ({
+                  network: String(social?.network || social?.id || '').trim(),
+                  link: social?.link ?? null,
+                }))
+                .filter((social) => !!social.network)
+            : [],
+        }))
+        .filter((item) => !!item.username)
+    : [];
 };
 
 export const deleteMyAccount = async (token: string) => {

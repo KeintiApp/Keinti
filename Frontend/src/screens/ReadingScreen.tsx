@@ -1,0 +1,3106 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Animated, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, PermissionsAndroid, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import MaskedView from '@react-native-masked-view/masked-view';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+import ImageCropPicker from 'react-native-image-crop-picker';
+import { API_URL, getServerResourceUrl } from '../config/api';
+import { searchUsersByUsername, type UsernameSuggestion, uploadImage } from '../services/userService';
+import { useI18n } from '../i18n/I18nProvider';
+import type { TranslationKey } from '../i18n/translations';
+import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
+
+interface ReadingScreenProps {
+  onBack: () => void;
+  authToken?: string;
+  channelPostId?: string | number | null;
+}
+
+type ReadingInsertion =
+  | {
+      type: 'image';
+      uri: string;
+    }
+  | {
+      type: 'intertitle';
+      text: string;
+    };
+
+const TITLE_MAX_LENGTH = 80;
+const SUBTITLE_MAX_LENGTH = 120;
+const LEAD_MAX_LENGTH = 240;
+type ChannelReadingMessageInsertion =
+  | {
+      type: 'image';
+      url: string;
+    }
+  | {
+      type: 'intertitle';
+      text: string;
+    };
+
+type ChannelReadingMessagePayload = {
+  title: string;
+  subtitle: string;
+  lead: string;
+  date: string;
+  category: string;
+  hypeCost?: number | null;
+  bodySections: string[];
+  insertions: ChannelReadingMessageInsertion[];
+  imageUrls: string[];
+  citations: Array<{
+    id: string;
+    sectionIndex: number;
+    start: number;
+    end: number;
+    text: string;
+    appearance: CitationAppearance;
+    users: SelectedCitedUser[];
+  }>;
+};
+const BODY_MIN_LENGTH = 800;
+const READING_MAX_IMAGES = 3;
+const INTERTITLE_MAX_LENGTH = 80;
+const MAX_VISIBLE_CITED_USERS = 5;
+const CHANNEL_READING_MESSAGE_PREFIX = '__KREAD__';
+
+type BodySelectionState = {
+  sectionIndex: number;
+  start: number;
+  end: number;
+  text: string;
+};
+
+type SelectedCitedUser = {
+  username: string;
+  profile_photo_uri?: string | null;
+  social_networks?: Array<{ network: string; link?: string | null }>;
+};
+
+type CitationAppearance = 'white' | 'gradient';
+
+type ReadingCitation = {
+  id: string;
+  sectionIndex: number;
+  start: number;
+  end: number;
+  text: string;
+  users: SelectedCitedUser[];
+  appearance: CitationAppearance;
+};
+
+const READING_CATEGORY_OPTIONS = [
+  'event.typeOption.social',
+  'event.typeOption.cultural',
+  'event.typeOption.artistic',
+  'event.typeOption.business',
+  'event.typeOption.economic',
+  'event.typeOption.academic',
+  'event.typeOption.sports',
+  'event.typeOption.entertainment',
+  'event.typeOption.political',
+  'event.typeOption.religious',
+  'event.typeOption.marketing',
+  'event.typeOption.charity',
+  'event.typeOption.audiovisual',
+  'event.typeOption.scientific',
+  'event.typeOption.technological',
+  'event.typeOption.children',
+  'event.typeOption.musical',
+  'event.typeOption.automotive',
+  'event.typeOption.fitness',
+  'event.typeOption.gastronomic',
+  'event.typeOption.work',
+] as const satisfies readonly TranslationKey[];
+
+type ReadingCategoryOption = typeof READING_CATEGORY_OPTIONS[number];
+
+const APPLY_BUTTON_GRADIENT_COLORS = ['#FFB74D', '#ffe45c'];
+const SOCIAL_ICONS = {
+  facebook: require('../../assets/images/facebook.png'),
+  instagram: require('../../assets/images/instagram.png'),
+  onlyfans: require('../../assets/images/onlyfans.png'),
+  pinterest: require('../../assets/images/pinterest.png'),
+  telegram: require('../../assets/images/telegram.png'),
+  tiktok: require('../../assets/images/tiktok.png'),
+  twitter: require('../../assets/images/x_twitter.png'),
+  youtube: require('../../assets/images/youtube.png'),
+  discord: require('../../assets/images/discord.png'),
+  threads: require('../../assets/images/threads.png'),
+  linkedin: require('../../assets/images/linkedin.png'),
+  kick: require('../../assets/images/kick.png'),
+  twitch: require('../../assets/images/twitch.png'),
+};
+const CITATION_USER_SOCIAL_ICON_SIZE = 18;
+const CITATION_USER_SOCIAL_ICON_GAP = 10;
+const CITATION_USER_SOCIAL_VIEWPORT_COUNT = 3;
+
+const normalizeMentionUsername = (value: string) => String(value || '').trim().replace(/^@+/, '');
+const formatReadingIntegerInput = (raw: string) => {
+  const digitsOnly = String(raw || '').replace(/\D+/g, '');
+  if (!digitsOnly) {return '';}
+
+  const normalizedDigits = digitsOnly.replace(/^0+(?=\d)/, '');
+  return normalizedDigits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+};
+
+const sanitizeReadingAmountInput = (value: string) => value.replace(/\D+/g, '').replace(/^0+(?=\d)/, '');
+
+const encodeChannelReadingMessage = (payload: ChannelReadingMessagePayload) => {
+  const safe = {
+    title: String(payload?.title || '').trim(),
+    subtitle: String(payload?.subtitle || '').trim(),
+    lead: String(payload?.lead || '').trim(),
+    date: String(payload?.date || '').trim(),
+    category: String(payload?.category || '').trim(),
+    hypeCost: typeof payload?.hypeCost === 'number' && Number.isFinite(payload.hypeCost)
+      ? Math.max(0, Math.floor(payload.hypeCost))
+      : null,
+    bodySections: Array.isArray(payload?.bodySections)
+      ? payload.bodySections.map((section) => String(section || ''))
+      : [],
+    insertions: Array.isArray(payload?.insertions)
+      ? payload.insertions.reduce<ChannelReadingMessageInsertion[]>((accumulator, insertion) => {
+        if (insertion?.type === 'image') {
+          const url = String(insertion?.url || '').trim();
+          if (url) {
+            accumulator.push({ type: 'image', url });
+          }
+          return accumulator;
+        }
+
+        if (insertion?.type === 'intertitle') {
+          const text = String(insertion?.text || '').trim();
+          if (text) {
+            accumulator.push({ type: 'intertitle', text });
+          }
+        }
+
+        return accumulator;
+      }, [])
+      : [],
+    imageUrls: Array.isArray(payload?.imageUrls)
+      ? payload.imageUrls.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    citations: Array.isArray(payload?.citations)
+      ? payload.citations.reduce<ChannelReadingMessagePayload['citations']>((accumulator, citation) => {
+        const text = String(citation?.text || '').trim();
+        if (!text) {
+          return accumulator;
+        }
+
+        accumulator.push({
+          id: String(citation?.id || '').trim() || `citation-${accumulator.length}`,
+          sectionIndex: Math.max(0, Math.floor(Number(citation?.sectionIndex) || 0)),
+          start: Math.max(0, Math.floor(Number(citation?.start) || 0)),
+          end: Math.max(0, Math.floor(Number(citation?.end) || 0)),
+          text,
+          appearance: citation?.appearance === 'gradient' ? 'gradient' : 'white',
+          users: Array.isArray(citation?.users)
+            ? citation.users.reduce<SelectedCitedUser[]>((usersAccumulator, user) => {
+              const username = String(user?.username || '').trim();
+              if (!username) {
+                return usersAccumulator;
+              }
+
+              usersAccumulator.push({
+                username,
+                profile_photo_uri: typeof user?.profile_photo_uri === 'string' ? user.profile_photo_uri.trim() : null,
+                social_networks: Array.isArray(user?.social_networks)
+                  ? user.social_networks
+                    .map((social) => ({
+                      network: String(social?.network || '').trim(),
+                      link: typeof social?.link === 'string' ? social.link.trim() : null,
+                    }))
+                    .filter((social) => social.network)
+                  : [],
+              });
+              return usersAccumulator;
+            }, [])
+            : [],
+        });
+        return accumulator;
+      }, [])
+      : [],
+  };
+
+  return `${CHANNEL_READING_MESSAGE_PREFIX}${JSON.stringify(safe)}`;
+};
+
+const normalizeCitationSocialIconKey = (raw: unknown) => {
+  const key = String(raw ?? '').trim().toLowerCase();
+  if (!key) {
+    return '';
+  }
+  if (key === 'x' || key === 'x_twitter' || key === 'xtwitter') {
+    return 'twitter';
+  }
+  if (key === 'only_fans') {
+    return 'onlyfans';
+  }
+  return key;
+};
+
+const normalizeExternalUrl = (rawUrl: string): string | null => {
+  const trimmed = String(rawUrl ?? '').trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith('//')) {
+    return `https:${trimmed}`;
+  }
+
+  return `https://${trimmed}`;
+};
+
+const getRenderableCitationUserSocials = (socialNetworks?: Array<{ network: string; link?: string | null }>) => {
+  if (!Array.isArray(socialNetworks)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  return socialNetworks.reduce<Array<{ key: string; iconSource: any; link: string }>>((accumulator, social) => {
+    const key = normalizeCitationSocialIconKey(social?.network);
+    if (!key || seen.has(key)) {
+      return accumulator;
+    }
+
+    const normalizedLink = normalizeExternalUrl(String(social?.link || ''));
+    if (!normalizedLink) {
+      return accumulator;
+    }
+
+    const iconSource = SOCIAL_ICONS[key as keyof typeof SOCIAL_ICONS];
+    if (!iconSource) {
+      return accumulator;
+    }
+
+    seen.add(key);
+    accumulator.push({ key, iconSource, link: normalizedLink });
+    return accumulator;
+  }, []);
+};
+
+const getNearestTextMatchIndex = (sourceText: string, queryText: string, preferredIndex: number) => {
+  const normalizedQuery = String(queryText || '');
+  if (!normalizedQuery) {
+    return -1;
+  }
+
+  let matchIndex = sourceText.indexOf(normalizedQuery);
+  if (matchIndex === -1) {
+    return -1;
+  }
+
+  let nearestIndex = matchIndex;
+  let smallestDistance = Math.abs(matchIndex - preferredIndex);
+
+  while (matchIndex !== -1) {
+    const nextDistance = Math.abs(matchIndex - preferredIndex);
+    if (nextDistance < smallestDistance) {
+      nearestIndex = matchIndex;
+      smallestDistance = nextDistance;
+    }
+
+    matchIndex = sourceText.indexOf(normalizedQuery, matchIndex + 1);
+  }
+
+  return nearestIndex;
+};
+
+const formatReadingDateDigits = (digits: string) => {
+  const cleaned = String(digits || '').replace(/[^0-9]/g, '').slice(0, 8);
+  if (cleaned.length <= 2) {return cleaned;}
+  if (cleaned.length <= 4) {return `${cleaned.slice(0, 2)}/${cleaned.slice(2)}`;}
+  return `${cleaned.slice(0, 2)}/${cleaned.slice(2, 4)}/${cleaned.slice(4)}`;
+};
+
+const hexToRgb = (value: string) => {
+  const normalized = String(value || '').trim().replace('#', '');
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) {
+    return { red: 255, green: 255, blue: 255 };
+  }
+
+  return {
+    red: parseInt(normalized.slice(0, 2), 16),
+    green: parseInt(normalized.slice(2, 4), 16),
+    blue: parseInt(normalized.slice(4, 6), 16),
+  };
+};
+
+const interpolateHexColor = (startColor: string, endColor: string, ratio: number) => {
+  const start = hexToRgb(startColor);
+  const end = hexToRgb(endColor);
+  const clampedRatio = Math.max(0, Math.min(1, ratio));
+
+  const channelToHex = (value: number) => Math.round(value).toString(16).padStart(2, '0');
+
+  const red = start.red + ((end.red - start.red) * clampedRatio);
+  const green = start.green + ((end.green - start.green) * clampedRatio);
+  const blue = start.blue + ((end.blue - start.blue) * clampedRatio);
+
+  return `#${channelToHex(red)}${channelToHex(green)}${channelToHex(blue)}`;
+};
+
+const renderGradientTextContent = ({
+  text,
+  keyPrefix,
+  startColor,
+  endColor,
+}: {
+  text: string;
+  keyPrefix: string;
+  startColor: string;
+  endColor: string;
+}) => {
+  const characters = Array.from(String(text || ''));
+  const denominator = Math.max(1, characters.length - 1);
+
+  return characters.map((character, index) => (
+    <Text
+      key={`${keyPrefix}-${index}`}
+      style={{ color: interpolateHexColor(startColor, endColor, index / denominator) }}
+    >
+      {character}
+    </Text>
+  ));
+};
+
+const renderReadingTextFragments = ({
+  text,
+  citations,
+  keyPrefix,
+  plainTextStyle,
+  whiteCitationStyle,
+  gradientCitationStyle,
+  onPressCitation,
+  useGradientCharacterColors = true,
+}: {
+  text: string;
+  citations: ReadingCitation[];
+  keyPrefix: string;
+  plainTextStyle: any;
+  whiteCitationStyle: any;
+  gradientCitationStyle: any;
+  onPressCitation?: (citation: ReadingCitation) => void;
+  useGradientCharacterColors?: boolean;
+}) => {
+  if (!citations.length) {
+    return text;
+  }
+
+  const fragments: React.ReactNode[] = [];
+  let cursor = 0;
+
+  citations.forEach((citation, citationIndex) => {
+    if (cursor < citation.start) {
+      fragments.push(
+        <Text
+          key={`${keyPrefix}-plain-${citationIndex}-${cursor}`}
+          style={plainTextStyle}
+        >
+          {text.slice(cursor, citation.start)}
+        </Text>
+      );
+    }
+
+    fragments.push(
+      <Text
+        key={`${keyPrefix}-citation-${citation.id}`}
+        style={citation.appearance === 'gradient' ? gradientCitationStyle : whiteCitationStyle}
+        onPress={onPressCitation ? () => onPressCitation(citation) : undefined}
+        suppressHighlighting={!!onPressCitation}
+      >
+          {citation.appearance === 'gradient' && useGradientCharacterColors
+          ? renderGradientTextContent({
+            text: text.slice(citation.start, citation.end),
+            keyPrefix: `${keyPrefix}-gradient-${citation.id}`,
+            startColor: APPLY_BUTTON_GRADIENT_COLORS[0],
+            endColor: APPLY_BUTTON_GRADIENT_COLORS[1],
+          })
+          : text.slice(citation.start, citation.end)}
+      </Text>
+    );
+
+    cursor = citation.end;
+  });
+
+  if (cursor < text.length) {
+    fragments.push(
+      <Text key={`${keyPrefix}-plain-tail-${cursor}`} style={plainTextStyle}>
+        {text.slice(cursor)}
+      </Text>
+    );
+  }
+
+  return fragments;
+};
+
+const reconcileSectionCitations = (nextText: string, citations: ReadingCitation[]) => {
+  const normalizedText = String(nextText || '');
+  if (!normalizedText.trim()) {
+    return [];
+  }
+
+  return citations.reduce<ReadingCitation[]>((accumulator, citation) => {
+    const expectedText = String(citation.text || '');
+    if (!expectedText) {
+      return accumulator;
+    }
+
+    const currentSlice = normalizedText.slice(citation.start, citation.end);
+    if (currentSlice === expectedText) {
+      accumulator.push({
+        ...citation,
+        end: citation.start + expectedText.length,
+      });
+      return accumulator;
+    }
+
+    const nextStart = getNearestTextMatchIndex(normalizedText, expectedText, citation.start);
+    if (nextStart === -1) {
+      return accumulator;
+    }
+
+    accumulator.push({
+      ...citation,
+      start: nextStart,
+      end: nextStart + expectedText.length,
+    });
+    return accumulator;
+  }, []);
+};
+
+const getAndroidGalleryPermission = () => {
+  const apiLevel = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
+  return apiLevel >= 33
+    ? PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES
+    : PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE;
+};
+
+const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps) => {
+  const { t } = useI18n();
+  const safeAreaInsets = useSafeAreaInsets();
+  const [title, setTitle] = useState('');
+  const [subtitle, setSubtitle] = useState('');
+  const [lead, setLead] = useState('');
+  const [readingDate, setReadingDate] = useState('');
+  const [selectedReadingCategory, setSelectedReadingCategory] = useState<ReadingCategoryOption | null>(null);
+  const [showReadingCategoryOptions, setShowReadingCategoryOptions] = useState(false);
+  const [readingCategorySearchQuery, setReadingCategorySearchQuery] = useState('');
+  const [readingHypeCostInput, setReadingHypeCostInput] = useState('');
+  const [showReadingHypeCostInfo, setShowReadingHypeCostInfo] = useState(false);
+  const [bodySections, setBodySections] = useState<string[]>(['']);
+  const [readingInsertions, setReadingInsertions] = useState<ReadingInsertion[]>([]);
+  const [focusedBodySectionIndex, setFocusedBodySectionIndex] = useState(0);
+  const [imageViewerUri, setImageViewerUri] = useState<string | null>(null);
+  const [actionToast, setActionToast] = useState<string | null>(null);
+  const [isCiteSelectionMode, setIsCiteSelectionMode] = useState(false);
+  const [bodySelection, setBodySelection] = useState<BodySelectionState | null>(null);
+  const [citedUsername, setCitedUsername] = useState('');
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [usernameSuggestions, setUsernameSuggestions] = useState<UsernameSuggestion[]>([]);
+  const [isLoadingUsernameSuggestions, setIsLoadingUsernameSuggestions] = useState(false);
+  const [selectedCitedUsers, setSelectedCitedUsers] = useState<SelectedCitedUser[]>([]);
+  const [selectedCitationAppearance, setSelectedCitationAppearance] = useState<CitationAppearance>('white');
+  const [editingBodySectionIndex, setEditingBodySectionIndex] = useState<number | null>(0);
+  const [bodySectionSelections, setBodySectionSelections] = useState<Record<number, { start: number; end: number }>>({});
+  const [programmaticSelectionSectionIndex, setProgrammaticSelectionSectionIndex] = useState<number | null>(null);
+  const [readingCitations, setReadingCitations] = useState<ReadingCitation[]>([]);
+  const [expandedCitation, setExpandedCitation] = useState<ReadingCitation | null>(null);
+  const [isCreatingReading, setIsCreatingReading] = useState(false);
+  const actionToastAnim = useRef(new Animated.Value(0)).current;
+  const bodyInputRefs = useRef<Array<TextInput | null>>([]);
+  const readingDateInputRef = useRef<TextInput | null>(null);
+
+  const totalBodyLength = bodySections.reduce((total, section) => total + section.length, 0);
+  const selectedImageCount = readingInsertions.filter(insertion => insertion.type === 'image').length;
+  const isCreateEnabled = [title, subtitle, lead].every((value) => String(value).trim().length > 0)
+    && totalBodyLength >= BODY_MIN_LENGTH;
+  const filteredReadingCategoryOptions = useMemo(() => {
+    const query = readingCategorySearchQuery.trim().toLowerCase();
+    if (!query) {
+      return READING_CATEGORY_OPTIONS;
+    }
+
+    return READING_CATEGORY_OPTIONS.filter((option) => t(option).toLowerCase().includes(query));
+  }, [readingCategorySearchQuery, t]);
+
+  useEffect(() => {
+    return () => {
+      ImageCropPicker.clean().catch(() => undefined);
+    };
+  }, []);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSubscription = Keyboard.addListener(showEvent, (event: any) => {
+      const nextHeight = Math.max(0, Number(event?.endCoordinates?.height || 0) - safeAreaInsets.bottom);
+      setKeyboardHeight(nextHeight);
+    });
+
+    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [safeAreaInsets.bottom]);
+
+  useEffect(() => {
+    if (!isCiteSelectionMode) {
+      setUsernameSuggestions([]);
+      setIsLoadingUsernameSuggestions(false);
+      return;
+    }
+
+    const normalizedQuery = normalizeMentionUsername(citedUsername);
+    if (!normalizedQuery) {
+      setUsernameSuggestions([]);
+      setIsLoadingUsernameSuggestions(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = setTimeout(() => {
+      setIsLoadingUsernameSuggestions(true);
+
+      searchUsersByUsername(normalizedQuery, 5)
+        .then((items) => {
+          if (cancelled) {
+            return;
+          }
+          setUsernameSuggestions(items);
+        })
+        .catch(() => {
+          if (cancelled) {
+            return;
+          }
+          setUsernameSuggestions([]);
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setIsLoadingUsernameSuggestions(false);
+          }
+        });
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [citedUsername, isCiteSelectionMode]);
+
+  useEffect(() => {
+    if (editingBodySectionIndex === null) {
+      return;
+    }
+
+    const frameId = requestAnimationFrame(() => {
+      bodyInputRefs.current[editingBodySectionIndex]?.focus();
+    });
+
+    return () => {
+      cancelAnimationFrame(frameId);
+    };
+  }, [editingBodySectionIndex, bodySections.length]);
+
+  const focusBodySection = (sectionIndex: number, selectionMode: 'preserve' | 'end' = 'end') => {
+    if (selectionMode === 'end') {
+      const nextCursorIndex = String(bodySections[sectionIndex] || '').length;
+      setBodySectionSelections(previous => ({
+        ...previous,
+        [sectionIndex]: { start: nextCursorIndex, end: nextCursorIndex },
+      }));
+      setProgrammaticSelectionSectionIndex(sectionIndex);
+    }
+
+    setFocusedBodySectionIndex(sectionIndex);
+    setEditingBodySectionIndex(sectionIndex);
+  };
+
+  const showActionToast = (message: string) => {
+    const normalizedMessage = String(message || '').trim();
+    if (!normalizedMessage) {return;}
+
+    setActionToast(normalizedMessage);
+    actionToastAnim.stopAnimation();
+    actionToastAnim.setValue(0);
+
+    Animated.sequence([
+      Animated.timing(actionToastAnim, {
+        toValue: 1,
+        duration: 150,
+        useNativeDriver: false,
+      }),
+      Animated.delay(1700),
+      Animated.timing(actionToastAnim, {
+        toValue: 0,
+        duration: 150,
+        useNativeDriver: false,
+      }),
+    ]).start(({ finished }) => {
+      if (finished) {
+        setActionToast(null);
+      }
+    });
+  };
+
+  const clearCiteSelection = () => {
+    setBodySelection(null);
+    setCitedUsername('');
+    setUsernameSuggestions([]);
+    setIsLoadingUsernameSuggestions(false);
+    setSelectedCitedUsers([]);
+  };
+
+  const clearExpandedCitation = () => {
+    setExpandedCitation(null);
+  };
+
+  const handleToggleCiteSelectionMode = () => {
+    setIsCiteSelectionMode(previous => {
+      const nextValue = !previous;
+
+      if (nextValue) {
+        showActionToast(t('reading.citeSelectionToastBody' as TranslationKey));
+      }
+
+      if (!nextValue) {
+        clearCiteSelection();
+      }
+
+      return nextValue;
+    });
+  };
+
+  const handleBodySelectionChange = (index: number, start: number, end: number) => {
+    const normalizedStart = Math.max(0, Math.min(start, end));
+    const normalizedEnd = Math.max(normalizedStart, Math.max(start, end));
+
+    if (programmaticSelectionSectionIndex === index) {
+      setProgrammaticSelectionSectionIndex(null);
+    }
+
+    setBodySectionSelections(previous => {
+      const currentSelection = previous[index];
+      if (currentSelection?.start === normalizedStart && currentSelection?.end === normalizedEnd) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        [index]: { start: normalizedStart, end: normalizedEnd },
+      };
+    });
+
+    if (!isCiteSelectionMode) {
+      return;
+    }
+
+    const sectionText = String(bodySections[index] || '');
+
+    if (normalizedEnd <= normalizedStart) {
+      setBodySelection(previous => {
+        if (!previous || previous.sectionIndex !== index) {
+          return previous;
+        }
+
+        return null;
+      });
+      return;
+    }
+
+    const selectedText = sectionText.slice(normalizedStart, normalizedEnd).trim();
+    if (!selectedText) {
+      setBodySelection(previous => {
+        if (!previous || previous.sectionIndex !== index) {
+          return previous;
+        }
+
+        return null;
+      });
+      return;
+    }
+
+    setBodySelection({
+      sectionIndex: index,
+      start: normalizedStart,
+      end: normalizedEnd,
+      text: selectedText,
+    });
+  };
+
+  const requestGalleryPermission = async () => {
+    if (Platform.OS !== 'android') {
+      return true;
+    }
+
+    const permission = getAndroidGalleryPermission();
+    if (!permission) {
+      return false;
+    }
+
+    try {
+      const alreadyGranted = await PermissionsAndroid.check(permission);
+      if (alreadyGranted) {
+        return true;
+      }
+
+      const result = await PermissionsAndroid.request(permission, {
+        title: t('reading.galleryPermissionTitle' as TranslationKey),
+        message: t('reading.galleryPermissionMessage' as TranslationKey),
+        buttonNeutral: t('reading.galleryPermissionAskLater' as TranslationKey),
+        buttonNegative: t('common.cancel' as TranslationKey),
+        buttonPositive: t('common.accept' as TranslationKey),
+      });
+
+      if (result === PermissionsAndroid.RESULTS.GRANTED) {
+        return true;
+      }
+
+      if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+        Alert.alert(
+          t('reading.galleryPermissionRequiredTitle' as TranslationKey),
+          t('reading.galleryPermissionRequiredBody' as TranslationKey),
+          [
+            { text: t('common.cancel' as TranslationKey), style: 'cancel' },
+            { text: t('reading.openSettings' as TranslationKey), onPress: () => Linking.openSettings() },
+          ]
+        );
+      }
+    } catch {
+      // ignore
+    }
+
+    return false;
+  };
+
+  const insertReadingInsertion = (insertion: ReadingInsertion) => {
+    const insertionIndex = Math.max(0, Math.min(focusedBodySectionIndex, bodySections.length - 1));
+
+    setReadingInsertions(previous => [
+      ...previous.slice(0, insertionIndex),
+      insertion,
+      ...previous.slice(insertionIndex),
+    ]);
+    setBodySections(previous => [
+      ...previous.slice(0, insertionIndex + 1),
+      '',
+      ...previous.slice(insertionIndex + 1),
+    ]);
+    setFocusedBodySectionIndex(insertionIndex + 1);
+  };
+
+  const handlePickReadingImage = async () => {
+    if (selectedImageCount >= READING_MAX_IMAGES) {
+      Alert.alert(
+        t('reading.imageLimitReachedTitle' as TranslationKey),
+        t('reading.imageLimitReachedBody' as TranslationKey)
+      );
+      return;
+    }
+
+    const hasPermission = await requestGalleryPermission();
+    if (!hasPermission) {return;}
+
+    try {
+      const image = await ImageCropPicker.openPicker({
+        mediaType: 'photo',
+        cropping: false,
+        compressImageQuality: 0.82,
+        compressImageMaxWidth: 1440,
+        compressImageMaxHeight: 1440,
+        forceJpg: true,
+        includeBase64: false,
+        writeTempFile: true,
+      });
+
+      if (image?.path) {
+        insertReadingInsertion({ type: 'image', uri: image.path });
+      }
+    } catch (error: any) {
+      if (error?.code !== 'E_PICKER_CANCELLED') {
+        console.error('Error al seleccionar imagen de la lectura:', error);
+        Alert.alert(
+          t('reading.imagePickErrorTitle' as TranslationKey),
+          t('reading.imagePickErrorBody' as TranslationKey)
+        );
+      }
+    }
+  };
+
+  const handleInsertIntertitle = () => {
+    const insertionIndex = Math.max(0, Math.min(focusedBodySectionIndex, bodySections.length - 1));
+    const previousInsertion = insertionIndex > 0 ? readingInsertions[insertionIndex - 1] : null;
+    const currentBodySection = String(bodySections[insertionIndex] || '').trim();
+
+    if (previousInsertion?.type === 'intertitle' && currentBodySection.length === 0) {
+      showActionToast(t('reading.intertitleToastBody' as TranslationKey));
+      return;
+    }
+
+    insertReadingInsertion({ type: 'intertitle', text: '' });
+  };
+
+  const handleRemoveReadingInsertion = (indexToRemove: number) => {
+    setReadingInsertions(previous => previous.filter((_, index) => index !== indexToRemove));
+    setBodySections(previous => {
+      if (indexToRemove < 0 || indexToRemove >= previous.length - 1) {
+        return previous;
+      }
+
+      const mergedSection = `${previous[indexToRemove]}${previous[indexToRemove + 1]}`;
+      return [
+        ...previous.slice(0, indexToRemove),
+        mergedSection,
+        ...previous.slice(indexToRemove + 2),
+      ];
+    });
+    setFocusedBodySectionIndex(previous => Math.max(0, Math.min(previous, bodySections.length - 2)));
+    setBodySelection(previous => {
+      if (!previous) {
+        return previous;
+      }
+
+      if (previous.sectionIndex === indexToRemove) {
+        return null;
+      }
+
+      if (previous.sectionIndex > indexToRemove) {
+        return {
+          ...previous,
+          sectionIndex: previous.sectionIndex - 1,
+        };
+      }
+
+      return previous;
+    });
+    setReadingCitations(previous => previous.filter((citation) => citation.sectionIndex < indexToRemove));
+  };
+
+  const handleChangeBodySection = (index: number, nextValue: string) => {
+    setBodySections(previous => previous.map((section, sectionIndex) => (
+      sectionIndex === index ? nextValue : section
+    )));
+
+    setBodySectionSelections(previous => {
+      const currentSelection = previous[index];
+      if (!currentSelection) {
+        return previous;
+      }
+
+      const nextStart = Math.max(0, Math.min(currentSelection.start, nextValue.length));
+      const nextEnd = Math.max(nextStart, Math.min(currentSelection.end, nextValue.length));
+
+      return {
+        ...previous,
+        [index]: { start: nextStart, end: nextEnd },
+      };
+    });
+
+    setBodySelection(previous => {
+      if (!previous || previous.sectionIndex !== index) {
+        return previous;
+      }
+
+      const nextStart = Math.max(0, Math.min(previous.start, nextValue.length));
+      const nextEnd = Math.max(nextStart, Math.min(previous.end, nextValue.length));
+      const nextSelectedText = nextValue.slice(nextStart, nextEnd).trim();
+
+      if (!nextSelectedText) {
+        return null;
+      }
+
+      return {
+        ...previous,
+        start: nextStart,
+        end: nextEnd,
+        text: nextSelectedText,
+      };
+    });
+
+    setReadingCitations(previous => {
+      const currentSectionCitations = previous.filter((citation) => citation.sectionIndex === index);
+      const nextSectionCitations = reconcileSectionCitations(nextValue, currentSectionCitations);
+
+      return [
+        ...previous.filter((citation) => citation.sectionIndex !== index),
+        ...nextSectionCitations,
+      ].sort((left, right) => (
+        left.sectionIndex === right.sectionIndex
+          ? left.start - right.start
+          : left.sectionIndex - right.sectionIndex
+      ));
+    });
+  };
+
+  const handleChangeIntertitle = (index: number, nextValue: string) => {
+    setReadingInsertions(previous => previous.map((insertion, insertionIndex) => {
+      if (insertionIndex !== index || insertion.type !== 'intertitle') {
+        return insertion;
+      }
+
+      return {
+        ...insertion,
+        text: nextValue,
+      };
+    }));
+  };
+
+  const openReadingImageViewer = (uri: string) => {
+    const resolved = String(uri || '').trim();
+    if (!resolved) {return;}
+    setImageViewerUri(resolved);
+  };
+
+  const handleOpenCitationSocialLink = async (rawUrl: string) => {
+    const normalizedUrl = normalizeExternalUrl(rawUrl);
+    if (!normalizedUrl) {
+      return;
+    }
+
+    const safeUrl = encodeURI(normalizedUrl);
+
+    try {
+      if (/^https?:/i.test(safeUrl)) {
+        await Linking.openURL(safeUrl);
+        return;
+      }
+
+      const canOpen = await Linking.canOpenURL(safeUrl);
+      if (!canOpen) {
+        Alert.alert('Enlace no soportado', 'No se puede abrir este enlace en tu dispositivo.');
+        return;
+      }
+
+      await Linking.openURL(safeUrl);
+    } catch (error) {
+      console.error('No se pudo abrir el enlace social citado:', error);
+      Alert.alert('Error', 'No se pudo abrir el enlace.');
+    }
+  };
+
+  const closeReadingImageViewer = () => {
+    setImageViewerUri(null);
+  };
+
+  const handleChangeReadingDate = (nextValue: string) => {
+    setReadingDate(formatReadingDateDigits(nextValue));
+  };
+
+  const handleToggleReadingCategoryOptions = () => {
+    readingDateInputRef.current?.blur();
+    setShowReadingCategoryOptions((previous) => {
+      const nextValue = !previous;
+      if (!nextValue) {
+        setReadingCategorySearchQuery('');
+      }
+      return nextValue;
+    });
+  };
+
+  const handleSelectReadingCategory = (category: ReadingCategoryOption) => {
+    setSelectedReadingCategory(category);
+    setShowReadingCategoryOptions(false);
+    setReadingCategorySearchQuery('');
+  };
+
+  const handleReadingHypeCostInputChange = (nextValue: string) => {
+    setReadingHypeCostInput(formatReadingIntegerInput(nextValue));
+  };
+
+  const handleToggleReadingHypeCostInfo = () => {
+    setShowReadingHypeCostInfo(previous => !previous);
+  };
+
+  const handleApplyCitation = () => {
+    if (!bodySelection?.text || selectedCitedUsers.length === 0) {
+      return;
+    }
+
+    const citationId = `citation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const nextCitation: ReadingCitation = {
+      id: citationId,
+      sectionIndex: bodySelection.sectionIndex,
+      start: bodySelection.start,
+      end: bodySelection.end,
+      text: bodySelection.text,
+      users: selectedCitedUsers,
+      appearance: selectedCitationAppearance,
+    };
+
+    setReadingCitations((previous) => {
+      const next = previous.filter((citation) => {
+        if (citation.sectionIndex !== nextCitation.sectionIndex) {
+          return true;
+        }
+
+        return citation.end <= nextCitation.start || citation.start >= nextCitation.end;
+      });
+
+      return [...next, nextCitation].sort((left, right) => (
+        left.sectionIndex === right.sectionIndex
+          ? left.start - right.start
+          : left.sectionIndex - right.sectionIndex
+      ));
+    });
+
+    const sectionIndex = bodySelection.sectionIndex;
+    const cursorIndex = String(bodySections[sectionIndex] || '').length;
+    setBodySectionSelections(previous => ({
+      ...previous,
+      [sectionIndex]: { start: cursorIndex, end: cursorIndex },
+    }));
+    setProgrammaticSelectionSectionIndex(sectionIndex);
+
+    setFocusedBodySectionIndex(sectionIndex);
+    setEditingBodySectionIndex(null);
+
+    setIsCiteSelectionMode(false);
+    clearCiteSelection();
+  };
+
+  const handleCreateReading = async () => {
+    if (!isCreateEnabled || isCreatingReading) {
+      return;
+    }
+
+    const normalizedToken = String(authToken || '').trim();
+    const normalizedChannelPostId = String(channelPostId ?? '').trim();
+
+    if (!normalizedToken) {
+      Alert.alert('Error', 'No se pudo autenticar la creación de la lectura.');
+      return;
+    }
+
+    if (!normalizedChannelPostId) {
+      Alert.alert('Error', 'No se encontró el canal donde publicar esta lectura.');
+      return;
+    }
+
+    setIsCreatingReading(true);
+    try {
+      const uploadedInsertions = await Promise.all(readingInsertions.map(async (insertion) => {
+        if (insertion.type === 'intertitle') {
+          return {
+            type: 'intertitle' as const,
+            text: String(insertion.text || '').trim(),
+          };
+        }
+
+        let uploadedUrl = String(insertion.uri || '').trim();
+        if (uploadedUrl && !uploadedUrl.startsWith('http')) {
+          uploadedUrl = await uploadImage(uploadedUrl, normalizedToken, {
+            postId: normalizedChannelPostId,
+            timeoutMs: 120000,
+          });
+        }
+
+        return {
+          type: 'image' as const,
+          url: uploadedUrl,
+        };
+      }));
+
+      const imageUrls = uploadedInsertions.reduce<string[]>((accumulator, insertion) => {
+        if (insertion.type === 'image' && insertion.url) {
+          accumulator.push(insertion.url);
+        }
+        return accumulator;
+      }, []);
+
+      const encodedMessage = encodeChannelReadingMessage({
+        title,
+        subtitle,
+        lead,
+        date: readingDate,
+        category: selectedReadingCategory || '',
+        hypeCost: Number.parseInt(sanitizeReadingAmountInput(readingHypeCostInput), 10) || 0,
+        bodySections,
+        insertions: uploadedInsertions,
+        imageUrls,
+        citations: readingCitations,
+      });
+
+      const response = await fetch(`${API_URL}/api/channels/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${normalizedToken}`,
+        },
+        body: JSON.stringify({
+          postId: normalizedChannelPostId,
+          message: encodedMessage,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create channel reading');
+      }
+
+      onBack();
+    } catch (error) {
+      console.error('Error al crear la lectura del canal:', error);
+      Alert.alert('Error', 'No se pudo crear la lectura. Intenta de nuevo.');
+    } finally {
+      setIsCreatingReading(false);
+    }
+  };
+
+  const handleChangeCitedUsername = (nextValue: string) => {
+    setCitedUsername(nextValue);
+  };
+
+  const handlePickUsernameSuggestion = (username: string) => {
+    const normalizedUsername = normalizeMentionUsername(username);
+    if (!normalizedUsername) {
+      return;
+    }
+
+    const selectedSuggestion = usernameSuggestions.find((item) => normalizeMentionUsername(item.username) === normalizedUsername);
+
+    setSelectedCitedUsers((previous) => {
+      if (previous.some((item) => normalizeMentionUsername(item.username) === normalizedUsername)) {
+        return previous;
+      }
+
+      return [
+        ...previous,
+        {
+          username: `@${normalizedUsername}`,
+          profile_photo_uri: selectedSuggestion?.profile_photo_uri ?? null,
+          social_networks: selectedSuggestion?.social_networks ?? [],
+        },
+      ];
+    });
+
+    setCitedUsername('');
+    setUsernameSuggestions([]);
+  };
+
+  const isApplyEnabled = !!bodySelection?.text && selectedCitedUsers.length > 0;
+
+  const citationsBySection = useMemo(() => {
+    return readingCitations.reduce<Record<number, ReadingCitation[]>>((accumulator, citation) => {
+      if (!accumulator[citation.sectionIndex]) {
+        accumulator[citation.sectionIndex] = [];
+      }
+
+      accumulator[citation.sectionIndex].push(citation);
+      accumulator[citation.sectionIndex].sort((left, right) => left.start - right.start);
+      return accumulator;
+    }, {});
+  }, [readingCitations]);
+
+  const renderBodySectionPreview = (sectionText: string, sectionIndex: number) => {
+    const sectionCitations = citationsBySection[sectionIndex] || [];
+    if (sectionCitations.length === 0) {
+      return (
+        <View style={styles.bodyPreviewContainer}>
+          <Text style={styles.bodyPreviewPlainText}>
+            {sectionText}
+          </Text>
+        </View>
+      );
+    }
+
+    return (
+      <View collapsable={false} style={styles.bodyPreviewContainer}>
+        <Text style={styles.bodyPreviewPlainText}>
+          {renderReadingTextFragments({
+            text: sectionText,
+            citations: sectionCitations,
+            keyPrefix: `reading-preview-${sectionIndex}`,
+            plainTextStyle: styles.bodyPreviewPlainText,
+            whiteCitationStyle: styles.bodyPreviewCitationTextWhite,
+            gradientCitationStyle: styles.bodyPreviewEditorCitationTextGradient,
+            onPressCitation: setExpandedCitation,
+          })}
+        </Text>
+      </View>
+    );
+  };
+
+  const renderBodySectionEditorBackdrop = (sectionText: string, sectionIndex: number) => {
+    const sectionCitations = citationsBySection[sectionIndex] || [];
+    if (sectionCitations.length === 0) {
+      return <Text style={styles.bodyPreviewEditorPlainText}>{sectionText}</Text>;
+    }
+
+    return (
+      <Text style={styles.bodyPreviewEditorPlainText}>
+        {renderReadingTextFragments({
+          text: sectionText,
+          citations: sectionCitations,
+          keyPrefix: `reading-editor-${sectionIndex}`,
+          plainTextStyle: styles.bodyPreviewEditorPlainText,
+          whiteCitationStyle: styles.bodyPreviewEditorCitationTextWhite,
+          gradientCitationStyle: styles.bodyPreviewEditorCitationTextGradient,
+          useGradientCharacterColors: false,
+        })}
+      </Text>
+    );
+  };
+
+  return (
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardView}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.container}>
+            <View style={styles.topBar}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                activeOpacity={0.85}
+                onPress={onBack}
+                style={styles.backButton}
+              >
+                <MaterialIcons name="arrow-back-ios-new" size={22} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.headerRow}>
+              <Text style={styles.screenTitle}>{t('reading.screenTitle' as TranslationKey)}</Text>
+              <TouchableOpacity
+                accessibilityRole="button"
+                activeOpacity={isCreateEnabled && !isCreatingReading ? 0.85 : 1}
+                disabled={!isCreateEnabled || isCreatingReading}
+                onPress={handleCreateReading}
+                style={[
+                  styles.createButton,
+                  isCreateEnabled ? styles.createButtonEnabled : styles.createButtonDisabled,
+                ]}
+              >
+                <CreateButtonGradientBorder visible={isCreateEnabled} />
+                {isCreatingReading ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.createButtonText}>{t('common.create' as TranslationKey)}</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.textBlock}>
+              <View style={styles.fieldBlock}>
+                <TextInput
+                  value={title}
+                  onChangeText={setTitle}
+                  placeholder={t('reading.titlePlaceholder' as TranslationKey)}
+                  placeholderTextColor="#FFFFFF"
+                  style={styles.titleInput}
+                  maxLength={TITLE_MAX_LENGTH}
+                  autoCapitalize="sentences"
+                  autoCorrect
+                />
+                <Text style={styles.fieldCounter}>{`${title.length}/${TITLE_MAX_LENGTH}`}</Text>
+              </View>
+
+              <View style={styles.fieldBlock}>
+                <TextInput
+                  value={subtitle}
+                  onChangeText={setSubtitle}
+                  placeholder={t('reading.subtitlePlaceholder' as TranslationKey)}
+                  placeholderTextColor="#FFFFFF"
+                  style={styles.subtitleInput}
+                  maxLength={SUBTITLE_MAX_LENGTH}
+                  autoCapitalize="sentences"
+                  autoCorrect
+                />
+                <Text style={styles.fieldCounter}>{`${subtitle.length}/${SUBTITLE_MAX_LENGTH}`}</Text>
+              </View>
+
+              <View style={styles.fieldBlock}>
+                <TextInput
+                  value={lead}
+                  onChangeText={setLead}
+                  placeholder={t('reading.leadPlaceholder' as TranslationKey)}
+                  placeholderTextColor="#FFFFFF"
+                  style={styles.leadInput}
+                  maxLength={LEAD_MAX_LENGTH}
+                  autoCapitalize="sentences"
+                  autoCorrect
+                  multiline
+                  scrollEnabled={false}
+                  textAlignVertical="top"
+                />
+                <Text style={styles.fieldCounter}>{`${lead.length}/${LEAD_MAX_LENGTH}`}</Text>
+              </View>
+
+              {bodySections.map((bodySection, index) => {
+                const trailingInsertion = readingInsertions[index] ?? null;
+                const shouldRenderSection = bodySection.length > 0 || index === bodySections.length - 1;
+                const sectionCitations = citationsBySection[index] || [];
+                const isEditingBodySection = sectionCitations.length === 0 || editingBodySectionIndex === index;
+
+                return (
+                  <React.Fragment key={`body-section-${index}`}>
+                    {shouldRenderSection ? (
+                      <View style={styles.fieldBlock}>
+                        {sectionCitations.length > 0 ? (
+                          <TouchableOpacity activeOpacity={1} onPress={() => focusBodySection(index)}>
+                            <View style={styles.bodyPreviewContainer}>
+                              {editingBodySectionIndex === index ? (
+                                <View style={styles.bodyCitationEditorLayer}>
+                                  {renderBodySectionEditorBackdrop(bodySection, index)}
+
+                                  <TextInput
+                                    ref={(input) => {
+                                      bodyInputRefs.current[index] = input;
+                                    }}
+                                    value={bodySection}
+                                    onChangeText={(nextValue) => handleChangeBodySection(index, nextValue)}
+                                    onFocus={() => {
+                                      setFocusedBodySectionIndex(index);
+                                      setEditingBodySectionIndex(index);
+                                    }}
+                                    onBlur={() => setEditingBodySectionIndex(null)}
+                                    onSelectionChange={(event) => handleBodySelectionChange(index, event.nativeEvent.selection.start, event.nativeEvent.selection.end)}
+                                    selection={programmaticSelectionSectionIndex === index ? bodySectionSelections[index] : undefined}
+                                    selectionColor="rgba(140, 239, 255, 0.9)"
+                                    style={styles.bodyCitationEditorInput}
+                                    autoCapitalize="sentences"
+                                    autoCorrect
+                                    multiline
+                                    scrollEnabled={false}
+                                    textAlignVertical="top"
+                                  />
+                                </View>
+                              ) : renderBodySectionPreview(bodySection, index)}
+                            </View>
+                          </TouchableOpacity>
+                        ) : isEditingBodySection ? (
+                          <TextInput
+                            ref={(input) => {
+                              bodyInputRefs.current[index] = input;
+                            }}
+                            value={bodySection}
+                            onChangeText={(nextValue) => handleChangeBodySection(index, nextValue)}
+                            onFocus={() => {
+                              setFocusedBodySectionIndex(index);
+                              setEditingBodySectionIndex(index);
+                            }}
+                            onBlur={() => setEditingBodySectionIndex(null)}
+                            onSelectionChange={(event) => handleBodySelectionChange(index, event.nativeEvent.selection.start, event.nativeEvent.selection.end)}
+                            selection={programmaticSelectionSectionIndex === index ? bodySectionSelections[index] : undefined}
+                            placeholder={totalBodyLength === 0 && index === bodySections.length - 1 ? t('reading.bodyPlaceholder' as TranslationKey) : ''}
+                            placeholderTextColor="#FFFFFF"
+                            style={styles.bodyInput}
+                            autoCapitalize="sentences"
+                            autoCorrect
+                            multiline
+                            scrollEnabled={false}
+                            textAlignVertical="top"
+                          />
+                        ) : renderBodySectionPreview(bodySection, index)}
+                      </View>
+                    ) : null}
+
+                    {trailingInsertion?.type === 'image' ? (
+                      <View style={index === 0 ? styles.selectedImageAboveBodySection : styles.selectedImagesSection}>
+                        <View style={styles.selectedImageCard}>
+                          <TouchableOpacity activeOpacity={0.92} onPress={() => openReadingImageViewer(trailingInsertion.uri)}>
+                            <Image source={{ uri: trailingInsertion.uri }} style={styles.selectedImage} resizeMode="cover" />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            accessibilityRole="button"
+                            activeOpacity={0.85}
+                            onPress={() => handleRemoveReadingInsertion(index)}
+                            style={styles.removeImageButton}
+                          >
+                            <MaterialIcons name="close" size={18} color="#FFFFFF" />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ) : null}
+
+                    {trailingInsertion?.type === 'intertitle' ? (
+                      <View style={styles.intertitleSection}>
+                        <View style={styles.intertitleHeaderRow}>
+                          <TextInput
+                            value={trailingInsertion.text}
+                            onChangeText={(nextValue) => handleChangeIntertitle(index, nextValue)}
+                            onFocus={() => setFocusedBodySectionIndex(index + 1)}
+                            placeholder={t('reading.intertitlePlaceholder' as TranslationKey)}
+                            placeholderTextColor="#FFFFFF"
+                            style={styles.intertitleInput}
+                            autoCapitalize="sentences"
+                            autoCorrect
+                            maxLength={INTERTITLE_MAX_LENGTH}
+                          />
+                          <TouchableOpacity
+                            accessibilityRole="button"
+                            activeOpacity={0.85}
+                            onPress={() => handleRemoveReadingInsertion(index)}
+                            style={styles.removeIntertitleButton}
+                          >
+                            <MaterialIcons name="close" size={16} color="#FFFFFF" />
+                          </TouchableOpacity>
+                        </View>
+                        <Text style={styles.fieldCounter}>{`${trailingInsertion.text.length}/${INTERTITLE_MAX_LENGTH}`}</Text>
+                      </View>
+                    ) : null}
+                  </React.Fragment>
+                );
+              })}
+
+            </View>
+
+            <View style={styles.bodyActionsRow}>
+              <View style={styles.bodyActionsButtonsRow}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  activeOpacity={0.85}
+                  onPress={handleInsertIntertitle}
+                  style={styles.intertitleActionButton}
+                >
+                  <IntertitleActionGlyph />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  activeOpacity={0.85}
+                  onPress={handleToggleCiteSelectionMode}
+                  style={[
+                    styles.citeActionButton,
+                    isCiteSelectionMode ? styles.citeActionButtonActive : null,
+                  ]}
+                >
+                  <CiteActionGlyph />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.bodyActionsCounter}>{`${totalBodyLength}/${BODY_MIN_LENGTH} ${t('reading.bodyMinSuffix' as TranslationKey)}`}</Text>
+            </View>
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              activeOpacity={selectedImageCount >= READING_MAX_IMAGES ? 1 : 0.85}
+              disabled={selectedImageCount >= READING_MAX_IMAGES}
+              onPress={handlePickReadingImage}
+              style={styles.imageSection}
+            >
+              <MaterialIcons name="photo-camera" size={28} color="#FFFFFF" />
+              <Text style={styles.imageLabel}>{t('reading.addImage' as TranslationKey)}</Text>
+              <Text style={styles.imageHint}>{t('reading.maxImagesHint' as TranslationKey)}</Text>
+            </TouchableOpacity>
+
+            <View style={styles.fieldBlock}>
+              <Text style={styles.readingDateLabel}>{t('reading.dateLabel' as TranslationKey)}</Text>
+              <View style={styles.readingDateInputContainer}>
+                <TextInput
+                  ref={readingDateInputRef}
+                  value={readingDate}
+                  onChangeText={handleChangeReadingDate}
+                  placeholder={t('reading.datePlaceholder' as TranslationKey)}
+                  placeholderTextColor="#FFFFFF"
+                  style={styles.readingDateInput}
+                  keyboardType="numeric"
+                  maxLength={10}
+                />
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  activeOpacity={0.7}
+                  onPress={() => readingDateInputRef.current?.focus()}
+                  style={styles.readingDateIconButton}
+                >
+                  <MaterialIcons name="calendar-month" size={20} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View
+              style={[
+                styles.readingCategorySection,
+                showReadingCategoryOptions ? styles.readingCategorySectionExpanded : null,
+              ]}
+            >
+              <TouchableOpacity
+                accessibilityRole="button"
+                activeOpacity={0.85}
+                onPress={handleToggleReadingCategoryOptions}
+                style={styles.readingCategoryTrigger}
+              >
+                <View style={styles.readingCategoryInlineLabelRow}>
+                  <Text style={styles.readingCategoryTriggerText}>
+                    {selectedReadingCategory ? t(selectedReadingCategory) : t('reading.categoryLabel' as TranslationKey)}
+                  </Text>
+                  <MaterialIcons
+                    name={showReadingCategoryOptions ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                    size={18}
+                    color="#FFFFFF"
+                  />
+                </View>
+              </TouchableOpacity>
+
+              {showReadingCategoryOptions ? (
+                <View style={styles.readingCategoryOptionsPanel}>
+                  <TextInput
+                    value={readingCategorySearchQuery}
+                    onChangeText={setReadingCategorySearchQuery}
+                    placeholder={t('reading.searchCategoryPlaceholder' as TranslationKey)}
+                    placeholderTextColor="rgba(255,255,255,0.45)"
+                    style={styles.readingCategorySearchInput}
+                  />
+
+                  {filteredReadingCategoryOptions.map((option) => (
+                    <TouchableOpacity
+                      key={option}
+                      accessibilityRole="button"
+                      activeOpacity={0.85}
+                      onPress={() => handleSelectReadingCategory(option)}
+                      style={styles.readingCategoryOption}
+                    >
+                      <Text
+                        style={[
+                          styles.readingCategoryOptionText,
+                          selectedReadingCategory === option ? styles.readingCategoryOptionTextSelected : null,
+                        ]}
+                      >
+                        {t(option)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : null}
+            </View>
+
+            <View style={styles.readingHypeCostSection}>
+              <View style={styles.readingHypeCostInfoAnchor}>
+                <View style={styles.readingHypeCostLabelRow}>
+                  <View style={styles.readingHypeCostLabelLeftRow}>
+                    <MaterialIcons name="whatshot" size={18} color="#FFFFFF" />
+                    <Text style={styles.readingHypeCostSectionTitle}>{t('reading.hypeCostLabel' as TranslationKey)}</Text>
+                  </View>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    activeOpacity={0.75}
+                    onPress={handleToggleReadingHypeCostInfo}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    style={styles.readingHypeCostInfoButton}
+                  >
+                    <MaterialIcons name="info-outline" size={18} color="rgba(255,255,255,0.58)" />
+                  </TouchableOpacity>
+                </View>
+
+                {showReadingHypeCostInfo ? (
+                  <View style={styles.readingHypeCostInfoPanel}>
+                    <Text style={styles.readingHypeCostInfoText}>{t('reading.hypeCostInfo' as TranslationKey)}</Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.readingHypeCostField}>
+                <TextInput
+                  value={readingHypeCostInput}
+                  onChangeText={handleReadingHypeCostInputChange}
+                  placeholder={t('reading.hypeCostAmountLabel' as TranslationKey)}
+                  placeholderTextColor="rgba(255,255,255,0.38)"
+                  style={styles.readingHypeCostFieldInput}
+                  keyboardType="numeric"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <MaterialCommunityIcons name="key-outline" size={16} color="rgba(255,255,255,0.78)" />
+              </View>
+            </View>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      {actionToast ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.actionToastContainer,
+            { bottom: Math.max(18, safeAreaInsets.bottom + keyboardHeight + (bodySelection && isCiteSelectionMode ? 220 : 12)) },
+            {
+              opacity: actionToastAnim,
+              transform: [
+                {
+                  translateY: actionToastAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [12, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <Text style={styles.actionToastText}>{actionToast}</Text>
+        </Animated.View>
+      ) : null}
+
+      {isCiteSelectionMode && bodySelection?.text ? (
+        <View style={[
+          styles.citePanel,
+          {
+            bottom: keyboardHeight,
+            paddingBottom: Math.max(16, safeAreaInsets.bottom + 8),
+          },
+        ]}>
+          <View style={styles.citePanelHeaderRow}>
+            <Text style={styles.citePanelLabel}>Cita seleccionada</Text>
+
+            <View style={styles.citePanelAppearancePicker}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                activeOpacity={0.85}
+                onPress={() => setSelectedCitationAppearance('white')}
+                style={[
+                  styles.citePanelAppearanceButton,
+                  selectedCitationAppearance === 'white'
+                    ? styles.citePanelAppearanceButtonActive
+                    : styles.citePanelAppearanceButtonInactive,
+                ]}
+              >
+                <View style={styles.citePanelAppearanceWhiteFill} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                accessibilityRole="button"
+                activeOpacity={0.85}
+                onPress={() => setSelectedCitationAppearance('gradient')}
+                style={[
+                  styles.citePanelAppearanceButton,
+                  selectedCitationAppearance === 'gradient'
+                    ? styles.citePanelAppearanceButtonActive
+                    : styles.citePanelAppearanceButtonInactive,
+                ]}
+              >
+                <GradientCitationSwatch />
+              </TouchableOpacity>
+            </View>
+          </View>
+          {selectedCitationAppearance === 'gradient' ? (
+            <GradientCitePanelPreviewText text={bodySelection.text} />
+          ) : (
+            <Text style={styles.citePanelPreview}>{bodySelection.text}</Text>
+          )}
+
+          <View style={styles.citePanelInputBlock}>
+            <View style={styles.citePanelInputHeaderRow}>
+              <Text style={styles.citePanelInputLabel}>@usuario</Text>
+              <MaterialIcons name="search" size={18} color="rgba(255, 255, 255, 0.56)" />
+            </View>
+
+            <TextInput
+              value={citedUsername}
+              onChangeText={handleChangeCitedUsername}
+              placeholder="@usuario"
+              placeholderTextColor="rgba(255, 255, 255, 0.42)"
+              style={styles.citePanelInput}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            {selectedCitedUsers.length > 0 ? (
+              <ScrollView
+                nestedScrollEnabled
+                style={styles.citeSelectedUsersInlineList}
+                contentContainerStyle={styles.citeSelectedUsersInlineListContent}
+                showsVerticalScrollIndicator={selectedCitedUsers.length > MAX_VISIBLE_CITED_USERS}
+              >
+                {selectedCitedUsers.map((selectedUser) => {
+                  const normalizedSelectedUsername = normalizeMentionUsername(selectedUser.username);
+                  const displayUsername = selectedUser.username.startsWith('@') ? selectedUser.username : `@${selectedUser.username}`;
+
+                  return (
+                    <View key={normalizedSelectedUsername} style={styles.citeSelectedUserInlineRow}>
+                      {selectedUser.profile_photo_uri ? (
+                        <Image
+                          source={{ uri: getServerResourceUrl(String(selectedUser.profile_photo_uri)) }}
+                          style={styles.citeSelectedUserInlineAvatar}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <View style={styles.citeSelectedUserInlineAvatarFallback}>
+                          <MaterialIcons name="person" size={12} color="#FFFFFF" />
+                        </View>
+                      )}
+                      <Text style={styles.citeSelectedUserInlineText} numberOfLines={1}>
+                        {displayUsername}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            ) : null}
+
+            {(isLoadingUsernameSuggestions || usernameSuggestions.length > 0) ? (
+              <View style={styles.citeSuggestionsList}>
+                {isLoadingUsernameSuggestions ? (
+                  <View style={styles.citeSuggestionsLoadingRow}>
+                    <ActivityIndicator size="small" color="#FFB74D" />
+                  </View>
+                ) : null}
+
+                {!isLoadingUsernameSuggestions ? usernameSuggestions.map((suggestion) => {
+                  const normalizedUsername = String(suggestion.username || '').trim();
+                  const displayUsername = normalizedUsername.startsWith('@') ? normalizedUsername : `@${normalizedUsername}`;
+                  const avatarUri = suggestion.profile_photo_uri
+                    ? getServerResourceUrl(String(suggestion.profile_photo_uri))
+                    : '';
+
+                  return (
+                    <TouchableOpacity
+                      key={displayUsername.toLowerCase()}
+                      accessibilityRole="button"
+                      activeOpacity={0.85}
+                      onPress={() => handlePickUsernameSuggestion(normalizedUsername)}
+                      style={styles.citeSuggestionItem}
+                    >
+                      {avatarUri ? (
+                        <Image source={{ uri: avatarUri }} style={styles.citeSuggestionAvatar} resizeMode="cover" />
+                      ) : (
+                        <View style={styles.citeSuggestionAvatarFallback}>
+                          <MaterialIcons name="person" size={16} color="#FFFFFF" />
+                        </View>
+                      )}
+                      <Text style={styles.citeSuggestionText} numberOfLines={1}>{displayUsername}</Text>
+                    </TouchableOpacity>
+                  );
+                }) : null}
+              </View>
+            ) : null}
+          </View>
+
+          <TouchableOpacity
+            accessibilityRole="button"
+            activeOpacity={isApplyEnabled ? 0.85 : 1}
+            disabled={!isApplyEnabled}
+            onPress={handleApplyCitation}
+            style={[
+              styles.citePanelApplyButton,
+              isApplyEnabled ? styles.citePanelApplyButtonEnabled : styles.citePanelApplyButtonDisabled,
+            ]}
+          >
+            <ApplyButtonGradientBorder visible={isApplyEnabled} />
+            <Text style={[
+              styles.citePanelApplyButtonText,
+              isApplyEnabled ? styles.citePanelApplyButtonTextEnabled : styles.citePanelApplyButtonTextDisabled,
+            ]}>Aplicar</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      <Modal
+        visible={!!expandedCitation}
+        transparent
+        animationType="fade"
+        onRequestClose={clearExpandedCitation}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={clearExpandedCitation}
+          style={styles.citationUsersOverlay}
+        >
+          <TouchableOpacity
+            accessibilityRole="button"
+            activeOpacity={1}
+            onPress={() => undefined}
+            style={[
+              styles.citationUsersSheet,
+              { paddingBottom: Math.max(16, safeAreaInsets.bottom + 8) },
+            ]}
+          >
+            <View style={styles.citationUsersSheetHandle} />
+            <Text style={styles.citationUsersSheetTitle}>Usuarios citados</Text>
+            <Text style={styles.citationUsersSheetExcerpt}>{expandedCitation?.text || ''}</Text>
+
+            <ScrollView
+              style={styles.citationUsersList}
+              contentContainerStyle={styles.citationUsersListContent}
+              showsVerticalScrollIndicator={(expandedCitation?.users.length || 0) > MAX_VISIBLE_CITED_USERS}
+            >
+              {(expandedCitation?.users || []).map((user) => {
+                const displayUsername = user.username.startsWith('@') ? user.username : `@${user.username}`;
+                const normalizedUsername = normalizeMentionUsername(displayUsername);
+                const avatarUri = user.profile_photo_uri ? getServerResourceUrl(String(user.profile_photo_uri)) : '';
+                const renderableSocials = getRenderableCitationUserSocials(user.social_networks);
+                const socialViewportCount = Math.min(renderableSocials.length, CITATION_USER_SOCIAL_VIEWPORT_COUNT);
+                const socialViewportWidth = socialViewportCount > 0
+                  ? (socialViewportCount * CITATION_USER_SOCIAL_ICON_SIZE) + ((socialViewportCount - 1) * CITATION_USER_SOCIAL_ICON_GAP)
+                  : 0;
+
+                return (
+                  <View key={normalizedUsername} style={styles.citationUsersListItem}>
+                    {avatarUri ? (
+                      <Image source={{ uri: avatarUri }} style={styles.citationUsersListAvatar} resizeMode="cover" />
+                    ) : (
+                      <View style={styles.citationUsersListAvatarFallback}>
+                        <MaterialIcons name="person" size={18} color="#FFFFFF" />
+                      </View>
+                    )}
+                    <View style={styles.citationUsersListBody}>
+                      <Text style={styles.citationUsersListText}>{displayUsername}</Text>
+
+                      {renderableSocials.length > 0 ? (
+                        <View style={[styles.citationUsersSocialViewport, { width: socialViewportWidth }]}>
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            scrollEnabled={renderableSocials.length > CITATION_USER_SOCIAL_VIEWPORT_COUNT}
+                            contentContainerStyle={styles.citationUsersSocialRow}
+                          >
+                            {renderableSocials.map((social, socialIndex) => {
+                              const isLastSocial = socialIndex === renderableSocials.length - 1;
+
+                              return (
+                                <TouchableOpacity
+                                  key={`${normalizedUsername}-${social.key}`}
+                                  accessibilityRole="button"
+                                  activeOpacity={0.85}
+                                  onPress={() => handleOpenCitationSocialLink(social.link)}
+                                  style={isLastSocial ? null : styles.citationUsersSocialIconSpacing}
+                                >
+                                  <Image
+                                    source={social.iconSource}
+                                    style={styles.citationUsersSocialIcon}
+                                    resizeMode="contain"
+                                  />
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </ScrollView>
+                        </View>
+                      ) : null}
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        visible={!!imageViewerUri}
+        transparent
+        animationType="fade"
+        onRequestClose={closeReadingImageViewer}
+      >
+        <View style={styles.imageViewerOverlay}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            activeOpacity={0.85}
+            onPress={closeReadingImageViewer}
+            style={styles.imageViewerCloseButton}
+          >
+            <MaterialIcons name="close" size={26} color="#FFFFFF" />
+          </TouchableOpacity>
+          {imageViewerUri ? (
+            <Image
+              source={{ uri: imageViewerUri }}
+              style={styles.imageViewerImage}
+              resizeMode="contain"
+            />
+          ) : null}
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+};
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  keyboardView: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: 280,
+  },
+  container: {
+    paddingHorizontal: 20,
+    paddingTop: 10,
+  },
+  topBar: {
+    height: 38,
+    justifyContent: 'center',
+  },
+  backButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: -10,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
+  screenTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  createButton: {
+    minWidth: 116,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#000000',
+  },
+  createButtonEnabled: {
+    opacity: 1,
+    borderWidth: 0,
+  },
+  createButtonDisabled: {
+    borderColor: 'rgba(255, 183, 77, 0.4)',
+    borderWidth: 1.5,
+    opacity: 0.4,
+  },
+  createButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  textBlock: {
+    marginTop: 22,
+  },
+  fieldBlock: {
+    marginBottom: 8,
+  },
+  titleInput: {
+    color: '#FFFFFF',
+    fontSize: 24,
+    fontWeight: '700',
+    paddingVertical: 0,
+  },
+  subtitleInput: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '700',
+    paddingVertical: 0,
+  },
+  leadInput: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '400',
+    fontStyle: 'italic',
+    minHeight: 56,
+    paddingTop: 0,
+    paddingBottom: 0,
+  },
+  bodyInput: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '400',
+    minHeight: 180,
+    paddingTop: 0,
+    paddingBottom: 0,
+  },
+  readingDateLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    marginBottom: 8,
+  },
+  readingDateInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#000000',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#393939',
+    paddingRight: 12,
+  },
+  readingDateInput: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: '#FFFFFF',
+  },
+  readingDateIconButton: {
+    padding: 8,
+  },
+  readingCategorySection: {
+    marginTop: 2,
+    marginBottom: 8,
+    position: 'relative',
+    zIndex: 1,
+  },
+  readingCategorySectionExpanded: {
+    zIndex: 8,
+    elevation: 8,
+  },
+  readingCategoryTrigger: {
+    borderRadius: 14,
+  },
+  readingCategoryInlineLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  readingCategoryTriggerText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  readingCategoryOptionsPanel: {
+    marginTop: 8,
+    backgroundColor: '#101010',
+    borderRadius: 16,
+    overflow: 'hidden',
+    elevation: 8,
+  },
+  readingCategorySearchInput: {
+    height: 44,
+    margin: 10,
+    marginBottom: 4,
+    borderRadius: 14,
+    backgroundColor: '#000000',
+    color: '#FFFFFF',
+    paddingHorizontal: 14,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  readingCategoryOption: {
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  readingCategoryOptionText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  readingCategoryOptionTextSelected: {
+    color: '#FFB74D',
+    fontWeight: '700',
+  },
+  readingHypeCostSection: {
+    marginTop: 2,
+    marginBottom: 8,
+    position: 'relative',
+    zIndex: 0,
+  },
+  readingHypeCostInfoAnchor: {
+    position: 'relative',
+    zIndex: 6,
+  },
+  readingHypeCostLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+    zIndex: 6,
+  },
+  readingHypeCostLabelLeftRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  readingHypeCostSectionTitle: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  readingHypeCostInfoButton: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  readingHypeCostInfoPanel: {
+    position: 'absolute',
+    top: 28,
+    right: 0,
+    maxWidth: 260,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: 'rgba(10,10,10,0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    zIndex: 6,
+    elevation: 8,
+  },
+  readingHypeCostInfoText: {
+    color: 'rgba(255,255,255,0.88)',
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'justify',
+  },
+  readingHypeCostField: {
+    minHeight: 48,
+    borderRadius: 18,
+    backgroundColor: '#000000',
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  readingHypeCostFieldInput: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+    paddingVertical: 0,
+    margin: 0,
+  },
+  bodyPreviewContainer: {
+    position: 'relative',
+    minHeight: 0,
+    justifyContent: 'flex-start',
+    paddingTop: 0,
+    paddingBottom: 0,
+  },
+  bodyPreviewRichTextFlow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+  },
+  bodyPreviewPlainText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '400',
+    lineHeight: 26,
+  },
+  bodyPreviewCitationTextWhite: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    lineHeight: 26,
+  },
+  bodyPreviewCitationTextGradientPlaceholder: {
+    color: 'transparent',
+    fontSize: 16,
+    fontWeight: '700',
+    lineHeight: 26,
+  },
+  bodyPreviewCitationMaskText: {
+    color: '#000000',
+    fontSize: 16,
+    fontWeight: '700',
+    lineHeight: 26,
+  },
+  bodyPreviewCitationMeasureText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    lineHeight: 26,
+    opacity: 0,
+  },
+  bodyPreviewCitationTouchable: {
+    position: 'relative',
+    alignSelf: 'flex-start',
+    flexShrink: 1,
+    maxWidth: '100%',
+  },
+  bodyPreviewCitationInlineContainer: {
+    position: 'relative',
+    alignSelf: 'flex-start',
+    flexShrink: 1,
+    maxWidth: '100%',
+  },
+  bodyPreviewCitationGradientOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+  },
+  bodyPreviewCitationAbsoluteTouchable: {
+    position: 'absolute',
+  },
+  bodyPreviewEditorPlainText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '400',
+    lineHeight: 26,
+  },
+  bodyPreviewEditorCitationTextWhite: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '400',
+    lineHeight: 26,
+    textDecorationLine: 'underline',
+    textDecorationColor: 'rgba(255, 255, 255, 0.4)',
+    textShadowColor: 'rgba(255, 255, 255, 0.22)',
+    textShadowRadius: 0.6,
+    textShadowOffset: { width: 0, height: 0 },
+  },
+  bodyPreviewEditorCitationTextGradient: {
+    color: APPLY_BUTTON_GRADIENT_COLORS[0],
+    fontSize: 16,
+    fontWeight: '400',
+    lineHeight: 26,
+    textDecorationLine: 'underline',
+    textDecorationColor: 'rgba(255, 183, 77, 0.4)',
+    textShadowColor: APPLY_BUTTON_GRADIENT_COLORS[1],
+    textShadowRadius: 1.2,
+    textShadowOffset: { width: 0, height: 0 },
+  },
+  bodyCitationEditorLayer: {
+    position: 'relative',
+  },
+  bodyCitationEditorInput: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    minHeight: 0,
+    color: 'transparent',
+    fontSize: 16,
+    fontWeight: '400',
+    lineHeight: 26,
+    paddingTop: 0,
+    paddingBottom: 0,
+    paddingLeft: 0,
+    paddingRight: 0,
+    backgroundColor: 'transparent',
+  },
+  intertitleSection: {
+    marginTop: 4,
+    marginBottom: 14,
+  },
+  intertitleHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  intertitleInput: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    paddingVertical: 0,
+  },
+  removeIntertitleButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fieldCounter: {
+    color: '#8F8F8F',
+    fontSize: 11,
+    textAlign: 'right',
+    marginTop: 4,
+  },
+  bodyActionsRow: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  bodyActionsButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  intertitleActionButton: {
+    minWidth: 34,
+    height: 24,
+    paddingHorizontal: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  citeActionButton: {
+    minWidth: 34,
+    height: 24,
+    paddingHorizontal: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  citeActionButtonActive: {
+    borderColor: 'rgba(255, 183, 77, 0.82)',
+    backgroundColor: 'rgba(255, 183, 77, 0.18)',
+  },
+  intertitleActionGlyph: {
+    width: 18,
+    height: 10,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  intertitleActionLineShort: {
+    width: 9,
+    height: 3,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    marginRight: 5,
+  },
+  intertitleActionLineLong: {
+    width: 15,
+    height: 3,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+  },
+  citeActionGlyph: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 3,
+  },
+  citeActionMark: {
+    width: 5,
+    height: 9,
+    borderTopLeftRadius: 3,
+    borderTopRightRadius: 3,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 2,
+    backgroundColor: '#FFFFFF',
+  },
+  bodyActionsCounter: {
+    color: '#8F8F8F',
+    fontSize: 11,
+    textAlign: 'right',
+  },
+  imageSection: {
+    marginTop: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectedImagesSection: {
+    marginTop: 20,
+  },
+  selectedImageAboveBodySection: {
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  selectedImageCard: {
+    position: 'relative',
+    borderRadius: 24,
+    overflow: 'hidden',
+  },
+  selectedImage: {
+    width: '100%',
+    height: 230,
+    borderRadius: 24,
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imageViewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.92)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 24,
+  },
+  imageViewerCloseButton: {
+    position: 'absolute',
+    top: 20,
+    right: 20,
+    zIndex: 2,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.48)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imageViewerImage: {
+    width: '100%',
+    height: '100%',
+  },
+  imageLabel: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  imageHint: {
+    color: '#A7A7A7',
+    fontSize: 11,
+    fontWeight: '400',
+    marginTop: 1,
+  },
+  actionToastContainer: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    backgroundColor: '#0F0F0F',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#232323',
+    zIndex: 20,
+  },
+  actionToastText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  citePanel: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#080808',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 18,
+    paddingHorizontal: 18,
+    borderTopWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  citePanelLabel: {
+    color: '#FFB74D',
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  citePanelHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  citePanelAppearancePicker: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  citePanelAppearanceButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  citePanelAppearanceButtonActive: {
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  citePanelAppearanceButtonInactive: {
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+  },
+  citePanelAppearanceWhiteFill: {
+    width: 14,
+    height: 14,
+    borderRadius: 4,
+    backgroundColor: '#FFFFFF',
+  },
+  citePanelPreview: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 16,
+  },
+  citePanelPreviewGradientContainer: {
+    position: 'relative',
+    alignSelf: 'flex-start',
+    marginBottom: 16,
+    maxWidth: '100%',
+  },
+  citePanelPreviewGradientMeasureText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    lineHeight: 20,
+    opacity: 0,
+  },
+  citePanelPreviewGradientMaskText: {
+    color: '#000000',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  citePanelPreviewGradientOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+  },
+  citePanelInputBlock: {
+    marginBottom: 16,
+  },
+  citePanelInputHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  citePanelInputLabel: {
+    color: '#B0B0B0',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  citePanelInput: {
+    minHeight: 46,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    color: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  citeSelectedUsersInlineList: {
+    marginTop: 8,
+    maxHeight: 112,
+  },
+  citeSelectedUsersInlineListContent: {
+    paddingBottom: 2,
+  },
+  citeSelectedUserInlineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+  },
+  citeSelectedUserInlineAvatar: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+  },
+  citeSelectedUserInlineAvatarFallback: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  citeSelectedUserInlineText: {
+    flex: 1,
+    color: '#AFAFAF',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  citeSuggestionsList: {
+    marginTop: 8,
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+  },
+  citeSuggestionsLoadingRow: {
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  citeSuggestionItem: {
+    minHeight: 50,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  citeSuggestionAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+  },
+  citeSuggestionAvatarFallback: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  citeSuggestionText: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  citePanelApplyButton: {
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  citePanelApplyButtonEnabled: {
+    opacity: 1,
+  },
+  citePanelApplyButtonDisabled: {
+    opacity: 0.55,
+  },
+  citePanelApplyButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  citePanelApplyButtonTextEnabled: {
+    color: '#FFFFFF',
+  },
+  citePanelApplyButtonTextDisabled: {
+    color: 'rgba(255, 255, 255, 0.58)',
+  },
+  citationUsersOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.52)',
+    justifyContent: 'flex-end',
+  },
+  citationUsersSheet: {
+    backgroundColor: '#080808',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 12,
+    paddingHorizontal: 18,
+    borderTopWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    maxHeight: '60%',
+  },
+  citationUsersSheetHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.16)',
+    marginBottom: 14,
+  },
+  citationUsersSheetTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  citationUsersSheetExcerpt: {
+    color: '#CFCFCF',
+    fontSize: 13,
+    lineHeight: 19,
+    marginBottom: 14,
+  },
+  citationUsersList: {
+    maxHeight: 260,
+  },
+  citationUsersListContent: {
+    paddingBottom: 4,
+  },
+  citationUsersListItem: {
+    minHeight: 56,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  citationUsersListAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+  },
+  citationUsersListAvatarFallback: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  citationUsersListText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  citationUsersListBody: {
+    flex: 1,
+    justifyContent: 'flex-start',
+  },
+  citationUsersSocialViewport: {
+    height: 18,
+    overflow: 'hidden',
+    marginTop: 3,
+  },
+  citationUsersSocialRow: {
+    alignItems: 'center',
+  },
+  citationUsersSocialIcon: {
+    width: CITATION_USER_SOCIAL_ICON_SIZE,
+    height: CITATION_USER_SOCIAL_ICON_SIZE,
+  },
+  citationUsersSocialIconSpacing: {
+    marginRight: CITATION_USER_SOCIAL_ICON_GAP,
+  },
+});
+
+function IntertitleActionGlyph() {
+  return (
+    <View style={styles.intertitleActionGlyph}>
+      <View style={styles.intertitleActionLineShort} />
+      <View style={styles.intertitleActionLineLong} />
+    </View>
+  );
+}
+
+function CiteActionGlyph() {
+  return (
+    <View style={styles.citeActionGlyph}>
+      <View style={styles.citeActionMark} />
+      <View style={styles.citeActionMark} />
+    </View>
+  );
+}
+
+function ApplyButtonGradientBorder({ visible }: { visible: boolean }) {
+  if (!visible) {
+    return null;
+  }
+
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <Svg width="100%" height="100%">
+        <Defs>
+          <LinearGradient id="reading_apply_button_gradient" x1="0" y1="0" x2="1" y2="0">
+            <Stop offset="0" stopColor={APPLY_BUTTON_GRADIENT_COLORS[0]} stopOpacity="1" />
+            <Stop offset="1" stopColor={APPLY_BUTTON_GRADIENT_COLORS[1]} stopOpacity="1" />
+          </LinearGradient>
+        </Defs>
+        <Rect
+          x="1"
+          y="1"
+          width="99%"
+          height="95%"
+          rx="14"
+          ry="14"
+          fill="transparent"
+          stroke="url(#reading_apply_button_gradient)"
+          strokeWidth="2"
+        />
+      </Svg>
+    </View>
+  );
+}
+
+function CreateButtonGradientBorder({ visible }: { visible: boolean }) {
+  if (!visible) {
+    return null;
+  }
+
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <Svg width="100%" height="100%">
+        <Defs>
+          <LinearGradient id="reading_create_button_gradient" x1="0" y1="0" x2="1" y2="0">
+            <Stop offset="0" stopColor={APPLY_BUTTON_GRADIENT_COLORS[0]} stopOpacity="1" />
+            <Stop offset="1" stopColor={APPLY_BUTTON_GRADIENT_COLORS[1]} stopOpacity="1" />
+          </LinearGradient>
+        </Defs>
+        <Rect
+          x="1"
+          y="1"
+          width="98%"
+          height="94%"
+          rx="16"
+          ry="16"
+          fill="transparent"
+          stroke="url(#reading_create_button_gradient)"
+          strokeWidth="2"
+        />
+      </Svg>
+    </View>
+  );
+}
+
+function GradientCitationSwatch() {
+  return (
+    <Svg width="14" height="14" viewBox="0 0 14 14">
+      <Defs>
+        <LinearGradient id="reading_citation_swatch_gradient" x1="0" y1="0" x2="1" y2="0">
+          <Stop offset="0" stopColor={APPLY_BUTTON_GRADIENT_COLORS[0]} stopOpacity="1" />
+          <Stop offset="1" stopColor={APPLY_BUTTON_GRADIENT_COLORS[1]} stopOpacity="1" />
+        </LinearGradient>
+      </Defs>
+      <Rect x="0" y="0" width="14" height="14" rx="4" ry="4" fill="url(#reading_citation_swatch_gradient)" />
+    </Svg>
+  );
+}
+
+function GradientCitePanelPreviewText({
+  text,
+}: {
+  text: string;
+}) {
+  const [layout, setLayout] = useState<{ width: number; height: number } | null>(null);
+
+  return (
+    <View style={styles.citePanelPreviewGradientContainer} pointerEvents="none">
+      <Text
+        style={styles.citePanelPreviewGradientMeasureText}
+        onLayout={(event) => {
+          const nextWidth = Math.ceil(event.nativeEvent.layout.width);
+          const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+
+          if (!nextWidth || !nextHeight) {
+            return;
+          }
+
+          setLayout((previous) => {
+            if (previous?.width === nextWidth && previous?.height === nextHeight) {
+              return previous;
+            }
+
+            return {
+              width: nextWidth,
+              height: nextHeight,
+            };
+          });
+        }}
+      >
+        {text}
+      </Text>
+
+      {layout ? (
+        <View style={styles.citePanelPreviewGradientOverlay}>
+          <MaskedView
+            style={{ width: layout.width, height: layout.height }}
+            maskElement={
+              <View style={{ width: layout.width, height: layout.height }}>
+                <Text style={styles.citePanelPreviewGradientMaskText}>{text}</Text>
+              </View>
+            }
+          >
+            <Svg width={layout.width} height={layout.height}>
+              <Defs>
+                <LinearGradient id="reading_cite_panel_preview_gradient" x1="0" y1="0" x2="1" y2="0">
+                  <Stop offset="0" stopColor={APPLY_BUTTON_GRADIENT_COLORS[0]} stopOpacity="1" />
+                  <Stop offset="1" stopColor={APPLY_BUTTON_GRADIENT_COLORS[1]} stopOpacity="1" />
+                </LinearGradient>
+              </Defs>
+              <Rect x="0" y="0" width={layout.width} height={layout.height} fill="url(#reading_cite_panel_preview_gradient)" />
+            </Svg>
+          </MaskedView>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function GradientInlineCitationText({
+  text,
+  onPress,
+}: {
+  text: string;
+  onPress: () => void;
+}) {
+  const [layout, setLayout] = useState<{ width: number; height: number } | null>(null);
+
+  return (
+    <TouchableOpacity
+      accessibilityRole="button"
+      activeOpacity={0.85}
+      onPress={onPress}
+      style={styles.bodyPreviewCitationTouchable}
+    >
+      <Text
+        style={styles.bodyPreviewCitationMeasureText}
+        onLayout={(event) => {
+          const nextWidth = Math.ceil(event.nativeEvent.layout.width);
+          const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+
+          if (!nextWidth || !nextHeight) {
+            return;
+          }
+
+          setLayout((previous) => {
+            if (previous?.width === nextWidth && previous?.height === nextHeight) {
+              return previous;
+            }
+
+            return {
+              width: nextWidth,
+              height: nextHeight,
+            };
+          });
+        }}
+      >
+        {text}
+      </Text>
+
+      {layout ? (
+        <View style={styles.bodyPreviewCitationGradientOverlay} pointerEvents="none">
+          <MaskedView
+            style={{ width: layout.width, height: layout.height }}
+            maskElement={
+              <View style={{ width: layout.width, height: layout.height }}>
+                <Text style={styles.bodyPreviewCitationMaskText}>{text}</Text>
+              </View>
+            }
+          >
+            <Svg width={layout.width} height={layout.height}>
+              <Defs>
+                <LinearGradient id="reading_inline_citation_gradient" x1="0" y1="0" x2="1" y2="0">
+                  <Stop offset="0" stopColor={APPLY_BUTTON_GRADIENT_COLORS[0]} stopOpacity="1" />
+                  <Stop offset="1" stopColor={APPLY_BUTTON_GRADIENT_COLORS[1]} stopOpacity="1" />
+                </LinearGradient>
+              </Defs>
+              <Rect x="0" y="0" width={layout.width} height={layout.height} fill="url(#reading_inline_citation_gradient)" />
+            </Svg>
+          </MaskedView>
+        </View>
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
+function GradientPreviewCitationOverlay({
+  text,
+  onPress,
+  x,
+  y,
+  width,
+  height,
+}: {
+  text: string;
+  onPress: () => void;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}) {
+  return (
+    <TouchableOpacity
+      accessibilityRole="button"
+      activeOpacity={0.85}
+      onPress={onPress}
+      style={[
+        styles.bodyPreviewCitationAbsoluteTouchable,
+        { left: x, top: y, width, height },
+      ]}
+    >
+      <MaskedView
+        style={{ width, height }}
+        maskElement={
+          <View style={{ width, height }}>
+            <Text style={styles.bodyPreviewCitationMaskText}>{text}</Text>
+          </View>
+        }
+      >
+        <Svg width={width} height={height}>
+          <Defs>
+            <LinearGradient id={`reading_inline_preview_overlay_gradient_${width}_${height}_${text.length}`} x1="0" y1="0" x2="1" y2="0">
+              <Stop offset="0" stopColor={APPLY_BUTTON_GRADIENT_COLORS[0]} stopOpacity="1" />
+              <Stop offset="1" stopColor={APPLY_BUTTON_GRADIENT_COLORS[1]} stopOpacity="1" />
+            </LinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width={width} height={height} fill={`url(#reading_inline_preview_overlay_gradient_${width}_${height}_${text.length})`} />
+        </Svg>
+      </MaskedView>
+    </TouchableOpacity>
+  );
+}
+
+function GradientInlineCitationBackdropText({
+  text,
+}: {
+  text: string;
+}) {
+  const [layout, setLayout] = useState<{ width: number; height: number } | null>(null);
+
+  return (
+    <View style={styles.bodyPreviewCitationInlineContainer} pointerEvents="none">
+      <Text
+        style={styles.bodyPreviewCitationMeasureText}
+        onLayout={(event) => {
+          const nextWidth = Math.ceil(event.nativeEvent.layout.width);
+          const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+
+          if (!nextWidth || !nextHeight) {
+            return;
+          }
+
+          setLayout((previous) => {
+            if (previous?.width === nextWidth && previous?.height === nextHeight) {
+              return previous;
+            }
+
+            return {
+              width: nextWidth,
+              height: nextHeight,
+            };
+          });
+        }}
+      >
+        {text}
+      </Text>
+
+      {layout ? (
+        <View style={styles.bodyPreviewCitationGradientOverlay}>
+          <MaskedView
+            style={{ width: layout.width, height: layout.height }}
+            maskElement={
+              <View style={{ width: layout.width, height: layout.height }}>
+                <Text style={styles.bodyPreviewCitationMaskText}>{text}</Text>
+              </View>
+            }
+          >
+            <Svg width={layout.width} height={layout.height}>
+              <Defs>
+                <LinearGradient id="reading_inline_citation_backdrop_gradient" x1="0" y1="0" x2="1" y2="0">
+                  <Stop offset="0" stopColor={APPLY_BUTTON_GRADIENT_COLORS[0]} stopOpacity="1" />
+                  <Stop offset="1" stopColor={APPLY_BUTTON_GRADIENT_COLORS[1]} stopOpacity="1" />
+                </LinearGradient>
+              </Defs>
+              <Rect x="0" y="0" width={layout.width} height={layout.height} fill="url(#reading_inline_citation_backdrop_gradient)" />
+            </Svg>
+          </MaskedView>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+export default ReadingScreen;

@@ -36,7 +36,7 @@ type OAuthCallbackInfo = {
 
 const safeDecode = (value: unknown) => {
   const raw = String(value ?? '');
-  if (!raw) return '';
+  if (!raw) {return '';}
   try {
     return decodeURIComponent(raw);
   } catch {
@@ -46,7 +46,7 @@ const safeDecode = (value: unknown) => {
 
 const extractOAuthCallbackInfo = (url: string): OAuthCallbackInfo => {
   const raw = String(url || '').trim();
-  if (!raw) return {};
+  if (!raw) {return {};}
 
   const [beforeHash, hashPartRaw] = raw.split('#');
   // NOTE: The `parse` helper exists in `expo-linking`, not in React Native's `Linking`.
@@ -100,7 +100,7 @@ const extractOAuthCallbackInfo = (url: string): OAuthCallbackInfo => {
 const waitForSupabaseOAuthCallback = async (timeoutMs = 120_000): Promise<string> => {
   const matchesRedirect = (u: string) => {
     const raw = String(u || '').trim();
-    if (!raw) return false;
+    if (!raw) {return false;}
     return raw.startsWith(SUPABASE_REDIRECT_URL) || raw.startsWith(`${SUPABASE_REDIRECT_URL}/`);
   };
 
@@ -131,7 +131,7 @@ const waitForSupabaseOAuthCallback = async (timeoutMs = 120_000): Promise<string
 
 const parseMarkedText = (raw: string): MarkedSegment[] => {
   const value = String(raw ?? '');
-  if (!value) return [{ text: '', kind: 'normal' }];
+  if (!value) {return [{ text: '', kind: 'normal' }];}
 
   const segments: MarkedSegment[] = [];
   const re = /\[\[(.+?)\]\]/g;
@@ -172,7 +172,7 @@ const GradientGoogleIcon = ({ size = 18 }: { size?: number }) => {
     <MaskedView
       style={{ width: size, height: size }}
       maskElement={
-        <View style={{ backgroundColor: 'transparent' }}>
+        <View style={styles.googleIconMaskContainer}>
           <FontAwesome name="google" size={size} color="#000" />
         </View>
       }
@@ -234,7 +234,7 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
 
   const forgotPasswordSegments = useMemo(
     () => parseMarkedText(String(t('common.forgotPassword') || '')),
-    [t, language]
+    [t]
   );
 
   const screenDisabled = isLoading || isGoogleLoading;
@@ -364,9 +364,9 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
 
       const tryCompleteProfileFromPending = async () => {
         const normalizedEmail = String(email || '').trim().toLowerCase();
-        if (!normalizedEmail) return null;
+        if (!normalizedEmail) {return null;}
         const raw = await AsyncStorage.getItem(pendingKeyForEmail(normalizedEmail)).catch(() => null);
-        if (!raw) return null;
+        if (!raw) {return null;}
 
         let pending: any = null;
         try {
@@ -827,7 +827,7 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
               ) : (
                 <Text style={[
                   styles.loginButtonText,
-                  !isFormValid && styles.loginButtonTextDisabled
+                  !isFormValid && styles.loginButtonTextDisabled,
                 ]}>{t('login.signIn')}</Text>
               )}
             </TouchableOpacity>
@@ -1117,6 +1117,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: 'bold',
     opacity: 1,
+  },
+  googleIconMaskContainer: {
+    backgroundColor: 'transparent',
   },
 });
 

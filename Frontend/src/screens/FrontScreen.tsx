@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import MaskedView from '@react-native-masked-view/masked-view';
 import {
   View,
   Text,
@@ -25,8 +26,9 @@ import {
   InteractionManager,
   AppState,
 } from 'react-native';
-import type { ImageSourcePropType } from 'react-native';
+import { Calendar } from 'react-native-calendars';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { BlurView } from '@react-native-community/blur';
 import MapView, { PROVIDER_GOOGLE, type PoiClickEvent } from 'react-native-maps';
 import Geolocation from '@react-native-community/geolocation';
@@ -44,30 +46,40 @@ import ProfilePhotoEdit from './ProfilePhotoEdit';
 import CarouselImageEditor from './CarouselImageEditor';
 import { deleteDraftUploadedImageByUrl, getAccountAuthStatus, getMyDevicePermissions, getMyUiHints, setMyDevicePermissions, setMyUiHints, updateProfilePhoto, updateSocialNetworks, uploadImage } from '../services/userService';
 import { trackAdPaidEvent } from '../services/adRevenueService';
+import { dismissChannelReplyNotification } from '../services/notificationService';
+import {
+  loadHomeIntimidadesDailyGoalProgress,
+  recordChannelImageShareGoalCompletion,
+  makeHomeIntimidadesUnlockSignature,
+  recordChannelEventCreateGoalCompletion,
+  recordChannelHostImageUnlock,
+  recordChannelHostThreadGoalCompletion,
+  recordHomeIntimidadesUnlock,
+  recordProfilePublishGoalCompletion,
+} from '../services/whiteKeysProgress';
 import { API_URL, getServerResourceUrl } from '../config/api';
 import { BANNER_AD_UNIT_ID, INTERSTITIAL_AD_UNIT_ID, REWARDED_AD_UNIT_ID } from '../config/admob';
 import { POST_TTL_MS } from '../config/postTtl';
 import { useI18n } from '../i18n/I18nProvider';
+import { getLocalizedNationalityName } from '../i18n/nationalities';
 import type { Language, TranslationKey } from '../i18n/translations';
 import { ensureAdsConsentForAccount, getStoredAdsRuntimeConfig } from '../services/adsConsent';
 import Reanimated, {
   Easing as ReanimatedEasing,
   interpolate,
-  interpolateColor,
   useAnimatedStyle,
   useSharedValue,
-  withSequence,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
 
 import Svg, { Defs, LinearGradient, Stop, Rect, Circle, Path, Text as SvgText } from 'react-native-svg';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const BLOCKED_JOINED_GROUP_IDS_KEY = 'keinti.blocked_joined_group_ids';
 const PROFILE_YOUR_PROFILE_HINT_SEEN_KEY = 'keinti.hints.profile_your_profile_seen';
 const HOME_INTIMIDADES_UNLOCKS_STORAGE_KEY_PREFIX = 'keinti.home_intimidades_unlocks.';
-const HOME_LOADER_MIN_MS = 1000;
+const HOME_LOADER_MIN_MS = 120;
 const HOME_INTERSTITIAL_MIN_VIEWS = 16;
 const HOME_INTERSTITIAL_MAX_VIEWS = 18;
 const HOME_DISCOVER_RECENT_POOL_SIZE = 5;
@@ -81,13 +93,281 @@ const homeSwipeTutorialSeenMemoryByEmail = new Set<string>();
 const normalizeEmailKey = (raw?: string | null) => String(raw || '').trim().toLowerCase();
 
 const CHANNEL_IMAGE_MESSAGE_PREFIX = '__KIMG__';
+const CHANNEL_EVENT_MESSAGE_PREFIX = '__KEVT__';
+const CHANNEL_READING_MESSAGE_PREFIX = '__KREAD__';
+const CHANNEL_MESSAGES_TAB_SEQUENCE = ['General', 'Hilos', 'Eventos', 'Lecturas', 'Imágenes'] as const;
+const READING_ACCENT_GRADIENT_COLORS = ['#FFB74D', '#ffe45c'];
+const HYPE_CATEGORY_BORDER_GRADIENT_COLORS: [string, string] = ['#FFB74D', '#ffe45c'];
+const READING_CITATION_USER_SOCIAL_ICON_SIZE = 18;
+const READING_CITATION_USER_SOCIAL_ICON_GAP = 10;
+const READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT = 3;
+
+type ChannelMessagesTab = typeof CHANNEL_MESSAGES_TAB_SEQUENCE[number];
+
+const getNextChannelMessagesTab = (currentTab: ChannelMessagesTab): ChannelMessagesTab => {
+  const currentIndex = CHANNEL_MESSAGES_TAB_SEQUENCE.indexOf(currentTab);
+  const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % CHANNEL_MESSAGES_TAB_SEQUENCE.length : 0;
+  return CHANNEL_MESSAGES_TAB_SEQUENCE[nextIndex];
+};
 
 const CHANNEL_IMAGE_UNLOCKS_STORAGE_KEY_PREFIX = 'keinti.channel_image_unlocks.';
+const HYPE_CHANNEL_EVENT_UNLOCKS_STORAGE_KEY_PREFIX = 'keinti.hype_channel_event_unlocks.';
+const HYPE_CHANNEL_READING_UNLOCKS_STORAGE_KEY_PREFIX = 'keinti.hype_channel_reading_unlocks.';
 const JOINED_CHANNEL_THREAD_READS_STORAGE_KEY_PREFIX = 'keinti.joined_channel_thread_reads.';
 const CHANNEL_IMAGE_LOCK_OVERLAY_TEXT_TOP = 'Visualizar imagen';
 const CHANNEL_IMAGE_LOCK_OVERLAY_TEXT_BOTTOM = '(ver anuncio)';
+const CHANNEL_EVENT_TYPE_OPTIONS = [
+  'event.typeOption.social',
+  'event.typeOption.cultural',
+  'event.typeOption.artistic',
+  'event.typeOption.business',
+  'event.typeOption.economic',
+  'event.typeOption.academic',
+  'event.typeOption.sports',
+  'event.typeOption.entertainment',
+  'event.typeOption.political',
+  'event.typeOption.religious',
+  'event.typeOption.marketing',
+  'event.typeOption.charity',
+  'event.typeOption.audiovisual',
+  'event.typeOption.scientific',
+  'event.typeOption.technological',
+  'event.typeOption.children',
+  'event.typeOption.musical',
+  'event.typeOption.automotive',
+  'event.typeOption.fitness',
+  'event.typeOption.gastronomic',
+  'event.typeOption.work',
+] as const satisfies readonly TranslationKey[];
+const HYPE_MOST_VIRAL_CATEGORY = 'hype.category.mostViral' as const;
+const HYPE_CATEGORY_OPTIONS = [HYPE_MOST_VIRAL_CATEGORY, ...CHANNEL_EVENT_TYPE_OPTIONS] as const;
+const HYPE_VIRAL_PAGE_SIZE = 10;
+const CHANNEL_EVENT_SOCIAL_OPTIONS = [
+  'youtube',
+  'twitter',
+  'tiktok',
+  'threads',
+  'telegram',
+  'pinterest',
+  'onlyfans',
+  'linkedin',
+  'kick',
+  'instagram',
+  'facebook',
+  'discord',
+] as const;
+const formatChannelEventDate = (date: Date) => {
+  const day = `${date.getDate()}`.padStart(2, '0');
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const year = `${date.getFullYear()}`;
+  return `${day}/${month}/${year}`;
+};
+
+type ChannelEventTimeFormat = 'european' | 'us';
+
+const getChannelEventTimeMeridiem = (date: Date) => (date.getHours() >= 12 ? 'PM' : 'AM');
+
+const getChannelEventTimeHour12 = (date: Date) => {
+  const hour = date.getHours() % 12;
+  return hour === 0 ? 12 : hour;
+};
+
+const toChannelEvent24Hour = (hour12: number, meridiem: 'AM' | 'PM') => {
+  const normalizedHour = Math.max(1, Math.min(12, Math.floor(hour12)));
+  if (meridiem === 'AM') {
+    return normalizedHour === 12 ? 0 : normalizedHour;
+  }
+  return normalizedHour === 12 ? 12 : normalizedHour + 12;
+};
+
+const formatChannelEventTime = (date: Date, format: ChannelEventTimeFormat = 'european') => {
+  const hours = format === 'us'
+    ? `${getChannelEventTimeHour12(date)}`.padStart(2, '0')
+    : `${date.getHours()}`.padStart(2, '0');
+  const minutes = `${date.getMinutes()}`.padStart(2, '0');
+  if (format === 'us') {
+    return `${hours}:${minutes} ${getChannelEventTimeMeridiem(date)}`;
+  }
+  return `${hours}:${minutes}`;
+};
+
+const normalizeChannelEventTaskUsername = (raw?: string) => {
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) {return '';}
+
+  const withoutPrefix = trimmed.replace(/^@+/, '');
+  if (!withoutPrefix) {return '';}
+
+  return `@${withoutPrefix}`;
+};
+
+const formatChannelEventDurationValue = (totalMinutes: number) => {
+  const safeMinutes = Math.max(0, Math.floor(totalMinutes));
+  const hours = Math.floor(safeMinutes / 60);
+  const minutes = safeMinutes % 60;
+
+  if (hours > 0 && minutes > 0) {return `${hours} h ${`${minutes}`.padStart(2, '0')} min`;}
+  if (hours > 0) {return `${hours} h`;}
+  return `${minutes} min`;
+};
+
+const formatChannelEventIntegerInput = (raw: string) => {
+  const digitsOnly = String(raw || '').replace(/\D+/g, '');
+  if (!digitsOnly) {return '';}
+
+  const normalizedDigits = digitsOnly.replace(/^0+(?=\d)/, '');
+  return normalizedDigits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+};
+
+const getChannelEventCountdownMinutes = (
+  expiresAt?: Date | string | null,
+  createdAt?: Date | string | null,
+  durationMinutes?: number | null,
+  nowMs = Date.now(),
+) => {
+  const safeDurationMinutes = Math.max(0, Math.floor(Number(durationMinutes) || 0));
+  if (safeDurationMinutes <= 0) {return 0;}
+
+  const remainingMinuteCandidates: number[] = [];
+
+  if (expiresAt) {
+    const explicitExpiration = parseServerDate(expiresAt);
+    if (Number.isFinite(explicitExpiration.getTime())) {
+      const diffMs = explicitExpiration.getTime() - nowMs;
+      if (diffMs > 0) {
+        remainingMinuteCandidates.push(Math.ceil(diffMs / (1000 * 60)));
+      }
+    }
+  }
+
+  if (createdAt) {
+    const created = parseServerDate(createdAt);
+    if (!Number.isFinite(created.getTime())) {
+      remainingMinuteCandidates.push(safeDurationMinutes);
+    } else {
+      const expirationMs = created.getTime() + (safeDurationMinutes * 60 * 1000);
+      const diffMs = expirationMs - nowMs;
+      if (diffMs > 0) {
+        remainingMinuteCandidates.push(Math.ceil(diffMs / (1000 * 60)));
+      }
+    }
+  }
+
+  if (remainingMinuteCandidates.length === 0) {return 0;}
+
+  return Math.max(0, Math.min(safeDurationMinutes, Math.min(...remainingMinuteCandidates)));
+};
+
+const getChannelEventRemainingDurationMinutes = (createdAt?: Date | string | null) => {
+  if (!createdAt) {return 0;}
+
+  const created = parseServerDate(createdAt);
+  if (!Number.isFinite(created.getTime())) {return 0;}
+
+  const expiration = created.getTime() + POST_TTL_MS;
+  const diff = expiration - Date.now();
+  if (diff <= 0) {return 0;}
+
+  return Math.max(1, Math.floor(diff / (1000 * 60)));
+};
+
+const getChannelEventExpiresAtIso = (
+  durationMinutes?: number | null,
+  channelCreatedAt?: Date | string | null,
+  nowMs = Date.now(),
+) => {
+  const safeDurationMinutes = Math.max(0, Math.floor(Number(durationMinutes) || 0));
+  if (safeDurationMinutes <= 0) {return null;}
+
+  let expiresAtMs = nowMs + (safeDurationMinutes * 60 * 1000);
+
+  if (channelCreatedAt) {
+    const created = parseServerDate(channelCreatedAt);
+    if (Number.isFinite(created.getTime())) {
+      const channelExpiresAtMs = created.getTime() + POST_TTL_MS;
+      if (channelExpiresAtMs > nowMs) {
+        expiresAtMs = Math.min(expiresAtMs, channelExpiresAtMs);
+      }
+    }
+  }
+
+  if (!Number.isFinite(expiresAtMs)) {return null;}
+  return new Date(expiresAtMs).toISOString();
+};
+
+const clampChannelEventDurationMinutes = (minutes: number, maxMinutes: number) => {
+  if (maxMinutes < 1) {return 0;}
+  return Math.min(Math.max(Math.floor(minutes), 1), maxMinutes);
+};
+
+const CHANNEL_EVENT_TIME_HOURS = Array.from({ length: 24 }, (_, hour) => `${hour}`.padStart(2, '0'));
+const CHANNEL_EVENT_TIME_HOURS_US = Array.from({ length: 12 }, (_, index) => `${index + 1}`.padStart(2, '0'));
+const CHANNEL_EVENT_TIME_MERIDIEMS = ['AM', 'PM'] as const;
+
+const CHANNEL_EVENT_TIME_MINUTES = Array.from({ length: 60 }, (_, minute) => `${minute}`.padStart(2, '0'));
+
+const parseChannelEventDate = (value: string): Date | null => {
+  const match = String(value || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) {return null;}
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) {return null;}
+
+  const date = new Date(year, month - 1, day);
+  if (
+    Number.isNaN(date.getTime())
+    || date.getFullYear() !== year
+    || date.getMonth() !== month - 1
+    || date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+};
+
+const normalizeChannelEventDateInput = (value: string) => {
+  const digits = String(value || '').replace(/\D/g, '').slice(0, 8);
+  if (digits.length <= 2) {return digits;}
+  if (digits.length <= 4) {return `${digits.slice(0, 2)}/${digits.slice(2)}`;}
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+};
+
+const sanitizeChannelEventAmountInput = (value: string) => value.replace(/\D+/g, '').replace(/^0+(?=\d)/, '');
+
+const getChannelEventMinimumDate = () => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+};
+
+const toChannelEventIsoDate = (date: Date) => {
+  const year = `${date.getFullYear()}`;
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+const SOCIAL_PLATFORM_NAMES: Record<string, string> = {
+  facebook: 'Facebook',
+  instagram: 'Instagram',
+  onlyfans: 'OnlyFans',
+  pinterest: 'Pinterest',
+  telegram: 'Telegram',
+  tiktok: 'TikTok',
+  twitter: 'X/Twitter',
+  youtube: 'YouTube',
+  discord: 'Discord',
+  threads: 'Threads',
+  linkedin: 'LinkedIn',
+  kick: 'Kick',
+  twitch: 'Twitch',
+};
 // RN Image blurRadius is a platform-specific numeric value; this approximates ~80% blur.
 const CHANNEL_IMAGE_LOCK_BLUR_RADIUS = 22;
+const HYPE_EVENT_IMAGE_BLUR_RADIUS = 11;
+const HYPE_EVENT_IMAGE_OPACITY = 0.7;
+const HYPE_EVENT_CARD_BLUR_AMOUNT = 24;
 
 // Height reserved by the custom bottom nav bar (plus a small safety margin).
 const BOTTOM_NAV_OVERLAY_HEIGHT = 76;
@@ -121,16 +401,463 @@ const encodeChannelImageMessage = (payload: { url: string; caption?: string }) =
   return `${CHANNEL_IMAGE_MESSAGE_PREFIX}${JSON.stringify(safe)}`;
 };
 
+type ChannelEventMessagePayload = {
+  name: string;
+  description: string;
+  startAt?: string;
+  typeKey: TranslationKey;
+  hypeCost?: number | null;
+  imageUrl?: string;
+  tasksEnabled?: boolean;
+  durationMinutes?: number | null;
+  expiresAt?: string | null;
+  taskDescriptions?: string[];
+  taskRewardAmounts?: number[];
+  taskAssignments?: Array<Array<{ username: string; memberEmail?: string }>>;
+  socialNetworks?: Array<{ network: string; link: string }>;
+  locationLabel?: string;
+  locationUrl?: string;
+  locationPlaceId?: string | null;
+  locationLat?: number | null;
+  locationLng?: number | null;
+  timeFormat?: ChannelEventTimeFormat;
+};
+
+type ChannelReadingMessageInsertion =
+  | {
+      type: 'image';
+      url: string;
+    }
+  | {
+      type: 'intertitle';
+      text: string;
+    };
+
+type ChannelReadingCitationAppearance = 'white' | 'gradient';
+
+type ChannelReadingCitationUser = {
+  username: string;
+  profile_photo_uri?: string | null;
+  social_networks?: Array<{ network: string; link?: string | null }>;
+};
+
+type ChannelReadingCitation = {
+  id: string;
+  sectionIndex: number;
+  start: number;
+  end: number;
+  text: string;
+  appearance: ChannelReadingCitationAppearance;
+  users: ChannelReadingCitationUser[];
+};
+
+type ChannelReadingMessagePayload = {
+  title: string;
+  subtitle: string;
+  lead: string;
+  date?: string;
+  category?: string;
+  hypeCost?: number | null;
+  bodySections?: string[];
+  insertions?: ChannelReadingMessageInsertion[];
+  imageUrls?: string[];
+  citations?: ChannelReadingCitation[];
+};
+
+type HypeViralChannelEvent = {
+  id: number | string;
+  post_id: number | string;
+  message: string;
+  created_at?: string | null;
+  post_created_at?: string | null;
+  publisher_email?: string | null;
+  publisher_username?: string | null;
+  publisher_profile_photo_uri?: string | null;
+  publisher_social_networks?: Array<{ id?: string; network?: string; link?: string | null }> | null;
+  publisher_account_verified?: boolean | null;
+  publisher_keinti_verified?: boolean | null;
+  viewer_is_subscribed?: boolean | null;
+  channel_event_donation_total?: number | null;
+  channel_event_task_rewards?: any[];
+  channel_event_expires_at?: string | null;
+};
+
+type RenderableHypeViralChannelEvent = HypeViralChannelEvent & {
+  parsedPayload: ChannelEventMessagePayload;
+};
+
+type RenderableHypeViralChannelReading = HypeViralChannelEvent & {
+  parsedPayload: ChannelReadingMessagePayload;
+};
+
+type HypeCategoryOption = (typeof HYPE_CATEGORY_OPTIONS)[number];
+
+type HypeViralPageState = {
+  items: HypeViralChannelEvent[];
+  isLoadingInitial: boolean;
+  isLoadingMore: boolean;
+  hasLoadedOnce: boolean;
+  hasMore: boolean;
+  nextCursor: string | null;
+};
+
+type HypeViralPagesState = Partial<Record<HypeCategoryOption, HypeViralPageState>>;
+
+const EMPTY_HYPE_VIRAL_PAGE_STATE: HypeViralPageState = {
+  items: [],
+  isLoadingInitial: false,
+  isLoadingMore: false,
+  hasLoadedOnce: false,
+  hasMore: true,
+  nextCursor: null,
+};
+
+const HYPE_VIRAL_LIST_VIEWABILITY_CONFIG = {
+  itemVisiblePercentThreshold: 70,
+};
+
+const getHypeViralPageState = (
+  pages: HypeViralPagesState,
+  category: HypeCategoryOption,
+) => pages[category] ?? EMPTY_HYPE_VIRAL_PAGE_STATE;
+
+const updateHypeViralPageState = (
+  pages: HypeViralPagesState,
+  category: HypeCategoryOption,
+  updater: (current: HypeViralPageState) => HypeViralPageState,
+) => {
+  const currentState = getHypeViralPageState(pages, category);
+  const nextState = updater(currentState);
+  if (nextState === currentState) {return pages;}
+
+  return {
+    ...pages,
+    [category]: nextState,
+  };
+};
+
+const mergeUniqueHypeViralItems = (
+  currentItems: HypeViralChannelEvent[],
+  incomingItems: HypeViralChannelEvent[],
+) => {
+  const nextItems = [...currentItems];
+  const indexesById = new Map<string, number>();
+
+  nextItems.forEach((item, index) => {
+    indexesById.set(String(item?.id ?? ''), index);
+  });
+
+  incomingItems.forEach((item) => {
+    const itemKey = String(item?.id ?? '');
+    const existingIndex = indexesById.get(itemKey);
+    if (typeof existingIndex === 'number') {
+      nextItems[existingIndex] = item;
+      return;
+    }
+
+    indexesById.set(itemKey, nextItems.length);
+    nextItems.push(item);
+  });
+
+  return nextItems;
+};
+
+const patchHypeViralPagesItems = (
+  pages: HypeViralPagesState,
+  updater: (item: HypeViralChannelEvent) => HypeViralChannelEvent,
+) => {
+  let didChange = false;
+  const nextPages: HypeViralPagesState = { ...pages };
+
+  (Object.keys(pages) as HypeCategoryOption[]).forEach((category) => {
+    const currentPage = pages[category];
+    if (!currentPage) {return;}
+
+    let categoryChanged = false;
+    const nextItems = currentPage.items.map((item) => {
+      const nextItem = updater(item);
+      if (nextItem !== item) {
+        categoryChanged = true;
+      }
+      return nextItem;
+    });
+
+    if (!categoryChanged) {return;}
+
+    didChange = true;
+    nextPages[category] = {
+      ...currentPage,
+      items: nextItems,
+    };
+  });
+
+  return didChange ? nextPages : pages;
+};
+
+const normalizeHypeViralCursorToken = (value: unknown) => {
+  const normalizedValue = String(value || '').trim();
+  return normalizedValue || null;
+};
+
+const buildHypeViralEndpointQuery = (
+  category: HypeCategoryOption,
+  cursor?: string | null,
+) => {
+  const params = [`limit=${HYPE_VIRAL_PAGE_SIZE}`];
+
+  if (category !== HYPE_MOST_VIRAL_CATEGORY) {
+    params.push(`category=${encodeURIComponent(category)}`);
+  }
+
+  const normalizedCursor = normalizeHypeViralCursorToken(cursor);
+  if (normalizedCursor) {
+    params.push(`cursor=${encodeURIComponent(normalizedCursor)}`);
+  }
+
+  return params.join('&');
+};
+
+const encodeChannelEventMessage = (payload: ChannelEventMessagePayload) => {
+  const safe = {
+    name: String(payload?.name || '').trim(),
+    description: String(payload?.description || '').trim(),
+    startAt: String(payload?.startAt || '').trim(),
+    typeKey: payload?.typeKey,
+    hypeCost: typeof payload?.hypeCost === 'number' && Number.isFinite(payload.hypeCost)
+      ? Math.max(0, Math.floor(payload.hypeCost))
+      : null,
+    imageUrl: String(payload?.imageUrl || '').trim(),
+    tasksEnabled: !!payload?.tasksEnabled,
+    durationMinutes: typeof payload?.durationMinutes === 'number' && Number.isFinite(payload.durationMinutes)
+      ? Math.max(1, Math.round(payload.durationMinutes))
+      : null,
+    expiresAt: String(payload?.expiresAt || '').trim() || null,
+    taskDescriptions: Array.isArray(payload?.taskDescriptions)
+      ? payload.taskDescriptions
+        .map(item => String(item || '').trim())
+        .filter(Boolean)
+      : [],
+    taskRewardAmounts: Array.isArray(payload?.taskRewardAmounts)
+      ? payload.taskRewardAmounts.map(item => Math.max(0, Math.floor(Number(item) || 0)))
+      : [],
+    taskAssignments: Array.isArray(payload?.taskAssignments)
+      ? payload.taskAssignments.map(taskAssignmentList => (
+        Array.isArray(taskAssignmentList)
+          ? taskAssignmentList
+            .map(item => ({
+              username: normalizeChannelEventTaskUsername(item?.username),
+              memberEmail: typeof item?.memberEmail === 'string' ? item.memberEmail.trim() : undefined,
+            }))
+            .filter(item => item.username)
+          : []
+      ))
+      : [],
+    socialNetworks: Array.isArray(payload?.socialNetworks)
+      ? payload.socialNetworks
+        .map(item => ({
+          network: String(item?.network || '').trim(),
+          link: String(item?.link || '').trim(),
+        }))
+        .filter(item => item.network && item.link)
+      : [],
+    locationLabel: String(payload?.locationLabel || '').trim(),
+    locationUrl: String(payload?.locationUrl || '').trim(),
+    locationPlaceId: payload?.locationPlaceId ?? null,
+    locationLat: typeof payload?.locationLat === 'number' ? payload.locationLat : null,
+    locationLng: typeof payload?.locationLng === 'number' ? payload.locationLng : null,
+    timeFormat: payload?.timeFormat === 'us' ? 'us' : 'european',
+  };
+  return `${CHANNEL_EVENT_MESSAGE_PREFIX}${JSON.stringify(safe)}`;
+};
+
 const parseChannelImageMessage = (raw: string): { url: string; caption: string } | null => {
   const text = String(raw || '');
-  if (!text.startsWith(CHANNEL_IMAGE_MESSAGE_PREFIX)) return null;
+  if (!text.startsWith(CHANNEL_IMAGE_MESSAGE_PREFIX)) {return null;}
   const json = text.slice(CHANNEL_IMAGE_MESSAGE_PREFIX.length);
   try {
     const parsed = JSON.parse(json);
     const url = String(parsed?.url || '').trim();
     const caption = String(parsed?.caption || '');
-    if (!url) return null;
+    if (!url) {return null;}
     return { url, caption };
+  } catch {
+    return null;
+  }
+};
+
+const parseChannelEventMessage = (raw: string): ChannelEventMessagePayload | null => {
+  const text = String(raw || '');
+  if (!text.startsWith(CHANNEL_EVENT_MESSAGE_PREFIX)) {return null;}
+
+  const json = text.slice(CHANNEL_EVENT_MESSAGE_PREFIX.length);
+  try {
+    const parsed = JSON.parse(json);
+    const name = String(parsed?.name || '').trim();
+    const description = String(parsed?.description || '').trim();
+    const startAt = String(parsed?.startAt || '').trim();
+    const typeKey = parsed?.typeKey as TranslationKey | undefined;
+    const taskDescriptions = Array.isArray(parsed?.taskDescriptions)
+      ? parsed.taskDescriptions
+        .map((item: any) => String(item || '').trim())
+        .filter((item: string) => item.length > 0)
+      : [];
+    const taskRewardAmounts = Array.isArray(parsed?.taskRewardAmounts)
+      ? parsed.taskRewardAmounts.map((item: any) => Math.max(0, Math.floor(Number(item) || 0)))
+      : [];
+    const taskAssignments = Array.isArray(parsed?.taskAssignments)
+      ? parsed.taskAssignments.map((taskAssignmentList: any) => (
+        Array.isArray(taskAssignmentList)
+          ? taskAssignmentList
+            .map((item: any) => ({
+              username: normalizeChannelEventTaskUsername(item?.username),
+              memberEmail: typeof item?.memberEmail === 'string' ? item.memberEmail.trim() : undefined,
+            }))
+            .filter((item: { username: string; memberEmail?: string }) => item.username)
+          : []
+      ))
+      : [];
+    const tasksEnabled = !!parsed?.tasksEnabled || taskDescriptions.length > 0;
+    const durationMinutes = typeof parsed?.durationMinutes === 'number' && Number.isFinite(parsed.durationMinutes)
+      ? Math.max(1, Math.round(parsed.durationMinutes))
+      : null;
+    const expiresAt = String(parsed?.expiresAt || '').trim() || null;
+    const timeFormat = parsed?.timeFormat === 'us' ? 'us' : 'european';
+    const hypeCost = typeof parsed?.hypeCost === 'number' && Number.isFinite(parsed.hypeCost)
+      ? Math.max(0, Math.floor(parsed.hypeCost))
+      : null;
+
+    if (!name || !description || !typeKey) {return null;}
+    if (!tasksEnabled && !startAt) {return null;}
+
+    return {
+      name,
+      description,
+      startAt,
+      typeKey,
+      hypeCost,
+      imageUrl: String(parsed?.imageUrl || '').trim(),
+      tasksEnabled,
+      durationMinutes,
+      expiresAt,
+      taskDescriptions,
+      taskRewardAmounts,
+      taskAssignments,
+      socialNetworks: Array.isArray(parsed?.socialNetworks)
+        ? parsed.socialNetworks
+          .map((item: any) => ({
+            network: String(item?.network || '').trim(),
+            link: String(item?.link || '').trim(),
+          }))
+          .filter((item: { network: string; link: string }) => item.network && item.link)
+        : [],
+      locationLabel: String(parsed?.locationLabel || '').trim(),
+      locationUrl: String(parsed?.locationUrl || '').trim(),
+      locationPlaceId: parsed?.locationPlaceId ?? null,
+      locationLat: typeof parsed?.locationLat === 'number' ? parsed.locationLat : null,
+      locationLng: typeof parsed?.locationLng === 'number' ? parsed.locationLng : null,
+      timeFormat,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const parseChannelReadingMessage = (raw: string): ChannelReadingMessagePayload | null => {
+  const text = String(raw || '');
+  if (!text.startsWith(CHANNEL_READING_MESSAGE_PREFIX)) {return null;}
+
+  const json = text.slice(CHANNEL_READING_MESSAGE_PREFIX.length);
+  try {
+    const parsed = JSON.parse(json);
+    const title = String(parsed?.title || '').trim();
+    const subtitle = String(parsed?.subtitle || '').trim();
+    const lead = String(parsed?.lead || '').trim();
+
+    if (!title || !subtitle || !lead) {
+      return null;
+    }
+
+    return {
+      title,
+      subtitle,
+      lead,
+      date: String(parsed?.date || '').trim(),
+      category: String(parsed?.category || '').trim(),
+      hypeCost: typeof parsed?.hypeCost === 'number' && Number.isFinite(parsed.hypeCost)
+        ? Math.max(0, Math.floor(parsed.hypeCost))
+        : null,
+      bodySections: Array.isArray(parsed?.bodySections)
+        ? parsed.bodySections.map((item: any) => String(item || ''))
+        : [],
+      insertions: (() => {
+        if (!Array.isArray(parsed?.insertions)) {
+          return [];
+        }
+
+        const normalizedInsertions: ChannelReadingMessageInsertion[] = [];
+        (parsed.insertions as any[]).forEach((item: any) => {
+          if (item?.type === 'image') {
+            const url = String(item?.url || '').trim();
+            if (url) {
+              normalizedInsertions.push({ type: 'image', url });
+            }
+            return;
+          }
+
+          if (item?.type === 'intertitle') {
+            const intertitleText = String(item?.text || '').trim();
+            if (intertitleText) {
+              normalizedInsertions.push({ type: 'intertitle', text: intertitleText });
+            }
+          }
+        });
+
+        return normalizedInsertions;
+      })(),
+      imageUrls: Array.isArray(parsed?.imageUrls)
+        ? parsed.imageUrls.map((item: any) => String(item || '').trim()).filter(Boolean)
+        : [],
+      citations: Array.isArray(parsed?.citations)
+        ? parsed.citations.reduce((accumulator: ChannelReadingCitation[], item: any) => {
+          const text = String(item?.text || '').trim();
+          if (!text) {
+            return accumulator;
+          }
+
+          accumulator.push({
+            id: String(item?.id || '').trim() || `citation-${accumulator.length}`,
+            sectionIndex: Math.max(0, Math.floor(Number(item?.sectionIndex) || 0)),
+            start: Math.max(0, Math.floor(Number(item?.start) || 0)),
+            end: Math.max(0, Math.floor(Number(item?.end) || 0)),
+            text,
+            appearance: item?.appearance === 'gradient' ? 'gradient' : 'white',
+            users: Array.isArray(item?.users)
+              ? item.users.reduce((usersAccumulator: ChannelReadingCitationUser[], user: any) => {
+                const username = String(user?.username || '').trim();
+                if (!username) {
+                  return usersAccumulator;
+                }
+
+                usersAccumulator.push({
+                  username,
+                  profile_photo_uri: typeof user?.profile_photo_uri === 'string' ? user.profile_photo_uri.trim() : null,
+                  social_networks: Array.isArray(user?.social_networks)
+                    ? user.social_networks
+                      .map((social: any) => ({
+                        network: String(social?.network || '').trim(),
+                        link: typeof social?.link === 'string' ? social.link.trim() : null,
+                      }))
+                      .filter((social: { network: string; link?: string | null }) => social.network)
+                    : [],
+                });
+                return usersAccumulator;
+              }, [])
+              : [],
+          });
+          return accumulator;
+        }, [])
+        : [],
+    };
   } catch {
     return null;
   }
@@ -139,7 +866,7 @@ const parseChannelImageMessage = (raw: string): { url: string; caption: string }
 const withHexAlpha = (color: string, alpha: number) => {
   const a = Number.isFinite(alpha) ? Math.max(0, Math.min(1, alpha)) : 1;
   const raw = String(color || '').trim();
-  if (!raw) return `rgba(255,255,255,${a})`;
+  if (!raw) {return `rgba(255,255,255,${a})`;}
 
   if (raw.startsWith('#')) {
     let hex = raw.slice(1);
@@ -204,53 +931,19 @@ const getHomePagerNeighborIndices = (currentIndex: number, total: number) => {
  * `excludeIndices` lists indices to skip (e.g. current center and the other neighbor).
  * Does NOT mutate the `seen` set — callers manage seen-tracking.
  */
-const pickRandomPubNeighborIndex = (
-  pubs: Array<{ id?: unknown; createdAt?: unknown }>,
-  seen: Set<string>,
-  excludeIndices: number[],
-): number => {
-  const excludeSet = new Set(excludeIndices);
-
-  const pickFrom = (entries: Array<{ index: number; createdAtMs: number }>): number => {
-    if (entries.length === 0) return -1;
-    const sorted = [...entries].sort((a, b) => b.createdAtMs - a.createdAtMs);
-    const recentPool = sorted.slice(0, Math.min(HOME_DISCOVER_RECENT_POOL_SIZE, sorted.length));
-    const useRecent = recentPool.length === sorted.length || Math.random() < HOME_DISCOVER_RECENT_WEIGHT;
-    const pool = useRecent ? recentPool : sorted;
-    return pool[Math.floor(Math.random() * pool.length)]?.index ?? -1;
-  };
-
-  // Try unseen candidates first
-  const unseenCandidates = pubs
-    .map((p, i) => ({ index: i, idStr: String(p.id ?? ''), createdAtMs: getPublicationCreatedAtMs(p) }))
-    .filter(({ index, idStr }) => !excludeSet.has(index) && idStr && !seen.has(idStr));
-
-  if (unseenCandidates.length > 0) {
-    const idx = pickFrom(unseenCandidates);
-    if (idx >= 0) return idx;
-  }
-
-  // All seen — pick from any that is not excluded
-  const allCandidates = pubs
-    .map((p, i) => ({ index: i, idStr: String(p.id ?? ''), createdAtMs: getPublicationCreatedAtMs(p) }))
-    .filter(({ index, idStr }) => !excludeSet.has(index) && idStr);
-
-  if (allCandidates.length > 0) {
-    const idx = pickFrom(allCandidates);
-    if (idx >= 0) return idx;
-  }
-
-  // Ultimate fallback
-  return excludeIndices[0] === 0 ? Math.min(1, pubs.length - 1) : 0;
-};
-
-const GROUP_MEMBERS_VISIBLE_CARDS = 5;
 const GROUP_MEMBERS_CARD_GAP = 10;
 const GROUP_MEMBERS_LIST_BOTTOM_SPACER = 28;
-const GROUP_MEMBER_CARD_ESTIMATED_HEIGHT = 74;
 const JOINED_GROUPS_RENDER_BATCH = 24;
 
-const GradientSpinner = ({ size = 44 }: { size?: number }) => {
+const areGradientColorPairsEqual = (
+  left?: readonly string[],
+  right?: readonly string[],
+) => {
+  if (left === right) {return true;}
+  return (left?.[0] ?? '') === (right?.[0] ?? '') && (left?.[1] ?? '') === (right?.[1] ?? '');
+};
+
+const GradientSpinner = React.memo(({ size = 44 }: { size?: number }) => {
   const rotate = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -299,23 +992,23 @@ const GradientSpinner = ({ size = 44 }: { size?: number }) => {
       </Svg>
     </Animated.View>
   );
-};
+});
 
 const getAsyncStorageSafe = (): any | null => {
   try {
     // Validate that the native module exists before returning the JS wrapper.
     // If the app wasn't rebuilt after installing the package, AsyncStorage methods throw:
     // "NativeModule: AsyncStorage is null."
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+
     const { NativeModules, TurboModuleRegistry } = require('react-native');
     const nativeModule =
       (TurboModuleRegistry?.get?.('RNCAsyncStorage') ?? null) ||
       NativeModules?.RNCAsyncStorage ||
       NativeModules?.RNC_AsyncStorage;
 
-    if (!nativeModule) return null;
+    if (!nativeModule) {return null;}
 
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+
     const mod = require('@react-native-async-storage/async-storage');
     return mod?.default ?? mod;
   } catch (e) {
@@ -326,14 +1019,14 @@ const getAsyncStorageSafe = (): any | null => {
 
 const makeHomeIntimidadesUnlockSig = (pubId: string | number, createdAt: unknown) => {
   const id = String(pubId ?? '').trim();
-  if (!id) return '';
+  if (!id) {return '';}
 
   const toDate = (value: unknown): Date | null => {
-    if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {return value;}
     const raw = String(value ?? '').trim();
-    if (!raw) return null;
+    if (!raw) {return null;}
     const d = new Date(raw);
-    if (Number.isNaN(d.getTime())) return null;
+    if (Number.isNaN(d.getTime())) {return null;}
     return d;
   };
 
@@ -358,7 +1051,7 @@ const makeHomeIntimidadesUnlockStorageKey = (email?: string | null) => {
 };
 
 
-const CarouselPaginationDot = ({ active }: { active: boolean }) => {
+const CarouselPaginationDot = React.memo(({ active }: { active: boolean }) => {
   const height = 8;
   const activeWidth = 24;
   const radius = 4;
@@ -378,7 +1071,7 @@ const CarouselPaginationDot = ({ active }: { active: boolean }) => {
       <Rect x="0" y="0" width={activeWidth} height={height} rx={radius} ry={radius} fill="url(#carousel_dot_grad)" />
     </Svg>
   );
-};
+});
 
 // ---------------------------------------------------------------------------
 // HomePresentationDotIndicator
@@ -407,7 +1100,7 @@ const HomePresentationDotIndicator = React.memo(
       </View>
     );
 
-    if (!onPress) return dots;
+    if (!onPress) {return dots;}
 
     return (
       <TouchableOpacity
@@ -431,7 +1124,7 @@ interface GradientIconProps {
   colors: string[];
 }
 
-const GradientIcon = ({ name, size, colors }: GradientIconProps) => {
+const GradientIcon = React.memo(({ name, size, colors }: GradientIconProps) => {
   if (name === 'panorama-fish-eye') {
     return (
       <Svg height={size} width={size}>
@@ -454,35 +1147,92 @@ const GradientIcon = ({ name, size, colors }: GradientIconProps) => {
   }
 
   return <MaterialIcons name={name} size={size} color={colors[1] || colors[0]} />;
-};
+}, (prevProps, nextProps) => (
+  prevProps.name === nextProps.name
+  && prevProps.size === nextProps.size
+  && areGradientColorPairsEqual(prevProps.colors, nextProps.colors)
+));
 
-type MainBottomTab = 'chat' | 'home' | 'profile';
-type BottomTabState = MainBottomTab | 'notifications';
+type MainBottomTab = 'home' | 'chat' | 'hype' | 'profile';
+type BottomTabState = MainBottomTab;
 type BottomNavIconName = MainBottomTab;
 
+type HomeFeedBottomTab = 'home';
+
 const MAIN_BOTTOM_TABS: Array<{ key: MainBottomTab; icon: BottomNavIconName }> = [
-  { key: 'chat', icon: 'chat' },
   { key: 'home', icon: 'home' },
+  { key: 'chat', icon: 'chat' },
+  { key: 'hype', icon: 'hype' },
   { key: 'profile', icon: 'profile' },
 ];
 
-const MAIN_BOTTOM_TAB_INDEX: Record<MainBottomTab, number> = {
-  chat: 0,
-  home: 1,
-  profile: 2,
-};
-
 const isMainBottomTab = (value: string): value is MainBottomTab => (
-  value === 'chat' || value === 'home' || value === 'profile'
+  value === 'home' || value === 'chat' || value === 'hype' || value === 'profile'
 );
 
-const getMainBottomTabIndex = (value: MainBottomTab) => MAIN_BOTTOM_TAB_INDEX[value];
+const isHomeFeedBottomTab = (value: string): value is HomeFeedBottomTab => (
+  value === 'home'
+);
 
-const BOTTOM_NAV_ICONS: Record<BottomNavIconName, { active: string; inactive: string }> = {
-  chat: { active: 'chat-bubble', inactive: 'chat-bubble-outline' },
-  home: { active: 'home', inactive: 'home' },
-  profile: { active: 'person', inactive: 'person-outline' },
+const BOTTOM_NAV_ICONS: Record<BottomNavIconName, {
+  active: string;
+  inactive: string;
+  library?: 'material' | 'community';
+}> = {
+  chat: { active: 'chat-bubble', inactive: 'chat-bubble-outline', library: 'material' },
+  home: { active: 'home-variant', inactive: 'home-variant-outline', library: 'community' },
+  hype: { active: 'whatshot', inactive: 'whatshot', library: 'material' },
+  profile: { active: 'person', inactive: 'person-outline', library: 'material' },
 };
+
+const BOTTOM_NAV_GRADIENT_COLORS = ['#FFB74D', '#ffe45c'];
+
+const BottomNavGradientIcon = ({
+  name,
+  size,
+  library,
+  gradientId,
+}: {
+  name: string;
+  size: number;
+  library: 'material' | 'community';
+  gradientId: string;
+}) => {
+  const IconComponent = library === 'community' ? MaterialCommunityIcons : MaterialIcons;
+
+  return (
+    <MaskedView
+      style={{ width: size, height: size }}
+      maskElement={
+        <View style={styles.bottomNavGradientIconMask}>
+          <IconComponent name={name} size={size} color="#000000" />
+        </View>
+      }
+    >
+      <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <Defs>
+          <LinearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor={BOTTOM_NAV_GRADIENT_COLORS[0]} stopOpacity="1" />
+            <Stop offset="1" stopColor={BOTTOM_NAV_GRADIENT_COLORS[1]} stopOpacity="1" />
+          </LinearGradient>
+        </Defs>
+        <Rect x="0" y="0" width={size} height={size} fill={`url(#${gradientId})`} />
+      </Svg>
+    </MaskedView>
+  );
+};
+
+const BottomNavActiveIndicator = ({ gradientId }: { gradientId: string }) => (
+  <Svg width="32" height="3">
+    <Defs>
+      <LinearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
+        <Stop offset="0" stopColor={BOTTOM_NAV_GRADIENT_COLORS[0]} stopOpacity="1" />
+        <Stop offset="1" stopColor={BOTTOM_NAV_GRADIENT_COLORS[1]} stopOpacity="1" />
+      </LinearGradient>
+    </Defs>
+    <Rect x="0" y="0" width="32" height="3" rx="1.5" ry="1.5" fill={`url(#${gradientId})`} />
+  </Svg>
+);
 
 const BottomNavTabButton = ({
   tabKey,
@@ -513,7 +1263,7 @@ const BottomNavTabButton = ({
   }, [active, activeProgress]);
 
   const handlePressIn = useCallback(() => {
-    if (disabled) return;
+    if (disabled) {return;}
     scaleProgress.value = withTiming(0.85, { duration: 100, easing: ReanimatedEasing.out(ReanimatedEasing.quad) });
   }, [disabled, scaleProgress]);
 
@@ -525,7 +1275,7 @@ const BottomNavTabButton = ({
     transform: [{ scale: scaleProgress.value }],
   }));
 
-  const dotAnimatedStyle = useAnimatedStyle(() => ({
+  const indicatorAnimatedStyle = useAnimatedStyle(() => ({
     opacity: activeProgress.value,
     transform: [
       { scaleX: interpolate(activeProgress.value, [0, 1], [0, 1]) },
@@ -538,7 +1288,11 @@ const BottomNavTabButton = ({
 
   const iconEntry = BOTTOM_NAV_ICONS[icon];
   const iconName = active ? iconEntry.active : iconEntry.inactive;
-  const iconColor = active ? '#FFB74D' : 'rgba(255,255,255,0.4)';
+  const iconColor = 'rgba(255,255,255,0.4)';
+  const IconComponent = iconEntry.library === 'community' ? MaterialCommunityIcons : MaterialIcons;
+  const iconLibrary = iconEntry.library ?? 'material';
+  const iconGradientId = `bottom_nav_icon_grad_${tabKey}`;
+  const indicatorGradientId = `bottom_nav_indicator_grad_${tabKey}`;
 
   return (
     <Pressable
@@ -565,7 +1319,16 @@ const BottomNavTabButton = ({
           <View style={styles.bottomNavGlassPillHighlight} />
         </Reanimated.View>
         <View style={styles.bottomNavIconWrap}>
-          <MaterialIcons name={iconName} size={26} color={iconColor} />
+          {active ? (
+            <BottomNavGradientIcon
+              name={iconName}
+              size={26}
+              library={iconLibrary}
+              gradientId={iconGradientId}
+            />
+          ) : (
+            <IconComponent name={iconName} size={26} color={iconColor} />
+          )}
         </View>
         {labelText ? (
           <Text style={[styles.bottomNavLabel, active && styles.bottomNavLabelActive]}>
@@ -573,7 +1336,9 @@ const BottomNavTabButton = ({
             <Text style={styles.bottomNavLabelBold}>{labelText}</Text>
           </Text>
         ) : (
-          <Reanimated.View style={[styles.bottomNavDot, dotAnimatedStyle]} />
+          <Reanimated.View style={[styles.bottomNavIndicatorWrap, indicatorAnimatedStyle]}>
+            <BottomNavActiveIndicator gradientId={indicatorGradientId} />
+          </Reanimated.View>
         )}
       </Reanimated.View>
     </Pressable>
@@ -617,7 +1382,7 @@ const BottomNavigationBar = ({
             active={activeTab === tab.key}
             disabled={disabled}
             labelCount={tab.key === 'home' ? homeBadgeCount : undefined}
-            labelText={tab.key === 'home' ? t('front.publicationsCount') : undefined}
+            labelText={tab.key === 'home' ? 'Posts' : undefined}
             onPress={onTabPress}
           />
         ))}
@@ -626,45 +1391,7 @@ const BottomNavigationBar = ({
   );
 };
 
-const NextDiscoverIcon = ({ width = 36, height = 24 }: { width?: number; height?: number }) => {
-  return (
-    <Svg width={width} height={height} viewBox="0 0 36 24">
-      <Defs>
-        <LinearGradient id="next_grad" x1="0" y1="0" x2="1" y2="0">
-          <Stop offset="0" stopColor="#FFB74D" stopOpacity="1" />
-          <Stop offset="1" stopColor="#ffec5aff" stopOpacity="1" />
-        </LinearGradient>
-      </Defs>
-      <Rect x="1" y="1" width="32" height="20" rx="10" stroke="url(#next_grad)" strokeWidth="2" fill="none" />
-      <Path
-        d="M14 6 L20 11 L14 16"
-        fill="none"
-        stroke="url(#next_grad)"
-        strokeWidth="2.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </Svg>
-  );
-};
-
-const NextDiscoverProgressLine = ({ width = 27, height = 5 }: { width?: number; height?: number }) => {
-  const radius = height / 2;
-
-  return (
-    <Svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-      <Defs>
-        <LinearGradient id="next_progress_grad" x1="0" y1="0" x2="1" y2="0">
-          <Stop offset="0" stopColor="#FFB74D" stopOpacity="1" />
-          <Stop offset="1" stopColor="#ffec5aff" stopOpacity="1" />
-        </LinearGradient>
-      </Defs>
-      <Rect x="0" y="0" width={width} height={height} rx={radius} ry={radius} fill="url(#next_progress_grad)" />
-    </Svg>
-  );
-};
-
-const VerifiedBadgeIcon = ({
+const VerifiedBadgeIcon = React.memo(({
   size,
   variant = 'solid',
   solidColor = '#FFFFFF',
@@ -708,11 +1435,41 @@ const VerifiedBadgeIcon = ({
       />
     </Svg>
   );
-};
+}, (prevProps, nextProps) => (
+  prevProps.size === nextProps.size
+  && prevProps.variant === nextProps.variant
+  && prevProps.solidColor === nextProps.solidColor
+  && prevProps.solidOpacity === nextProps.solidOpacity
+  && prevProps.checkColor === nextProps.checkColor
+  && areGradientColorPairsEqual(prevProps.gradientColors, nextProps.gradientColors)
+));
 
-const GroupAddGradientIcon = ({ size }: { size: number }) => {
+const GroupAddGradientIcon = React.memo(({ size }: { size: number }) => {
   return <MaterialIcons name="group-add" size={size} color="#FFFFFF" />;
-};
+});
+
+const ReactionEmojiButton = React.memo(({
+  emoji,
+  selected,
+  onPress,
+}: {
+  emoji: string;
+  selected: boolean;
+  onPress: (emoji: string) => void;
+}) => (
+  <TouchableOpacity
+    style={[
+      styles.reactionItem,
+      selected && styles.reactionItemSelected,
+    ]}
+    onPress={() => onPress(emoji)}
+    activeOpacity={0.7}
+  >
+    <Text style={styles.reactionEmoji}>{emoji}</Text>
+  </TouchableOpacity>
+), (prevProps, nextProps) => (
+  prevProps.emoji === nextProps.emoji && prevProps.selected === nextProps.selected
+));
 
 const FireworkChatIcon = ({ size, onPress, style }: { size: number, onPress: () => void, style?: any }) => {
   const [anims] = useState(Array.from({ length: 8 }, () => new Animated.Value(0)));
@@ -728,7 +1485,7 @@ const FireworkChatIcon = ({ size, onPress, style }: { size: number, onPress: () 
             useNativeDriver: true,
             easing: Easing.out(Easing.ease),
           }),
-          Animated.timing(anim, { toValue: 0, duration: 0, useNativeDriver: true })
+          Animated.timing(anim, { toValue: 0, duration: 0, useNativeDriver: true }),
         ])
       );
     };
@@ -757,7 +1514,7 @@ const FireworkChatIcon = ({ size, onPress, style }: { size: number, onPress: () 
               borderRadius: 1.5,
               backgroundColor: i % 2 === 0 ? '#FF9800' : '#FFEB3B',
               opacity,
-              transform: [{ translateX }, { translateY }, { scale }]
+              transform: [{ translateX }, { translateY }, { scale }],
             }}
           />
         );
@@ -779,6 +1536,21 @@ const FireworkChatIcon = ({ size, onPress, style }: { size: number, onPress: () 
 };
 
 const ICON_KEITIN = require('../../assets/images/iconkeitin.png');
+const SOCIAL_ICONS = {
+  facebook: require('../../assets/images/facebook.png'),
+  instagram: require('../../assets/images/instagram.png'),
+  onlyfans: require('../../assets/images/onlyfans.png'),
+  pinterest: require('../../assets/images/pinterest.png'),
+  telegram: require('../../assets/images/telegram.png'),
+  tiktok: require('../../assets/images/tiktok.png'),
+  twitter: require('../../assets/images/x_twitter.png'),
+  youtube: require('../../assets/images/youtube.png'),
+  discord: require('../../assets/images/discord.png'),
+  threads: require('../../assets/images/threads.png'),
+  linkedin: require('../../assets/images/linkedin.png'),
+  kick: require('../../assets/images/kick.png'),
+  twitch: require('../../assets/images/twitch.png'),
+};
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const HOME_CARD_WIDTH = Math.max(1, SCREEN_WIDTH - 4);
@@ -810,15 +1582,6 @@ const GROUP_CHAT_PAGE_SIZE = 40;
 const GROUP_CHAT_LOAD_OLDER_TOP_THRESHOLD = 100;
 
 const GROUP_MEMBERS_PANEL_HEIGHT = Math.round(SCREEN_HEIGHT * 0.6);
-
-function shuffleArray<T>(array: T[]): T[] {
-  const newArray = [...array];
-  for (let i = newArray.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
-  }
-  return newArray;
-}
 
 interface Product {
   id: number;
@@ -859,7 +1622,6 @@ interface GiveAway {
 
 type CarouselAspectRatio = '3:4';
 
-const PROFILE_TITLE_PREVIEW_LIMIT = 28;
 const PROFILE_TEXT_PREVIEW_LIMIT = 80;
 
 interface CroppedProfileImage {
@@ -906,12 +1668,12 @@ interface Intimidad {
 }
 
 const resolveIntimidadMediaUri = (raw?: string | null): string | null => {
-  if (!raw) return null;
+  if (!raw) {return null;}
   const uri = String(raw).trim();
-  if (!uri) return null;
+  if (!uri) {return null;}
 
   // Already a valid URI scheme we can pass directly to <Image />
-  if (/^(https?:|file:|content:|data:)/i.test(uri)) return uri;
+  if (/^(https?:|file:|content:|data:)/i.test(uri)) {return uri;}
 
   // Windows absolute path (dev/test) -> file URI
   if (/^[A-Za-z]:\\/.test(uri)) {
@@ -963,11 +1725,11 @@ const normalizeIntimidadesMedia = (items: Intimidad[]): Intimidad[] => {
 };
 
 const CATEGORIES_ES = [
-  "Sin categoría", "Videojuegos", "Deportes", "Moda", "Turismo",
-  "Entretenimiento", "Tecnología", "Ciencia", "Gastronomía y nutrición",
-  "IA", "Política", "Religión", "Emprendimiento", "Economía",
-  "Educación", "Hogar", "VR", "Información", "Arte", "Música",
-  "Cine", "Motor", "Naturaleza", "Animales", "Cultura"
+  'Sin categoría', 'Videojuegos', 'Deportes', 'Moda', 'Turismo',
+  'Entretenimiento', 'Tecnología', 'Ciencia', 'Gastronomía y nutrición',
+  'IA', 'Política', 'Religión', 'Emprendimiento', 'Economía',
+  'Educación', 'Hogar', 'VR', 'Información', 'Arte', 'Música',
+  'Cine', 'Motor', 'Naturaleza', 'Animales', 'Cultura',
 ];
 
 const CATEGORY_LABELS_EN: Record<string, string> = {
@@ -1230,7 +1992,7 @@ const getGroupMemberCount = (count?: number) => {
 
 const getPublicationChannelSubscriberCount = (publication?: Publication | null) => {
   const n = Number((publication as any)?.channelSubscriberCount ?? (publication as any)?.subscriber_count ?? 0);
-  if (!Number.isFinite(n)) return 0;
+  if (!Number.isFinite(n)) {return 0;}
   return Math.max(0, n);
 };
 
@@ -1248,6 +2010,8 @@ interface FrontScreenProps {
   onNavigateToNotifications?: () => void;
   onNavigateToRecompensa?: () => void;
   onNavigateToConfiguration?: () => void;
+  onNavigateToKeys?: () => void;
+  onNavigateToReading?: (options?: { channelPostId?: string | number | null }) => void;
   onReloadGiveAways?: () => void;
   onReloadApp?: () => void;
   onLogout?: () => void;
@@ -1256,32 +2020,46 @@ interface FrontScreenProps {
 
   searchHashtag?: string;
   authToken?: string;
+  unreadNotificationsCount?: number;
+  initialBottomTab?: MainBottomTab;
+  onConsumeInitialBottomTab?: () => void;
+  joinedGroupsRedirect?: {
+    groupHashtag: string;
+    requesterUsername: string;
+  } | null;
+  onConsumeJoinedGroupsRedirect?: () => void;
+  joinedChannelRedirect?: {
+    postId: number;
+    publisherUsername: string;
+  } | null;
+  onConsumeJoinedChannelRedirect?: () => void;
+  onNotificationsChanged?: () => void;
 }
 
 const parseServerDate = (value: Date | string) => {
-  if (value instanceof Date) return value;
+  if (value instanceof Date) {return value;}
 
   const raw = String(value);
   // If the string already includes a timezone (Z or ±hh:mm), native parsing is safe.
   const hasTimezone = /([zZ]|[+-]\d{2}:\d{2})$/.test(raw);
-  if (hasTimezone) return new Date(raw);
+  if (hasTimezone) {return new Date(raw);}
 
   // Normalize common DB formats (timestamp without timezone) and treat them as UTC.
   const normalized = raw.includes(' ') ? raw.replace(' ', 'T') : raw;
   const looksLikeIsoNoTz = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?$/.test(normalized);
-  if (looksLikeIsoNoTz) return new Date(`${normalized}Z`);
+  if (looksLikeIsoNoTz) {return new Date(`${normalized}Z`);}
 
   return new Date(raw);
 };
 
 const getRemainingTime = (createdAt: Date | string) => {
   const created = parseServerDate(createdAt);
-  if (!Number.isFinite(created.getTime())) return 'Tiempo agotado';
+  if (!Number.isFinite(created.getTime())) {return 'Tiempo agotado';}
   const now = new Date();
   const expiration = new Date(created.getTime() + POST_TTL_MS);
   const diff = expiration.getTime() - now.getTime();
 
-  if (diff <= 0) return 'Tiempo agotado';
+  if (diff <= 0) {return 'Tiempo agotado';}
 
   const hours = Math.floor(diff / (1000 * 60 * 60));
   const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
@@ -1299,13 +2077,13 @@ const formatRemainingTimeForDisplay = (
   language: Language,
   t: (key: TranslationKey) => string
 ) => {
-  if (raw === 'Tiempo agotado') return t('chat.timeExpired' as TranslationKey);
+  if (raw === 'Tiempo agotado') {return t('chat.timeExpired' as TranslationKey);}
 
   const m = raw.match(/^Falta\s+(\d+)\s+(hora|horas|minuto|minutos)$/i);
-  if (!m) return raw;
+  if (!m) {return raw;}
 
   const value = Number(m[1]);
-  if (!Number.isFinite(value)) return raw;
+  if (!Number.isFinite(value)) {return raw;}
 
   const unitRaw = m[2].toLowerCase();
   const isHour = unitRaw.startsWith('hora');
@@ -1326,7 +2104,7 @@ const CountdownTimer = ({ createdAt, onExpire, style }: { createdAt: Date | stri
       setTimeLeft(remaining);
       if (remaining === 'Tiempo agotado') {
         clearInterval(timer);
-        if (onExpire) onExpire();
+        if (onExpire) {onExpire();}
       }
     }, 1000);
 
@@ -1359,8 +2137,8 @@ const MeasuredSvgGradientBackground = ({
         const { width, height } = e.nativeEvent.layout;
         const w = Math.ceil(width);
         const h = Math.ceil(height);
-        if (!w || !h) return;
-        if (w === size.width && h === size.height) return;
+        if (!w || !h) {return;}
+        if (w === size.width && h === size.height) {return;}
         setSize({ width: w, height: h });
       }}
     >
@@ -1402,8 +2180,8 @@ const MeasuredSvgGradientBorder = ({
         const { width, height } = e.nativeEvent.layout;
         const w = Math.ceil(width);
         const h = Math.ceil(height);
-        if (!w || !h) return;
-        if (w === size.width && h === size.height) return;
+        if (!w || !h) {return;}
+        if (w === size.width && h === size.height) {return;}
         setSize({ width: w, height: h });
       }}
     >
@@ -1432,6 +2210,1152 @@ const MeasuredSvgGradientBorder = ({
   );
 };
 
+const ChannelEventToggleDot = ({
+  active,
+  disabled = false,
+  gradientId,
+}: {
+  active: boolean;
+  disabled?: boolean;
+  gradientId: string;
+}) => (
+  <View style={[styles.channelEventToggleDot, disabled && styles.channelEventDisabled]}>
+    {active ? (
+      <Svg width="100%" height="100%" style={StyleSheet.absoluteFill}>
+        <Defs>
+          <LinearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor="#ffe040" stopOpacity="1" />
+            <Stop offset="1" stopColor="#ff7a00" stopOpacity="1" />
+          </LinearGradient>
+        </Defs>
+        <Circle cx="9" cy="9" r="9" fill={`url(#${gradientId})`} />
+      </Svg>
+    ) : null}
+  </View>
+);
+
+const ChannelEventField = ({
+  label,
+  iconName,
+  trailingContent,
+  value,
+  onChangeText,
+  maxLength,
+  keyboardType,
+  autoCapitalize = 'sentences',
+  autoCorrect = true,
+  onIconPress,
+  multiline = false,
+  disabled = false,
+  style,
+}: {
+  label: string;
+  iconName?: string;
+  trailingContent?: React.ReactNode;
+  value?: string;
+  onChangeText?: (text: string) => void;
+  maxLength?: number;
+  keyboardType?: any;
+  autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+  autoCorrect?: boolean;
+  onIconPress?: () => void;
+  multiline?: boolean;
+  disabled?: boolean;
+  style?: any;
+}) => {
+  const showCharacterCount = typeof onChangeText === 'function' && typeof maxLength === 'number';
+  const currentLength = String(value || '').length;
+
+  return (
+    <View style={[showCharacterCount && styles.channelEventFieldWrapper, style]}>
+      <View
+        style={[
+          styles.channelEventField,
+          multiline && styles.channelEventFieldMultiline,
+          disabled && styles.channelEventDisabled,
+          showCharacterCount && styles.channelEventFieldWithExternalCounter,
+        ]}
+      >
+        {typeof onChangeText === 'function' ? (
+          <TextInput
+            value={value}
+            onChangeText={onChangeText}
+            placeholder={label}
+            placeholderTextColor="rgba(255,255,255,0.38)"
+            style={[
+              styles.channelEventFieldInput,
+              multiline && styles.channelEventFieldInputMultiline,
+            ]}
+            keyboardType={keyboardType}
+            autoCapitalize={autoCapitalize}
+            autoCorrect={autoCorrect}
+            editable={!disabled}
+            multiline={multiline}
+            scrollEnabled={multiline}
+            textAlignVertical={multiline ? 'top' : 'center'}
+            maxLength={maxLength}
+          />
+        ) : (
+          <Text style={styles.channelEventFieldText}>{label}</Text>
+        )}
+        {trailingContent ?? (iconName ? (
+          onIconPress ? (
+            <TouchableOpacity
+              activeOpacity={disabled ? 1 : 0.75}
+              disabled={disabled}
+              onPress={onIconPress}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <MaterialIcons name={iconName} size={16} color="rgba(255,255,255,0.78)" />
+            </TouchableOpacity>
+          ) : (
+            <MaterialIcons name={iconName} size={16} color="rgba(255,255,255,0.78)" />
+          )
+        ) : null)}
+      </View>
+      {showCharacterCount ? (
+        <Text style={styles.channelEventFieldCharacterCount}>{`${currentLength}/${maxLength}`}</Text>
+      ) : null}
+    </View>
+  );
+};
+
+const ChannelEventApplyButton = ({
+  label,
+  disabled = false,
+  loading = false,
+  onPress,
+}: {
+  label: string;
+  disabled?: boolean;
+  loading?: boolean;
+  onPress?: () => void;
+}) => {
+  return (
+    <TouchableOpacity
+      activeOpacity={disabled ? 1 : 0.85}
+      disabled={disabled}
+      onPress={onPress}
+      accessibilityState={{ disabled, busy: loading }}
+      style={[styles.channelEventApplyButtonShell, disabled && styles.channelEventApplyButtonShellDisabled]}
+    >
+      <View style={styles.channelEventApplyButtonInner}>
+        <MeasuredSvgGradientBorder
+          gradientId="channel_event_apply_button_grad"
+          colors={['#ffe040', '#ff7a00']}
+          borderRadius={18}
+          strokeWidth={1.6}
+        />
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+          {loading ? (
+            <ActivityIndicator
+              size="small"
+              color="#FFFFFF"
+              style={{ marginRight: 10 }}
+            />
+          ) : null}
+          <Text style={styles.channelEventApplyButtonText}>{label}</Text>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+};
+
+type QuizOptionKey = 'a' | 'b' | 'c' | 'd';
+
+type HomeRenderablePublicationSocial = {
+  key: string;
+  link: string;
+  iconSource: any;
+};
+
+type HomePublicationDoubleTapState = {
+  visible: boolean;
+  emoji: string;
+};
+
+type HomePublicationAnimationState = {
+  scale: Animated.Value;
+  opacity: Animated.Value;
+};
+
+type HomeActivePublicationCardAnimations = {
+  homeSwipeTutorialAnim: Animated.Value;
+  homePullConfirmAnim: Animated.Value;
+  publicationTransitionOpacity: Animated.Value;
+  publicationTransitionTranslateY: Animated.Value;
+  publicationTransitionVeilOpacity: Animated.Value;
+  homeRingIconPulseAnim: Animated.Value;
+};
+
+type HomeActivePublicationCardHandlers = {
+  onRequestRefresh: () => void;
+  onScrollPositionChange: (offsetY: number) => void;
+  onDismissSwipeTutorial: () => void;
+  onOpenAvatar: (profilePhotoUri?: string | null) => void;
+  onSetCarouselGestureActive: (active: boolean) => void;
+  onEnterChannel: (publication: Publication) => void;
+  onOpenExternalLink: (url: string) => void;
+  onTogglePublicationOptions: (pubId: string | number) => void;
+  onOpenPublicationReport: (publication: Publication) => void;
+  onOpenPublicationBlock: (publication: Publication) => void;
+  onUpdatePresentationActiveIndexFromScroll: (
+    pubId: string | number,
+    contentOffsetX: number,
+    layoutWidth: number,
+    imagesCount: number,
+  ) => void;
+  onSetPresentationImageLayout: (pubId: string | number, imageIndex: number, width: number, height: number) => void;
+  onMarkPresentationImageLoaded: (pubId: string | number, imageIndex: number) => void;
+  onPublicationDoubleTap: (pubId: string, reactions: Publication['reactions']) => void;
+  onOpenHomeProfileRing: (pubId: string | number, ring: ProfileRingPoint) => void;
+  onToggleExpandedText: (pubId: string | number) => void;
+  onTogglePresentationOverlay: (pubId: string | number) => void;
+  onToggleHomeProfileRingsVisible: (pubId: string) => void;
+  onExpirePublication: (pubId: string | number) => void;
+  onApplyPublicationReaction: (pubId: string, reactions: Publication['reactions'], emoji: string) => void;
+  onPressIntimidadesButton: (pubId: string | number, intimidadesLength: number) => void;
+  onVoteQuizOption: (pubId: string | number, intimidadIndex: number, optionKey: QuizOptionKey) => void;
+  onVoteSurveyOption: (pubId: string | number, intimidadIndex: number, optionIndex: number) => void;
+};
+
+type HomeActivePublicationCardCopy = {
+  blockText: string;
+  channelLabelText: string;
+  homeSwipeTutorialHintText: string;
+  loadingImagesText: string;
+  reportText: string;
+};
+
+const HOME_PUBLICATION_SOCIAL_ICON_SIZE = 18;
+const HOME_PUBLICATION_SOCIAL_ICON_GAP = 10;
+const HOME_PUBLICATION_SOCIAL_VIEWPORT_COUNT = 3;
+const HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING = 8;
+const EMPTY_HOME_RENDERABLE_PUBLICATION_SOCIALS: HomeRenderablePublicationSocial[] = [];
+const EMPTY_HOME_CAROUSEL_LOADED_MAP: Record<number, boolean> = {};
+const EMPTY_HOME_PRESENTATION_IMAGE_LAYOUTS: Record<number, { width: number; height: number }> = {};
+const EMPTY_HOME_PROFILE_RING_POINTS: ProfileRingPoint[] = [];
+const EMPTY_HOME_PUBLICATION_DOUBLE_TAP_STATE: HomePublicationDoubleTapState = { visible: false, emoji: '' };
+
+const normalizeHomePublicationSocialIconKey = (raw: any) => {
+  const key = String(raw ?? '').trim().toLowerCase();
+  if (!key) {return '';}
+  if (key === 'x' || key === 'x_twitter' || key === 'xtwitter') {return 'twitter';}
+  if (key === 'only_fans') {return 'onlyfans';}
+  return key;
+};
+
+const HomeActivePublicationCard = React.memo(({
+  publication,
+  activeIntimidadIndex,
+  animations,
+  bottomNavHeight,
+  canDismissSwipeTutorial,
+  categoryLabel,
+  copy,
+  handlers,
+  homeCarouselLoadedMap,
+  isHomeCarouselLoadingVisible,
+  isIntimidadesVisible,
+  isJoined,
+  isOptionsMenuOpen,
+  isOverlayVisible,
+  isTextExpanded,
+  presentationDotsRefsMap,
+  presentationImageLayouts,
+  pubAnimations,
+  pubDoubleTap,
+  renderablePublicationSocials,
+  ringsVisible,
+  shouldShowHomePublicationSwipeHint,
+  shouldShowHomeSwipeTutorial,
+  socialNetworksCountLabel,
+}: {
+  publication: Publication;
+  activeIntimidadIndex: number;
+  animations: HomeActivePublicationCardAnimations;
+  bottomNavHeight: number;
+  canDismissSwipeTutorial: boolean;
+  categoryLabel: string;
+  copy: HomeActivePublicationCardCopy;
+  handlers: HomeActivePublicationCardHandlers;
+  homeCarouselLoadedMap: Record<number, boolean>;
+  isHomeCarouselLoadingVisible: boolean;
+  isIntimidadesVisible: boolean;
+  isJoined: boolean;
+  isOptionsMenuOpen: boolean;
+  isOverlayVisible: boolean;
+  isTextExpanded: boolean;
+  presentationDotsRefsMap: React.MutableRefObject<Record<string, PresentationDotsHandle | null>>;
+  presentationImageLayouts: Record<number, { width: number; height: number }>;
+  pubAnimations: HomePublicationAnimationState;
+  pubDoubleTap: HomePublicationDoubleTapState;
+  renderablePublicationSocials: HomeRenderablePublicationSocial[];
+  ringsVisible: boolean;
+  shouldShowHomePublicationSwipeHint: boolean;
+  shouldShowHomeSwipeTutorial: boolean;
+  socialNetworksCountLabel: string;
+}) => {
+  const publicationId = String(publication.id ?? '').trim();
+  const presentationRings: ProfileRingPoint[] = Array.isArray(publication.presentation?.profileRings)
+    ? (publication.presentation.profileRings as ProfileRingPoint[])
+    : EMPTY_HOME_PROFILE_RING_POINTS;
+  const hasPresentationRings = presentationRings.length > 0;
+  const trimmedTitle = publication.presentation.title?.trim() ?? '';
+  const trimmedText = publication.presentation.text?.trim() ?? '';
+  const hasTextOverflow = trimmedText.length > PROFILE_TEXT_PREVIEW_LIMIT;
+  const textPreview = isTextExpanded || !hasTextOverflow
+    ? trimmedText
+    : trimmedText.slice(0, PROFILE_TEXT_PREVIEW_LIMIT);
+
+  const safeActiveIntimidadIndex = publication.intimidades.length > 0
+    ? Math.min(activeIntimidadIndex, publication.intimidades.length - 1)
+    : 0;
+  const activeIntimidad = publication.intimidades[safeActiveIntimidadIndex];
+
+  const totalRenderablePublicationSocials = renderablePublicationSocials.length;
+  const homeSocialViewportCount = Math.min(totalRenderablePublicationSocials, HOME_PUBLICATION_SOCIAL_VIEWPORT_COUNT);
+  const homeSocialIconsViewportWidth = homeSocialViewportCount > 0
+    ? (homeSocialViewportCount * HOME_PUBLICATION_SOCIAL_ICON_SIZE) + ((homeSocialViewportCount - 1) * HOME_PUBLICATION_SOCIAL_ICON_GAP)
+    : 0;
+
+  const homeSwipeTutorialIconOpacity = useMemo(() => (
+    animations.homeSwipeTutorialAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [1, 0.45],
+    })
+  ), [animations.homeSwipeTutorialAnim]);
+
+  const homeSwipeTutorialIconScale = useMemo(() => (
+    animations.homeSwipeTutorialAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [1, 1.08],
+    })
+  ), [animations.homeSwipeTutorialAnim]);
+
+  const { t, language } = useI18n();
+
+  const localizedPublicationNationality = useMemo(
+    () => getLocalizedNationalityName(publication.user.nationality || '', language),
+    [language, publication.user.nationality],
+  );
+
+  return (
+    <View
+      key={`home-page-${publicationId}`}
+      style={styles.homePagerPage}
+      collapsable={false}
+    >
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+          backgroundColor: '#070b12',
+          opacity: animations.publicationTransitionVeilOpacity,
+          zIndex: 2,
+        }}
+      />
+      <ScrollView
+        key={`home-scroll-${publicationId}`}
+        style={styles.homePageScroll}
+        contentContainerStyle={[styles.homePageContentContainer, { paddingBottom: bottomNavHeight + 16 }]}
+        nestedScrollEnabled
+        refreshControl={
+          <RefreshControl
+            refreshing={false}
+            onRefresh={handlers.onRequestRefresh}
+            tintColor="transparent"
+            colors={['transparent']}
+            progressBackgroundColor="transparent"
+            progressViewOffset={-10000}
+          />
+        }
+        showsVerticalScrollIndicator={false}
+        scrollEventThrottle={16}
+        keyboardShouldPersistTaps="handled"
+        onScroll={(event) => {
+          const nextY = Math.max(0, Number(event.nativeEvent.contentOffset.y) || 0);
+          handlers.onScrollPositionChange(nextY);
+        }}
+      >
+        <Animated.View
+          style={{
+            marginBottom: 0,
+            opacity: animations.publicationTransitionOpacity,
+            transform: [{ translateY: animations.publicationTransitionTranslateY }],
+          }}
+        >
+          {shouldShowHomeSwipeTutorial && (
+            <Pressable
+              style={styles.homeSwipeTutorialContainer}
+              onPress={handlers.onDismissSwipeTutorial}
+              disabled={!canDismissSwipeTutorial}
+              accessibilityRole="button"
+            >
+              <Animated.View
+                style={[
+                  styles.homeSwipeTutorialIconWrap,
+                  {
+                    opacity: homeSwipeTutorialIconOpacity,
+                    transform: [{ scale: homeSwipeTutorialIconScale }],
+                  },
+                ]}
+              >
+                <MaterialIcons name="keyboard-double-arrow-down" size={22} color="#FFB74D" />
+              </Animated.View>
+
+              <Text style={styles.homeSwipeTutorialText}>
+                {copy.homeSwipeTutorialHintText}
+              </Text>
+            </Pressable>
+          )}
+
+          {shouldShowHomePublicationSwipeHint && (
+            <View style={styles.homePublicationSwipeHintContainer} pointerEvents="none">
+              <Animated.View
+                style={{
+                  opacity: animations.homePullConfirmAnim.interpolate({
+                    inputRange: [0, 0.5, 1],
+                    outputRange: [0.85, 1, 0],
+                  }),
+                  transform: [
+                    {
+                      scaleX: animations.homePullConfirmAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [1, 4.5],
+                      }),
+                    },
+                    {
+                      scaleY: animations.homePullConfirmAnim.interpolate({
+                        inputRange: [0, 0.6, 1],
+                        outputRange: [1, 1.1, 0.7],
+                      }),
+                    },
+                  ],
+                }}
+              >
+                <Svg width={76} height={6}>
+                  <Defs>
+                    <LinearGradient id="home_publication_swipe_hint_grad" x1="0" y1="0" x2="1" y2="0">
+                      <Stop offset="0" stopColor="#FFB74D" stopOpacity="0.15" />
+                      <Stop offset="0.5" stopColor="#FFB74D" stopOpacity="0.95" />
+                      <Stop offset="1" stopColor="#ffe45c" stopOpacity="0.18" />
+                    </LinearGradient>
+                  </Defs>
+                  <Rect x="0" y="0" width="76" height="6" rx="3" ry="3" fill="url(#home_publication_swipe_hint_grad)" />
+                </Svg>
+              </Animated.View>
+            </View>
+          )}
+
+          <View style={styles.presentationHeaderContainer}>
+            <View style={styles.presentationUserInfo}>
+              <TouchableOpacity
+                style={[styles.presentationAvatarContainer, { borderWidth: 0 }]}
+                activeOpacity={0.8}
+                onPress={() => handlers.onOpenAvatar(publication.user.profilePhotoUri)}
+              >
+                {publication.user.profilePhotoUri ? (
+                  <Image
+                    source={{ uri: getServerResourceUrl(publication.user.profilePhotoUri) }}
+                    style={styles.presentationAvatar}
+                  />
+                ) : (
+                  <MaterialIcons name="person" size={24} color="#FFFFFF" />
+                )}
+              </TouchableOpacity>
+
+              <View style={styles.presentationUserDetails}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  {publication.user.accountVerified ? (
+                    <View style={{ marginRight: 6 }}>
+                      <VerifiedBadgeIcon size={14} solidColor="#FFFFFF" solidOpacity={0.6} />
+                    </View>
+                  ) : null}
+                  <Text style={styles.presentationUsername}>
+                    {(publication.user.username || 'Usuario').startsWith('@')
+                      ? (publication.user.username || 'Usuario')
+                      : `@${publication.user.username || 'Usuario'}`}
+                  </Text>
+                  {publication.user.keintiVerified ? (
+                    <View style={{ marginLeft: 6 }}>
+                      <VerifiedBadgeIcon size={14} variant="gradient" />
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                  {isIntimidadesVisible && !isJoined ? (
+                    <FireworkChatIcon
+                      size={18}
+                      onPress={() => handlers.onEnterChannel(publication)}
+                      style={{ marginRight: 4 }}
+                    />
+                  ) : null}
+
+                  {isIntimidadesVisible && renderablePublicationSocials.length > 0 ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <View
+                        style={{
+                          width: homeSocialIconsViewportWidth + (HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING * 2),
+                          height: 28,
+                          marginHorizontal: -HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING,
+                          paddingHorizontal: HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING,
+                          justifyContent: 'center',
+                        }}
+                        onTouchStart={() => handlers.onSetCarouselGestureActive(true)}
+                        onTouchEnd={() => handlers.onSetCarouselGestureActive(false)}
+                        onTouchCancel={() => handlers.onSetCarouselGestureActive(false)}
+                        onMoveShouldSetResponderCapture={() => {
+                          handlers.onSetCarouselGestureActive(true);
+                          return false;
+                        }}
+                      >
+                        <View style={{ width: homeSocialIconsViewportWidth, height: 24, overflow: 'hidden' }}>
+                          <ScrollView
+                            horizontal
+                            directionalLockEnabled
+                            showsHorizontalScrollIndicator={false}
+                            scrollEnabled={totalRenderablePublicationSocials > HOME_PUBLICATION_SOCIAL_VIEWPORT_COUNT}
+                            style={{ height: 24 }}
+                            scrollEventThrottle={16}
+                            onTouchStart={() => handlers.onSetCarouselGestureActive(true)}
+                            onTouchEnd={() => handlers.onSetCarouselGestureActive(false)}
+                            onTouchCancel={() => handlers.onSetCarouselGestureActive(false)}
+                            onScrollBeginDrag={() => handlers.onSetCarouselGestureActive(true)}
+                            onScrollEndDrag={() => handlers.onSetCarouselGestureActive(false)}
+                            onMomentumScrollBegin={() => handlers.onSetCarouselGestureActive(true)}
+                            onMomentumScrollEnd={() => handlers.onSetCarouselGestureActive(false)}
+                            contentContainerStyle={{ alignItems: 'center', paddingVertical: 2, paddingRight: 4 }}
+                          >
+                            {renderablePublicationSocials.map(({ key, link, iconSource }, socialIndex) => {
+                              const isLast = socialIndex === renderablePublicationSocials.length - 1;
+                              return (
+                                <TouchableOpacity
+                                  key={key}
+                                  onPress={() => handlers.onOpenExternalLink(link)}
+                                  activeOpacity={0.7}
+                                  style={{ marginRight: isLast ? 0 : HOME_PUBLICATION_SOCIAL_ICON_GAP, paddingVertical: 2 }}
+                                >
+                                  <Image
+                                    source={iconSource}
+                                    style={{ width: HOME_PUBLICATION_SOCIAL_ICON_SIZE, height: HOME_PUBLICATION_SOCIAL_ICON_SIZE, resizeMode: 'contain' }}
+                                  />
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </ScrollView>
+                        </View>
+                      </View>
+                      <Text style={{ marginLeft: 6, color: 'rgba(255, 255, 255, 0.7)', fontSize: 12 }}>
+                        {totalRenderablePublicationSocials}
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={{ color: '#FFFFFF', fontSize: 12 }}>
+                      {socialNetworksCountLabel}
+                    </Text>
+                  )}
+                </View>
+              </View>
+            </View>
+
+            <View style={{ justifyContent: 'center', flexDirection: 'row', alignItems: 'flex-start' }}>
+              <View style={{ alignItems: 'flex-end' }}>
+                {!!localizedPublicationNationality && (
+                  <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: 'bold' }}>{localizedPublicationNationality}</Text>
+                )}
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: localizedPublicationNationality ? 4 : 0 }}>
+                  <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '400', marginRight: 4 }}>
+                    {copy.channelLabelText}
+                  </Text>
+                  <MaterialIcons name="person" size={13} color="rgba(255,255,255,0.72)" style={{ marginRight: 4 }} />
+                  <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '600' }}>
+                    {getPublicationChannelSubscriberCount(publication)}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={{ position: 'relative', marginLeft: 6, zIndex: 80, elevation: 80 }}>
+                <TouchableOpacity
+                  onPress={() => handlers.onTogglePublicationOptions(publication.id)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Opciones"
+                >
+                  <MaterialIcons name="more-vert" size={18} color="rgba(255,255,255,0.9)" />
+                </TouchableOpacity>
+                {isOptionsMenuOpen ? (
+                  <View style={styles.publicationOptionsMenu}>
+                    <TouchableOpacity
+                      style={styles.publicationOptionsMenuItem}
+                      onPress={() => handlers.onOpenPublicationReport(publication)}
+                    >
+                      <Text style={styles.publicationOptionsMenuText}>{copy.reportText}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.publicationOptionsMenuItem}
+                      onPress={() => handlers.onOpenPublicationBlock(publication)}
+                    >
+                      <Text style={styles.publicationOptionsMenuTextDanger}>{copy.blockText}</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+          </View>
+
+          {publication.presentation.images.length > 0 ? (
+            <View>
+              <View
+                style={[styles.profilePresentationCarousel, { width: HOME_CARD_WIDTH }]}
+                onTouchStart={() => handlers.onSetCarouselGestureActive(true)}
+                onTouchEnd={() => handlers.onSetCarouselGestureActive(false)}
+                onTouchCancel={() => handlers.onSetCarouselGestureActive(false)}
+              >
+                <View
+                  style={[
+                    styles.homeCarouselLoadingOverlay,
+                    !isHomeCarouselLoadingVisible && styles.homeCarouselLoadingOverlayHidden,
+                  ]}
+                  pointerEvents="none"
+                >
+                  <View style={styles.homeCarouselLoadingSpinnerWrap}>
+                    <GradientSpinner size={22} />
+                  </View>
+                  <View style={styles.homeCarouselLoadingPill}>
+                    <Text style={styles.homeCarouselLoadingText}>{copy.loadingImagesText}</Text>
+                    <Text style={styles.homeCarouselLoadingSubText}>
+                      {`${Math.min(publication.presentation.images.length, Object.values(homeCarouselLoadedMap).filter(Boolean).length)}/${publication.presentation.images.length}`}
+                    </Text>
+                  </View>
+                </View>
+
+                <FlatList
+                  key={`home-carousel-${publicationId}`}
+                  data={publication.presentation.images}
+                  keyExtractor={(_item, index) => `pub-${publication.id}-image-${index}`}
+                  extraData={ringsVisible ? 1 : 0}
+                  horizontal
+                  pagingEnabled
+                  bounces={false}
+                  directionalLockEnabled
+                  showsHorizontalScrollIndicator={false}
+                  snapToAlignment="center"
+                  snapToInterval={HOME_CARD_WIDTH}
+                  decelerationRate="fast"
+                  scrollEventThrottle={16}
+                  removeClippedSubviews={false}
+                  initialNumToRender={publication.presentation.images.length}
+                  maxToRenderPerBatch={publication.presentation.images.length}
+                  windowSize={3}
+                  onScrollBeginDrag={() => handlers.onSetCarouselGestureActive(true)}
+                  onScrollEndDrag={() => handlers.onSetCarouselGestureActive(false)}
+                  onMomentumScrollBegin={() => handlers.onSetCarouselGestureActive(true)}
+                  onScroll={(event) => {
+                    const x = Math.max(0, event.nativeEvent.contentOffset.x);
+                    const w = Math.max(1, event.nativeEvent.layoutMeasurement.width || HOME_CARD_WIDTH);
+                    const total = publication.presentation.images.length;
+                    const nextIdx = Math.min(total - 1, Math.max(0, Math.round(x / w)));
+                    presentationDotsRefsMap.current[publicationId]?.setIndex(nextIdx);
+                  }}
+                  onMomentumScrollEnd={(event) => {
+                    handlers.onUpdatePresentationActiveIndexFromScroll(
+                      publication.id,
+                      event.nativeEvent.contentOffset.x,
+                      event.nativeEvent.layoutMeasurement.width,
+                      publication.presentation.images.length,
+                    );
+                    handlers.onSetCarouselGestureActive(false);
+                  }}
+                  renderItem={({ item, index }) => {
+                    const imageUri = getServerResourceUrl(item.uri);
+
+                    return (
+                      <View style={[styles.profilePresentationSlide, { width: HOME_CARD_WIDTH }]}> 
+                        <TouchableWithoutFeedback onPress={() => handlers.onPublicationDoubleTap(publicationId, publication.reactions)}>
+                          <View
+                            style={[
+                              styles.carouselImageFrame,
+                              item.aspectRatio === '3:4' ? styles.carouselImageFramePortrait : styles.carouselImageFrameSquare,
+                              { width: '100%' },
+                            ]}
+                            onLayout={(e) => {
+                              const { width, height } = e.nativeEvent.layout;
+                              handlers.onSetPresentationImageLayout(publication.id, index, width, height);
+                            }}
+                          >
+                            <Image
+                              source={{ uri: imageUri }}
+                              style={styles.carouselImage}
+                              resizeMode="cover"
+                              fadeDuration={0}
+                              onLoad={() => handlers.onMarkPresentationImageLoaded(publication.id, index)}
+                              onLoadEnd={() => handlers.onMarkPresentationImageLoaded(publication.id, index)}
+                              onError={() => handlers.onMarkPresentationImageLoaded(publication.id, index)}
+                            />
+
+                            {hasPresentationRings && ringsVisible ? (() => {
+                              const layout = presentationImageLayouts[index];
+                              if (!layout) {return null;}
+
+                              const ringSize = 18;
+                              const ringRadius = ringSize / 2;
+                              const points = presentationRings.filter(p => Number(p?.imageIndex) === index);
+                              if (points.length === 0) {return null;}
+
+                              return points.map((ring) => {
+                                const x = Number(ring?.x);
+                                const y = Number(ring?.y);
+                                if (!Number.isFinite(x) || !Number.isFinite(y)) {return null;}
+
+                                const left = Math.max(0, Math.min(layout.width - ringSize, x * layout.width - ringRadius));
+                                const top = Math.max(0, Math.min(layout.height - ringSize, y * layout.height - ringRadius));
+
+                                return (
+                                  <Pressable
+                                    key={String(ring.id)}
+                                    onPress={() => handlers.onOpenHomeProfileRing(publication.id, ring)}
+                                    hitSlop={10}
+                                    style={{
+                                      position: 'absolute',
+                                      left,
+                                      top,
+                                      width: ringSize,
+                                      height: ringSize,
+                                      borderRadius: ringRadius,
+                                      borderWidth: 3,
+                                      borderColor: ring.color || '#FFFFFF',
+                                      backgroundColor: withHexAlpha(ring.color || '#FFFFFF', 0.4),
+                                    }}
+                                  />
+                                );
+                              });
+                            })() : null}
+
+                            {pubDoubleTap.visible ? (
+                              <View style={{
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                                zIndex: 20,
+                                pointerEvents: 'none',
+                              }}>
+                                <Animated.Text style={{
+                                  fontSize: 100,
+                                  transform: [{ scale: pubAnimations.scale }],
+                                  opacity: pubAnimations.opacity,
+                                  textShadowColor: 'rgba(0, 0, 0, 0.3)',
+                                  textShadowOffset: { width: 0, height: 2 },
+                                  textShadowRadius: 4,
+                                }}>
+                                  {pubDoubleTap.emoji}
+                                </Animated.Text>
+                              </View>
+                            ) : null}
+                          </View>
+                        </TouchableWithoutFeedback>
+                      </View>
+                    );
+                  }}
+                />
+
+                <View style={styles.profilePresentationOverlay} pointerEvents="box-none">
+                  {isOverlayVisible ? (
+                    <View style={styles.profilePresentationOverlayContent}>
+                      <Text style={styles.profilePresentationOverlayTitle}>
+                        {trimmedTitle}
+                      </Text>
+                      <Text style={styles.profilePresentationOverlayText}>
+                        {textPreview}
+                        {hasTextOverflow ? (
+                          <Text
+                            style={styles.profilePresentationToggleLink}
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handlers.onToggleExpandedText(publication.id);
+                            }}
+                          >
+                            {' '}
+                            {isTextExpanded ? t('front.readLess' as TranslationKey) : t('front.readMore' as TranslationKey)}
+                          </Text>
+                        ) : null}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  <View style={styles.carouselPagination}>
+                    <HomePresentationDotIndicator
+                      key={`pub-dots-${publicationId}`}
+                      ref={(r) => { presentationDotsRefsMap.current[publicationId] = r; }}
+                      count={publication.presentation.images.length}
+                      onPress={() => handlers.onTogglePresentationOverlay(publication.id)}
+                    />
+                  </View>
+
+                  {categoryLabel ? (
+                    <View style={styles.categoryBelowIndicator}>
+                      <Text style={styles.categoryBelowIndicatorText}>{categoryLabel}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+
+              <View style={[styles.profileMetaContainer, { paddingBottom: 0 }]}>
+                <View style={styles.profileLikeRow}>
+                  <View style={{ position: 'absolute', left: 0, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        if (!hasPresentationRings) {return;}
+                        handlers.onToggleHomeProfileRingsVisible(publicationId);
+                      }}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      style={{ paddingVertical: 2, paddingHorizontal: 2, opacity: hasPresentationRings ? 1 : 0.35 }}
+                    >
+                      <Animated.View style={ringsVisible ? { transform: [{ scale: animations.homeRingIconPulseAnim }] } : undefined}>
+                        <GradientIcon
+                          name="panorama-fish-eye"
+                          size={16}
+                          colors={['#FFB74D', '#ffe45c']}
+                        />
+                      </Animated.View>
+                    </TouchableOpacity>
+
+                    <CountdownTimer
+                      createdAt={publication.createdAt}
+                      style={{ color: '#6e6e6eff', fontSize: 12 }}
+                      onExpire={() => handlers.onExpirePublication(publication.id)}
+                    />
+                  </View>
+                  <View style={styles.profileLikeGroup}>
+                    {publication.reactions.selected.map((emoji, index) => (
+                      <TouchableOpacity
+                        key={index}
+                        onPress={() => handlers.onApplyPublicationReaction(publicationId, publication.reactions, emoji)}
+                        activeOpacity={0.75}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        style={{ flexDirection: 'row', alignItems: 'center' }}
+                      >
+                        <Text style={{ fontSize: 18, color: '#FFFFFF', opacity: 1 }}>{emoji}</Text>
+                        <Text style={{ color: '#FFFFFF', fontSize: 12, marginLeft: 2, fontWeight: 'bold', opacity: 1 }}>{publication.reactions.counts[emoji] || 0}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              </View>
+
+              {publication.intimidades.length > 0 && isIntimidadesVisible && activeIntimidad ? (
+                <View style={{
+                  width: HOME_CARD_WIDTH,
+                  alignSelf: 'center',
+                  backgroundColor: '#000000',
+                  borderRadius: 10,
+                  marginTop: 20,
+                  position: 'relative',
+                  overflow: 'hidden',
+                  minHeight: 110,
+                }}>
+                  <View style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    borderWidth: 2.4,
+                    borderColor: '#FFB74D',
+                    borderRadius: 10,
+                    zIndex: 10,
+                    pointerEvents: 'none',
+                  }} />
+
+                  {activeIntimidad.type === 'image' ? (
+                    <View style={{ width: '100%' }}>
+                      <View style={{ width: '100%', aspectRatio: 3 / 4 }}>
+                        <Image
+                          source={{ uri: activeIntimidad.content }}
+                          style={{ width: '100%', height: '100%' }}
+                          resizeMode="cover"
+                        />
+                      </View>
+                      {activeIntimidad.caption ? (
+                        <View style={{ padding: 15 }}>
+                          <Text style={{ color: '#FFFFFF', textAlign: 'justify' }}>
+                            {activeIntimidad.caption || ''}
+                          </Text>
+                        </View>
+                      ) : (
+                        <View style={{ height: 15 }} />
+                      )}
+                    </View>
+                  ) : activeIntimidad.type === 'quiz' ? (
+                    <View style={{ width: '100%' }}>
+                      {activeIntimidad.quizData?.imageUri ? (
+                        <View style={{ width: '100%', aspectRatio: 3 / 4 }}>
+                          <Image
+                            source={{ uri: activeIntimidad.quizData?.imageUri ?? undefined }}
+                            style={{ width: '100%', height: '100%' }}
+                            resizeMode="cover"
+                          />
+                        </View>
+                      ) : null}
+                      <View style={{ padding: 10 }}>
+                        {activeIntimidad.quizData?.text ? (
+                          <Text style={{ color: '#FFFFFF', marginBottom: 10, textAlign: 'justify' }}>
+                            {activeIntimidad.quizData?.text || ''}
+                          </Text>
+                        ) : null}
+                        <View style={{ width: '100%' }}>
+                          {(() => {
+                            const quizData = activeIntimidad.quizData;
+                            const stats = quizData?.stats;
+                            const correctOption = quizData?.correctOption;
+                            if (!stats || !correctOption) {return null;}
+
+                            const total = stats.a + stats.b + stats.c + stats.d;
+                            if (total <= 0) {return null;}
+
+                            const correctCount = stats[correctOption as keyof typeof stats] ?? 0;
+                            return (
+                              <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, marginBottom: 5, marginLeft: 5 }}>
+                                {correctCount} acertantes
+                              </Text>
+                            );
+                          })()}
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+                            {(['a', 'b'] as QuizOptionKey[]).map((optionKey) => {
+                              const userSelection = activeIntimidad.quizData?.userSelection;
+                              const isSelected = userSelection === optionKey;
+                              const isCorrect = activeIntimidad.quizData?.correctOption === optionKey;
+                              const hasAnswered = !!userSelection;
+
+                              const showCheck = hasAnswered && isCorrect;
+                              const showX = isSelected && !isCorrect;
+
+                              let percentage = 0;
+                              const quizStats = activeIntimidad.quizData?.stats;
+                              if (hasAnswered && quizStats) {
+                                const totalVotes = quizStats.a + quizStats.b + quizStats.c + quizStats.d;
+                                const optionVotes = quizStats[optionKey as keyof typeof quizStats];
+                                if (totalVotes > 0) {
+                                  percentage = Math.round((optionVotes / totalVotes) * 100);
+                                }
+                              }
+
+                              return (
+                                <View key={optionKey} style={{ flex: 1, marginLeft: optionKey === 'b' ? 5 : 0, marginRight: optionKey === 'a' ? 5 : 0 }}>
+                                  <TouchableOpacity
+                                    onPress={() => handlers.onVoteQuizOption(publication.id, safeActiveIntimidadIndex, optionKey)}
+                                    activeOpacity={0.7}
+                                    style={{
+                                      borderWidth: 1,
+                                      borderColor: showCheck ? '#FFB74D' : showX ? '#F44336' : '#FFB74D',
+                                      borderRadius: 15,
+                                      padding: 5,
+                                      minHeight: 30,
+                                      justifyContent: 'center',
+                                      flexDirection: 'row',
+                                      alignItems: 'center',
+                                    }}
+                                  >
+                                    <Text style={{ color: '#FFFFFF', fontSize: 12, flex: 1 }}>
+                                      <Text style={{ fontWeight: 'bold', color: '#FFB74D' }}>{optionKey}. </Text>
+                                      {activeIntimidad.quizData?.options[optionKey] || ''}
+                                    </Text>
+                                    {showCheck ? (
+                                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                        <Text style={{ color: '#FFB74D', fontSize: 10, marginRight: 2 }}>{percentage}%</Text>
+                                        <MaterialIcons name="check-circle" size={16} color="#FFB74D" style={{ marginLeft: 4 }} />
+                                      </View>
+                                    ) : null}
+                                    {showX ? <MaterialIcons name="cancel" size={16} color="#F44336" style={{ marginLeft: 4 }} /> : null}
+                                  </TouchableOpacity>
+                                </View>
+                              );
+                            })}
+                          </View>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                            {(['c', 'd'] as QuizOptionKey[]).map((optionKey) => {
+                              const userSelection = activeIntimidad.quizData?.userSelection;
+                              const isSelected = userSelection === optionKey;
+                              const isCorrect = activeIntimidad.quizData?.correctOption === optionKey;
+                              const hasAnswered = !!userSelection;
+
+                              const showCheck = hasAnswered && isCorrect;
+                              const showX = isSelected && !isCorrect;
+
+                              let percentage = 0;
+                              const quizStats = activeIntimidad.quizData?.stats;
+                              if (hasAnswered && quizStats) {
+                                const totalVotes = quizStats.a + quizStats.b + quizStats.c + quizStats.d;
+                                const optionVotes = quizStats[optionKey as keyof typeof quizStats];
+                                if (totalVotes > 0) {
+                                  percentage = Math.round((optionVotes / totalVotes) * 100);
+                                }
+                              }
+
+                              return (
+                                <View key={optionKey} style={{ flex: 1, marginLeft: optionKey === 'd' ? 5 : 0, marginRight: optionKey === 'c' ? 5 : 0 }}>
+                                  <TouchableOpacity
+                                    onPress={() => handlers.onVoteQuizOption(publication.id, safeActiveIntimidadIndex, optionKey)}
+                                    activeOpacity={0.7}
+                                    style={{
+                                      borderWidth: 1,
+                                      borderColor: showCheck ? '#FFB74D' : showX ? '#F44336' : '#FFB74D',
+                                      borderRadius: 15,
+                                      padding: 5,
+                                      minHeight: 30,
+                                      justifyContent: 'center',
+                                      flexDirection: 'row',
+                                      alignItems: 'center',
+                                    }}
+                                  >
+                                    <Text style={{ color: '#FFFFFF', fontSize: 12, flex: 1 }}>
+                                      <Text style={{ fontWeight: 'bold', color: '#FFB74D' }}>{optionKey}. </Text>
+                                      {activeIntimidad.quizData?.options[optionKey] || ''}
+                                    </Text>
+                                    {showCheck ? (
+                                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                        <Text style={{ color: '#FFB74D', fontSize: 10, marginRight: 2 }}>{percentage}%</Text>
+                                        <MaterialIcons name="check-circle" size={16} color="#FFB74D" style={{ marginLeft: 4 }} />
+                                      </View>
+                                    ) : null}
+                                    {showX ? <MaterialIcons name="cancel" size={16} color="#F44336" style={{ marginLeft: 4 }} /> : null}
+                                  </TouchableOpacity>
+                                </View>
+                              );
+                            })}
+                          </View>
+                        </View>
+                      </View>
+                    </View>
+                  ) : activeIntimidad.type === 'survey' ? (
+                    <View style={{ width: '100%' }}>
+                      {activeIntimidad.surveyData?.imageUri ? (
+                        <View style={{ width: '100%', aspectRatio: 3 / 4 }}>
+                          <Image
+                            source={{ uri: activeIntimidad.surveyData?.imageUri ?? undefined }}
+                            style={{ width: '100%', height: '100%' }}
+                            resizeMode="cover"
+                          />
+                        </View>
+                      ) : null}
+                      <View style={{ padding: 10 }}>
+                        {activeIntimidad.surveyData?.text ? (
+                          <Text style={{ color: '#FFFFFF', marginBottom: 10, textAlign: 'justify' }}>
+                            {activeIntimidad.surveyData?.text || ''}
+                          </Text>
+                        ) : null}
+                        <View style={{ width: '100%' }}>
+                          {(() => {
+                            const stats = activeIntimidad.surveyData?.stats;
+                            if (!stats) {return null;}
+                            const totalVotes = stats.reduce((a, b) => a + b, 0);
+                            if (totalVotes <= 0) {return null;}
+                            return (
+                              <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, marginBottom: 5, marginLeft: 5 }}>
+                                {totalVotes} votos
+                              </Text>
+                            );
+                          })()}
+                          {activeIntimidad.surveyData?.options.map((option, idx) => {
+                            const userSelection = activeIntimidad.surveyData?.userSelection;
+                            const isSelected = userSelection === idx;
+                            const hasAnswered = userSelection !== null && userSelection !== undefined;
+
+                            let percentage = 0;
+                            if (hasAnswered && activeIntimidad.surveyData?.stats) {
+                              const stats = activeIntimidad.surveyData?.stats;
+                              const totalVotes = stats ? stats.reduce((a, b) => a + b, 0) : 0;
+                              const optionVotes = stats ? stats[idx] : 0;
+                              if (totalVotes > 0) {
+                                percentage = Math.round((optionVotes / totalVotes) * 100);
+                              }
+                            }
+
+                            return (
+                              <TouchableOpacity
+                                key={idx}
+                                onPress={() => handlers.onVoteSurveyOption(publication.id, safeActiveIntimidadIndex, idx)}
+                                activeOpacity={0.7}
+                                style={{
+                                  borderWidth: 1,
+                                  borderColor: '#FFB74D',
+                                  backgroundColor: isSelected ? 'rgba(255, 183, 77, 0.1)' : 'transparent',
+                                  borderRadius: 15,
+                                  padding: 8,
+                                  marginBottom: 8,
+                                  justifyContent: 'center',
+                                  flexDirection: 'row',
+                                  alignItems: 'center',
+                                }}
+                              >
+                                <Text style={{ color: '#FFFFFF', fontSize: 12, flex: 1 }}>
+                                  <Text style={{ fontWeight: 'bold', color: '#FFB74D' }}>{String.fromCharCode(97 + idx)}. </Text>
+                                  {option || ''}
+                                </Text>
+                                {hasAnswered ? (
+                                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <Text style={{ color: '#FFB74D', fontSize: 10, marginRight: 2 }}>{percentage}%</Text>
+                                    {isSelected ? <MaterialIcons name="check-circle" size={16} color="#FFB74D" style={{ marginLeft: 4 }} /> : null}
+                                  </View>
+                                ) : null}
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={{ padding: 15, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 110 }}>
+                      <Text style={{ color: '#FFFFFF', textAlign: 'justify' }}>
+                        {activeIntimidad.content || ''}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              ) : null}
+
+              <View style={[styles.profileMetaContainer, { paddingTop: 0 }]}>
+                <TouchableOpacity
+                  style={styles.bottomPanel}
+                  activeOpacity={0.7}
+                  onPress={() => handlers.onPressIntimidadesButton(publication.id, publication.intimidades.length)}
+                >
+                  <Image source={ICON_KEITIN} style={styles.profileBrandIcon} resizeMode="contain" />
+                  {publication.intimidades.length > 0 ? (
+                    <View style={{ flexDirection: 'row', marginTop: 8, gap: 6 }}>
+                      {publication.intimidades.map((_, idx) => (
+                        <View
+                          key={idx}
+                          style={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: 3,
+                            backgroundColor: idx === safeActiveIntimidadIndex ? '#FFB74D' : 'rgba(255, 183, 77, 0.3)',
+                          }}
+                        />
+                      ))}
+                    </View>
+                  ) : null}
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+        </Animated.View>
+      </ScrollView>
+    </View>
+  );
+});
+
 const FrontScreen = ({
   userEmail,
   username,
@@ -1441,17 +3365,27 @@ const FrontScreen = ({
   accountVerified,
   onProfilePhotoUriChange,
   onSocialNetworksChange,
-  onNavigateToPublish,
-  onNavigateToNotificationpublisher,
-  onNavigateToNotifications,
-  onNavigateToRecompensa,
+  onNavigateToPublish: _onNavigateToPublish,
+  onNavigateToNotificationpublisher: _onNavigateToNotificationpublisher,
+  onNavigateToNotifications: _onNavigateToNotifications,
+  onNavigateToRecompensa: _onNavigateToRecompensa,
   onNavigateToConfiguration,
-  onLogout,
+  onNavigateToKeys,
+  onNavigateToReading,
+  onLogout: _onLogout,
   giveAways = [],
 
-  onOpenFilter,
-  searchHashtag,
+  onOpenFilter: _onOpenFilter,
+  searchHashtag: _searchHashtag,
   authToken,
+  unreadNotificationsCount = 0,
+  initialBottomTab,
+  onConsumeInitialBottomTab,
+  joinedGroupsRedirect,
+  onConsumeJoinedGroupsRedirect,
+  joinedChannelRedirect,
+  onConsumeJoinedChannelRedirect,
+  onNotificationsChanged,
 }: FrontScreenProps) => {
   const { t, language } = useI18n();
   const localize = (messages: Partial<Record<Language, string>> & { es: string }) => messages[language] || messages.en || messages.es;
@@ -1486,7 +3420,7 @@ const FrontScreen = ({
   const consentInFlightRef = useRef<Promise<{ adsSdkReady: boolean; gdprApplies: boolean | null }> | null>(null);
 
   const syncAdsRuntimeForCurrentAccount = useCallback(async () => {
-    if (consentInFlightRef.current) return consentInFlightRef.current;
+    if (consentInFlightRef.current) {return consentInFlightRef.current;}
 
     const p = ensureAdsConsentForAccount(userEmail)
       .then((cfg) => {
@@ -1515,12 +3449,12 @@ const FrontScreen = ({
 
     syncAdsRuntimeForCurrentAccount()
       .then((cfg) => {
-        if (cancelled || !isFrontScreenMountedRef.current) return;
+        if (cancelled || !isFrontScreenMountedRef.current) {return;}
         setAdsSdkReady(!!cfg.adsSdkReady);
       })
       .catch(async () => {
         const fallback = await getStoredAdsRuntimeConfig().catch(() => null);
-        if (cancelled || !isFrontScreenMountedRef.current || !fallback) return;
+        if (cancelled || !isFrontScreenMountedRef.current || !fallback) {return;}
         setAdsSdkReady(!!fallback.adsSdkReady);
       });
 
@@ -1534,13 +3468,13 @@ const FrontScreen = ({
 
     const refreshKeintiVerified = async () => {
       if (!authToken) {
-        if (!cancelled) setKeintiVerified(false);
+        if (!cancelled) {setKeintiVerified(false);}
         return;
       }
 
       try {
         const status = await getAccountAuthStatus(authToken);
-        if (!cancelled) setKeintiVerified(!!status?.keinti_verified);
+        if (!cancelled) {setKeintiVerified(!!status?.keinti_verified);}
       } catch {
         // ignore
       }
@@ -1560,20 +3494,56 @@ const FrontScreen = ({
   const rewardedEarnedRef = useRef(false);
   const rewardedShowTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingIntimidadesPubIdRef = useRef<string | null>(null);
+  const pendingHomeIntimidadesUnlockSignatureRef = useRef<string | null>(null);
   const pendingChannelImageUnlockKeyRef = useRef<string | null>(null);
+  const pendingHypeChannelEventUnlockKeyRef = useRef<string | null>(null);
+  const pendingHypeChannelReadingUnlockKeyRef = useRef<string | null>(null);
+  const completedChannelHostThreadGoalEvidenceRef = useRef<string | null>(null);
+  const userEmailRef = useRef<string | undefined>(userEmail);
+  const authTokenRef = useRef<string | undefined>(authToken);
   const [isRewardedLoaded, setIsRewardedLoaded] = useState(false);
-  const [pendingHomeIntimidadesUnlockPubId, setPendingHomeIntimidadesUnlockPubId] = useState<string | null>(null);
 
-  const revealIntimidadesForPub = (pubId: string) => {
+  // Keep userEmailRef in sync so rewarded-ad closures always use the latest email.
+  useEffect(() => {
+    userEmailRef.current = userEmail;
+  }, [userEmail]);
+
+  useEffect(() => {
+    authTokenRef.current = authToken;
+  }, [authToken]);
+
+  const revealIntimidadesForPub = (pubId: string, unlockSignature?: string | null) => {
     setIntimidadesVisible(prev => ({ ...prev, [pubId]: true }));
+
+    // Record progress toward the daily goal — counts regardless of whether the ad played.
+    const sig = String(unlockSignature ?? pendingHomeIntimidadesUnlockSignatureRef.current ?? '').trim();
+    if (sig) {
+      recordHomeIntimidadesUnlock({
+        email: userEmailRef.current,
+        token: authTokenRef.current,
+      }, sig).catch(() => {});
+
+      setHomeIntimidadesUnlockSigs(prev => {
+        if (prev[sig] === 1) {return prev;}
+
+        const next = { ...prev, [sig]: 1 as const };
+        const AsyncStorage = getAsyncStorageSafe();
+        if (AsyncStorage) {
+          const key = makeHomeIntimidadesUnlockStorageKey(userEmailRef.current);
+          AsyncStorage.setItem(key, JSON.stringify(next)).catch(() => {});
+        }
+
+        return next;
+      });
+    }
 
     // Count an "opening" for the creator when another user reveals this content.
     // Best-effort: never block the UI if the request fails.
-    if (authToken) {
+    if (authTokenRef.current) {
       fetch(`${API_URL}/api/posts/${encodeURIComponent(String(pubId))}/intimidades/open`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${authToken}`,
+          'Authorization': `Bearer ${authTokenRef.current}`,
           'Accept': 'application/json',
         },
       }).catch(() => {});
@@ -1584,7 +3554,10 @@ const FrontScreen = ({
     rewardedShowRequestedRef.current = false;
     rewardedEarnedRef.current = false;
     pendingIntimidadesPubIdRef.current = null;
+    pendingHomeIntimidadesUnlockSignatureRef.current = null;
     pendingChannelImageUnlockKeyRef.current = null;
+    pendingHypeChannelEventUnlockKeyRef.current = null;
+    pendingHypeChannelReadingUnlockKeyRef.current = null;
     if (rewardedShowTimeoutRef.current) {
       clearTimeout(rewardedShowTimeoutRef.current);
       rewardedShowTimeoutRef.current = null;
@@ -1592,7 +3565,7 @@ const FrontScreen = ({
   };
 
   useEffect(() => {
-    if (!adsSdkReady) return;
+    if (!adsSdkReady) {return;}
 
     // If consent settings changed, we're recreating the ad instance.
     // Reset local loaded state so UI doesn't assume the new instance is ready.
@@ -1616,11 +3589,14 @@ const FrontScreen = ({
           rewarded.show();
         } catch (e) {
           const pubId = pendingIntimidadesPubIdRef.current;
+          const homeIntimidadesUnlockSignature = pendingHomeIntimidadesUnlockSignatureRef.current;
           const unlockKey = pendingChannelImageUnlockKeyRef.current;
+          const hypeEventUnlockKey = pendingHypeChannelEventUnlockKeyRef.current;
+          const hypeReadingUnlockKey = pendingHypeChannelReadingUnlockKeyRef.current;
           resetRewardedGateState();
           if (pubId) {
             // If showing fails, don't block the user from seeing the content.
-            revealIntimidadesForPub(pubId);
+            revealIntimidadesForPub(pubId, homeIntimidadesUnlockSignature);
           } else if (unlockKey) {
             Alert.alert(adUnavailableTitle, localize({
               es: 'No se pudo mostrar el anuncio en este momento.',
@@ -1630,6 +3606,10 @@ const FrontScreen = ({
               de: 'Die Anzeige konnte gerade nicht angezeigt werden.',
               it: 'Impossibile mostrare l\'annuncio in questo momento.',
             }));
+          } else if (hypeEventUnlockKey) {
+            unlockHypeChannelEventFallback(hypeEventUnlockKey);
+          } else if (hypeReadingUnlockKey) {
+            unlockHypeChannelReadingFallback(hypeReadingUnlockKey);
           }
         }
       }
@@ -1644,6 +3624,10 @@ const FrontScreen = ({
         ? 'home_intimidades_rewarded_unlock'
         : pendingChannelImageUnlockKeyRef.current
           ? 'chat_channel_image_rewarded_unlock'
+          : pendingHypeChannelEventUnlockKeyRef.current
+            ? 'hype_channel_event_rewarded_unlock'
+          : pendingHypeChannelReadingUnlockKeyRef.current
+            ? 'hype_channel_reading_rewarded_unlock'
           : 'rewarded_unknown_placement';
 
       trackAdPaidEvent({
@@ -1655,7 +3639,10 @@ const FrontScreen = ({
 
     const unsubscribeClosed = rewarded.addAdEventListener(AdEventType.CLOSED, () => {
       const pubId = pendingIntimidadesPubIdRef.current;
+      const homeIntimidadesUnlockSignature = pendingHomeIntimidadesUnlockSignatureRef.current;
       const unlockKey = pendingChannelImageUnlockKeyRef.current;
+      const hypeEventUnlockKey = pendingHypeChannelEventUnlockKeyRef.current;
+      const hypeReadingUnlockKey = pendingHypeChannelReadingUnlockKeyRef.current;
       const earned = rewardedEarnedRef.current;
       resetRewardedGateState();
 
@@ -1664,25 +3651,35 @@ const FrontScreen = ({
       rewarded.load();
 
       if (earned && pubId) {
-        revealIntimidadesForPub(pubId);
-        setPendingHomeIntimidadesUnlockPubId(String(pubId));
+        revealIntimidadesForPub(pubId, homeIntimidadesUnlockSignature);
       }
 
       if (earned && unlockKey) {
         markChannelImageUnlocked(unlockKey);
       }
+
+      if (earned && hypeEventUnlockKey) {
+        markHypeChannelEventUnlocked(hypeEventUnlockKey);
+      }
+
+      if (earned && hypeReadingUnlockKey) {
+        markHypeChannelReadingUnlocked(hypeReadingUnlockKey);
+      }
     });
 
     const unsubscribeError = rewarded.addAdEventListener(AdEventType.ERROR, () => {
       const pubId = pendingIntimidadesPubIdRef.current;
+      const homeIntimidadesUnlockSignature = pendingHomeIntimidadesUnlockSignatureRef.current;
       const unlockKey = pendingChannelImageUnlockKeyRef.current;
+      const hypeEventUnlockKey = pendingHypeChannelEventUnlockKeyRef.current;
+      const hypeReadingUnlockKey = pendingHypeChannelReadingUnlockKeyRef.current;
       resetRewardedGateState();
       setIsRewardedLoaded(false);
       rewarded.load();
 
       if (pubId) {
         // If the ad fails, allow continuing without blocking.
-        revealIntimidadesForPub(pubId);
+        revealIntimidadesForPub(pubId, homeIntimidadesUnlockSignature);
       } else if (unlockKey) {
         Alert.alert(adUnavailableTitle, localize({
           es: 'No hay anuncios disponibles en este momento.',
@@ -1692,6 +3689,10 @@ const FrontScreen = ({
           de: 'Derzeit sind keine Anzeigen verfügbar.',
           it: 'Non ci sono annunci disponibili al momento.',
         }));
+      } else if (hypeEventUnlockKey) {
+        unlockHypeChannelEventFallback(hypeEventUnlockKey);
+      } else if (hypeReadingUnlockKey) {
+        unlockHypeChannelReadingFallback(hypeReadingUnlockKey);
       }
     });
 
@@ -1710,7 +3711,7 @@ const FrontScreen = ({
 
   // Preload the first rewarded ad only after the SDK has fully initialized.
   useEffect(() => {
-    if (!adsSdkReady) return;
+    if (!adsSdkReady) {return;}
     const rewarded = rewardedAdRef.current;
     if (rewarded && !isRewardedLoaded) {
       rewarded.load();
@@ -1719,19 +3720,31 @@ const FrontScreen = ({
 
   const showRewardedToRevealIntimidades = async (pubId: string) => {
     const safePubId = String(pubId || '').trim();
-    if (!safePubId) return;
+    if (!safePubId) {return;}
+
+    const publication = publications.find(
+      item => String(item?.id || '').trim() === safePubId,
+    ) ?? (String(myPublication?.id || '').trim() === safePubId ? myPublication : null);
+
+    pendingHomeIntimidadesUnlockSignatureRef.current = makeHomeIntimidadesUnlockSignature(
+      publication?.id ?? safePubId,
+      publication?.createdAt,
+    );
 
     // Record intent first so the LOADED handler can auto-show.
     pendingIntimidadesPubIdRef.current = safePubId;
     pendingChannelImageUnlockKeyRef.current = null;
+    pendingHypeChannelEventUnlockKeyRef.current = null;
+    pendingHypeChannelReadingUnlockKeyRef.current = null;
     rewardedEarnedRef.current = false;
     rewardedShowRequestedRef.current = true;
 
     if (!adsSdkReady && consentInFlightRef.current) {
       const cfg = await consentInFlightRef.current;
       if (!cfg.adsSdkReady) {
+        const homeIntimidadesUnlockSignature = pendingHomeIntimidadesUnlockSignatureRef.current;
         resetRewardedGateState();
-        revealIntimidadesForPub(safePubId);
+        revealIntimidadesForPub(safePubId, homeIntimidadesUnlockSignature);
         return;
       }
     }
@@ -1739,8 +3752,9 @@ const FrontScreen = ({
     if (!adsSdkReady && !consentInFlightRef.current) {
       // Consent is no longer opened from this interaction.
       // If ads are still unavailable here, continue without blocking the user.
+      const homeIntimidadesUnlockSignature = pendingHomeIntimidadesUnlockSignatureRef.current;
       resetRewardedGateState();
-      revealIntimidadesForPub(safePubId);
+      revealIntimidadesForPub(safePubId, homeIntimidadesUnlockSignature);
       return;
     }
 
@@ -1748,9 +3762,10 @@ const FrontScreen = ({
     if (!rewarded) {
       // The ad instance is created by the adsSdkReady effect after consent.
       // Keep the pending request alive long enough for that effect + first load cycle.
-      if (rewardedShowTimeoutRef.current) clearTimeout(rewardedShowTimeoutRef.current);
+      if (rewardedShowTimeoutRef.current) {clearTimeout(rewardedShowTimeoutRef.current);}
       rewardedShowTimeoutRef.current = setTimeout(() => {
         const pendingPubId = pendingIntimidadesPubIdRef.current;
+        const homeIntimidadesUnlockSignature = pendingHomeIntimidadesUnlockSignatureRef.current;
         const currentRewarded = rewardedAdRef.current;
         if (currentRewarded) {
           try {
@@ -1762,7 +3777,7 @@ const FrontScreen = ({
         }
 
         resetRewardedGateState();
-        if (pendingPubId) revealIntimidadesForPub(pendingPubId);
+        if (pendingPubId) {revealIntimidadesForPub(pendingPubId, homeIntimidadesUnlockSignature);}
       }, 7000);
       return;
     }
@@ -1773,18 +3788,20 @@ const FrontScreen = ({
       try {
         rewarded.show();
       } catch {
+        const homeIntimidadesUnlockSignature = pendingHomeIntimidadesUnlockSignatureRef.current;
         resetRewardedGateState();
-        revealIntimidadesForPub(safePubId);
+        revealIntimidadesForPub(safePubId, homeIntimidadesUnlockSignature);
       }
       return;
     }
 
     // Safety: avoid getting stuck if the SDK never resolves LOADED/ERROR.
-    if (rewardedShowTimeoutRef.current) clearTimeout(rewardedShowTimeoutRef.current);
+    if (rewardedShowTimeoutRef.current) {clearTimeout(rewardedShowTimeoutRef.current);}
     rewardedShowTimeoutRef.current = setTimeout(() => {
       const stillWaiting = rewardedShowRequestedRef.current;
-      if (!stillWaiting) return;
+      if (!stillWaiting) {return;}
       const pendingPubId = pendingIntimidadesPubIdRef.current;
+      const homeIntimidadesUnlockSignature = pendingHomeIntimidadesUnlockSignatureRef.current;
       resetRewardedGateState();
       setIsRewardedLoaded(false);
       try {
@@ -1794,7 +3811,7 @@ const FrontScreen = ({
       }
 
       // Don't block the user if the ad can't be shown right now.
-      if (pendingPubId) revealIntimidadesForPub(pendingPubId);
+      if (pendingPubId) {revealIntimidadesForPub(pendingPubId, homeIntimidadesUnlockSignature);}
     }, 7000);
 
     try {
@@ -1806,8 +3823,8 @@ const FrontScreen = ({
 
   const showRewardedToUnlockChannelImage = async (unlockKey: string) => {
     const key = String(unlockKey || '').trim();
-    if (!key) return;
-    if (unlockedChannelImageKeys[key]) return;
+    if (!key) {return;}
+    if (unlockedChannelImageKeys[key]) {return;}
 
     if (!adsSdkReady && consentInFlightRef.current) {
       const cfg = await consentInFlightRef.current;
@@ -1851,6 +3868,8 @@ const FrontScreen = ({
 
     pendingChannelImageUnlockKeyRef.current = key;
     pendingIntimidadesPubIdRef.current = null;
+    pendingHypeChannelEventUnlockKeyRef.current = null;
+    pendingHypeChannelReadingUnlockKeyRef.current = null;
     rewardedEarnedRef.current = false;
 
     if (isRewardedLoaded) {
@@ -1872,10 +3891,10 @@ const FrontScreen = ({
 
     rewardedShowRequestedRef.current = true;
 
-    if (rewardedShowTimeoutRef.current) clearTimeout(rewardedShowTimeoutRef.current);
+    if (rewardedShowTimeoutRef.current) {clearTimeout(rewardedShowTimeoutRef.current);}
     rewardedShowTimeoutRef.current = setTimeout(() => {
       const stillWaiting = rewardedShowRequestedRef.current;
-      if (!stillWaiting) return;
+      if (!stillWaiting) {return;}
       const pendingKey = pendingChannelImageUnlockKeyRef.current;
       resetRewardedGateState();
       setIsRewardedLoaded(false);
@@ -1907,20 +3926,20 @@ const FrontScreen = ({
     let didCancel = false;
     (async () => {
       const AsyncStorage = getAsyncStorageSafe();
-      if (!AsyncStorage) return;
+      if (!AsyncStorage) {return;}
       try {
         const raw = await AsyncStorage.getItem(unlockedChannelImagesStorageKey);
-        if (didCancel) return;
+        if (didCancel) {return;}
         const parsed = raw ? JSON.parse(raw) : [];
         const keys = Array.isArray(parsed) ? parsed.map(String) : [];
         const next: Record<string, boolean> = {};
         keys.forEach((k) => {
           const kk = String(k || '').trim();
-          if (kk) next[kk] = true;
+          if (kk) {next[kk] = true;}
         });
         setUnlockedChannelImageKeys(next);
       } catch {
-        if (!didCancel) setUnlockedChannelImageKeys({});
+        if (!didCancel) {setUnlockedChannelImageKeys({});}
       }
     })();
 
@@ -1931,7 +3950,7 @@ const FrontScreen = ({
 
   const persistUnlockedChannelImageKeys = async (next: Record<string, boolean>) => {
     const AsyncStorage = getAsyncStorageSafe();
-    if (!AsyncStorage) return;
+    if (!AsyncStorage) {return;}
     try {
       await AsyncStorage.setItem(unlockedChannelImagesStorageKey, JSON.stringify(Object.keys(next)));
     } catch {
@@ -1941,17 +3960,321 @@ const FrontScreen = ({
 
   const markChannelImageUnlocked = (unlockKey: string) => {
     const key = String(unlockKey || '').trim();
-    if (!key) return;
+    if (!key) {return;}
+
+    recordChannelHostImageUnlock({
+      email: userEmailRef.current,
+      token: authTokenRef.current,
+    }, key).catch(() => {});
+
     setUnlockedChannelImageKeys((prev) => {
-      if (prev[key]) return prev;
+      if (prev[key]) {return prev;}
       const next = { ...prev, [key]: true };
-      void persistUnlockedChannelImageKeys(next);
+      persistUnlockedChannelImageKeys(next).catch(() => {});
       return next;
     });
   };
 
   const openChannelImageUnlockAd = (unlockKey: string) => {
     showRewardedToUnlockChannelImage(unlockKey);
+  };
+
+  const unlockedHypeChannelEventsStorageKey = useMemo(() => {
+    const emailKey = normalizeEmailKey(userEmail) || 'anon';
+    return `${HYPE_CHANNEL_EVENT_UNLOCKS_STORAGE_KEY_PREFIX}${emailKey}`;
+  }, [userEmail]);
+
+  const [unlockedHypeChannelEventKeys, setUnlockedHypeChannelEventKeys] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    let didCancel = false;
+    (async () => {
+      const AsyncStorage = getAsyncStorageSafe();
+      if (!AsyncStorage) {return;}
+      try {
+        const raw = await AsyncStorage.getItem(unlockedHypeChannelEventsStorageKey);
+        if (didCancel) {return;}
+        const parsed = raw ? JSON.parse(raw) : [];
+        const keys = Array.isArray(parsed) ? parsed.map(String) : [];
+        const next: Record<string, boolean> = {};
+        keys.forEach((key) => {
+          const normalizedKey = String(key || '').trim();
+          if (normalizedKey) {next[normalizedKey] = true;}
+        });
+        setUnlockedHypeChannelEventKeys(next);
+      } catch {
+        if (!didCancel) {setUnlockedHypeChannelEventKeys({});}
+      }
+    })();
+
+    return () => {
+      didCancel = true;
+    };
+  }, [unlockedHypeChannelEventsStorageKey]);
+
+  const persistUnlockedHypeChannelEventKeys = async (next: Record<string, boolean>) => {
+    const AsyncStorage = getAsyncStorageSafe();
+    if (!AsyncStorage) {return;}
+    try {
+      await AsyncStorage.setItem(unlockedHypeChannelEventsStorageKey, JSON.stringify(Object.keys(next)));
+    } catch {
+      // ignore
+    }
+  };
+
+  const markHypeChannelEventUnlocked = (unlockKey: string) => {
+    const key = String(unlockKey || '').trim();
+    if (!key) {return;}
+
+    setUnlockedHypeChannelEventKeys((prev) => {
+      if (prev[key]) {return prev;}
+      const next = { ...prev, [key]: true };
+      persistUnlockedHypeChannelEventKeys(next).catch(() => {});
+      return next;
+    });
+  };
+
+  const unlockHypeChannelEventFallback = (unlockKey?: string | null) => {
+    const key = String(unlockKey || '').trim();
+    if (!key) {return;}
+    markHypeChannelEventUnlocked(key);
+  };
+
+  const showRewardedToUnlockHypeChannelEvent = async (unlockKey: string) => {
+    const key = String(unlockKey || '').trim();
+    if (!key) {return;}
+    if (unlockedHypeChannelEventKeys[key]) {return;}
+
+    pendingHypeChannelEventUnlockKeyRef.current = key;
+    pendingIntimidadesPubIdRef.current = null;
+    pendingChannelImageUnlockKeyRef.current = null;
+    pendingHypeChannelReadingUnlockKeyRef.current = null;
+    rewardedEarnedRef.current = false;
+    rewardedShowRequestedRef.current = true;
+
+    if (!adsSdkReady && consentInFlightRef.current) {
+      const cfg = await consentInFlightRef.current;
+      if (!cfg.adsSdkReady) {
+        resetRewardedGateState();
+        unlockHypeChannelEventFallback(key);
+        return;
+      }
+    }
+
+    if (!adsSdkReady && !consentInFlightRef.current) {
+      resetRewardedGateState();
+      unlockHypeChannelEventFallback(key);
+      return;
+    }
+
+    const rewarded = rewardedAdRef.current;
+    if (!rewarded) {
+      if (rewardedShowTimeoutRef.current) {clearTimeout(rewardedShowTimeoutRef.current);}
+      rewardedShowTimeoutRef.current = setTimeout(() => {
+        const pendingKey = pendingHypeChannelEventUnlockKeyRef.current;
+        const currentRewarded = rewardedAdRef.current;
+        if (currentRewarded) {
+          try {
+            currentRewarded.load();
+          } catch {
+            // ignore
+          }
+          return;
+        }
+
+        resetRewardedGateState();
+        if (pendingKey) {
+          unlockHypeChannelEventFallback(pendingKey);
+        }
+      }, 7000);
+      return;
+    }
+
+    if (isRewardedLoaded) {
+      rewardedShowRequestedRef.current = false;
+      try {
+        rewarded.show();
+      } catch {
+        resetRewardedGateState();
+        unlockHypeChannelEventFallback(key);
+      }
+      return;
+    }
+
+    rewardedShowRequestedRef.current = true;
+
+    if (rewardedShowTimeoutRef.current) {clearTimeout(rewardedShowTimeoutRef.current);}
+    rewardedShowTimeoutRef.current = setTimeout(() => {
+      const stillWaiting = rewardedShowRequestedRef.current;
+      if (!stillWaiting) {return;}
+      const pendingKey = pendingHypeChannelEventUnlockKeyRef.current;
+      resetRewardedGateState();
+      setIsRewardedLoaded(false);
+      try {
+        rewarded.load();
+      } catch {
+        // ignore
+      }
+
+      if (pendingKey) {
+        unlockHypeChannelEventFallback(pendingKey);
+      }
+    }, 7000);
+
+    try {
+      rewarded.load();
+    } catch {
+      // ignore
+    }
+  };
+
+  const unlockedHypeChannelReadingsStorageKey = useMemo(() => {
+    const emailKey = normalizeEmailKey(userEmail) || 'anon';
+    return `${HYPE_CHANNEL_READING_UNLOCKS_STORAGE_KEY_PREFIX}${emailKey}`;
+  }, [userEmail]);
+
+  const [unlockedHypeChannelReadingKeys, setUnlockedHypeChannelReadingKeys] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    let didCancel = false;
+    (async () => {
+      const AsyncStorage = getAsyncStorageSafe();
+      if (!AsyncStorage) {return;}
+      try {
+        const raw = await AsyncStorage.getItem(unlockedHypeChannelReadingsStorageKey);
+        if (didCancel) {return;}
+        const parsed = raw ? JSON.parse(raw) : [];
+        const keys = Array.isArray(parsed) ? parsed.map(String) : [];
+        const next: Record<string, boolean> = {};
+        keys.forEach((key) => {
+          const normalizedKey = String(key || '').trim();
+          if (normalizedKey) {next[normalizedKey] = true;}
+        });
+        setUnlockedHypeChannelReadingKeys(next);
+      } catch {
+        if (!didCancel) {setUnlockedHypeChannelReadingKeys({});}
+      }
+    })();
+
+    return () => {
+      didCancel = true;
+    };
+  }, [unlockedHypeChannelReadingsStorageKey]);
+
+  const persistUnlockedHypeChannelReadingKeys = async (next: Record<string, boolean>) => {
+    const AsyncStorage = getAsyncStorageSafe();
+    if (!AsyncStorage) {return;}
+    try {
+      await AsyncStorage.setItem(unlockedHypeChannelReadingsStorageKey, JSON.stringify(Object.keys(next)));
+    } catch {
+      // ignore
+    }
+  };
+
+  const markHypeChannelReadingUnlocked = (unlockKey: string) => {
+    const key = String(unlockKey || '').trim();
+    if (!key) {return;}
+
+    setUnlockedHypeChannelReadingKeys((prev) => {
+      if (prev[key]) {return prev;}
+      const next = { ...prev, [key]: true };
+      persistUnlockedHypeChannelReadingKeys(next).catch(() => {});
+      return next;
+    });
+  };
+
+  const unlockHypeChannelReadingFallback = (unlockKey?: string | null) => {
+    const key = String(unlockKey || '').trim();
+    if (!key) {return;}
+    markHypeChannelReadingUnlocked(key);
+  };
+
+  const showRewardedToUnlockHypeChannelReading = async (unlockKey: string) => {
+    const key = String(unlockKey || '').trim();
+    if (!key) {return;}
+    if (unlockedHypeChannelReadingKeys[key]) {return;}
+
+    pendingHypeChannelReadingUnlockKeyRef.current = key;
+    pendingIntimidadesPubIdRef.current = null;
+    pendingChannelImageUnlockKeyRef.current = null;
+    pendingHypeChannelEventUnlockKeyRef.current = null;
+    rewardedEarnedRef.current = false;
+    rewardedShowRequestedRef.current = true;
+
+    if (!adsSdkReady && consentInFlightRef.current) {
+      const cfg = await consentInFlightRef.current;
+      if (!cfg.adsSdkReady) {
+        resetRewardedGateState();
+        unlockHypeChannelReadingFallback(key);
+        return;
+      }
+    }
+
+    if (!adsSdkReady && !consentInFlightRef.current) {
+      resetRewardedGateState();
+      unlockHypeChannelReadingFallback(key);
+      return;
+    }
+
+    const rewarded = rewardedAdRef.current;
+    if (!rewarded) {
+      if (rewardedShowTimeoutRef.current) {clearTimeout(rewardedShowTimeoutRef.current);}
+      rewardedShowTimeoutRef.current = setTimeout(() => {
+        const pendingKey = pendingHypeChannelReadingUnlockKeyRef.current;
+        const currentRewarded = rewardedAdRef.current;
+        if (currentRewarded) {
+          try {
+            currentRewarded.load();
+          } catch {
+            // ignore
+          }
+          return;
+        }
+
+        resetRewardedGateState();
+        if (pendingKey) {
+          unlockHypeChannelReadingFallback(pendingKey);
+        }
+      }, 7000);
+      return;
+    }
+
+    if (isRewardedLoaded) {
+      rewardedShowRequestedRef.current = false;
+      try {
+        rewarded.show();
+      } catch {
+        resetRewardedGateState();
+        unlockHypeChannelReadingFallback(key);
+      }
+      return;
+    }
+
+    rewardedShowRequestedRef.current = true;
+
+    if (rewardedShowTimeoutRef.current) {clearTimeout(rewardedShowTimeoutRef.current);}
+    rewardedShowTimeoutRef.current = setTimeout(() => {
+      const stillWaiting = rewardedShowRequestedRef.current;
+      if (!stillWaiting) {return;}
+      const pendingKey = pendingHypeChannelReadingUnlockKeyRef.current;
+      resetRewardedGateState();
+      setIsRewardedLoaded(false);
+      try {
+        rewarded.load();
+      } catch {
+        // ignore
+      }
+
+      if (pendingKey) {
+        unlockHypeChannelReadingFallback(pendingKey);
+      }
+    }, 7000);
+
+    try {
+      rewarded.load();
+    } catch {
+      // ignore
+    }
   };
 
   const [showReEnableGalleryPermissionModal, setShowReEnableGalleryPermissionModal] = useState(false);
@@ -1999,21 +4322,21 @@ const FrontScreen = ({
 
   const formatUsernameWithAt = (rawUsername?: string) => {
     const trimmed = (rawUsername ?? 'Usuario').trim();
-    if (!trimmed) return '@Usuario';
+    if (!trimmed) {return '@Usuario';}
     return trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
   };
 
   const formatGroupHashtagWithHash = (rawHashtag?: string) => {
     const trimmed = (rawHashtag ?? '').trim();
-    if (!trimmed) return '#';
+    if (!trimmed) {return '#';}
     return trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
   };
 
   const normalizeSocialIconKey = (raw: any) => {
     const key = String(raw ?? '').trim().toLowerCase();
-    if (!key) return '';
-    if (key === 'x' || key === 'x_twitter' || key === 'xtwitter') return 'twitter';
-    if (key === 'only_fans') return 'onlyfans';
+    if (!key) {return '';}
+    if (key === 'x' || key === 'x_twitter' || key === 'xtwitter') {return 'twitter';}
+    if (key === 'only_fans') {return 'onlyfans';}
     return key;
   };
 
@@ -2023,8 +4346,8 @@ const FrontScreen = ({
   };
 
   const getCategoryLabel = (category: string | undefined) => {
-    if (!category) return '';
-    if (language === 'es') return category;
+    if (!category) {return '';}
+    if (language === 'es') {return category;}
     const map = CATEGORY_LABELS[language];
     return map?.[category] ?? category;
   };
@@ -2101,9 +4424,9 @@ const FrontScreen = ({
   };
 
   useEffect(() => {
-    if (!showGroupMembersPanel) return;
-    if (!groupMembersPanelGroup) return;
-    if (!authToken) return;
+    if (!showGroupMembersPanel) {return;}
+    if (!groupMembersPanelGroup) {return;}
+    if (!authToken) {return;}
 
     const group = groupMembersPanelGroup;
     const seq = (groupMembersLoadSeqRef.current += 1);
@@ -2111,8 +4434,8 @@ const FrontScreen = ({
 
     // Start loading only after the panel opening animation/interaction settles.
     InteractionManager.runAfterInteractions(() => {
-      if (!active) return;
-      if (!showGroupMembersPanel) return;
+      if (!active) {return;}
+      if (!showGroupMembersPanel) {return;}
 
       (async () => {
         try {
@@ -2122,7 +4445,7 @@ const FrontScreen = ({
             },
           });
 
-          if (!active || groupMembersLoadSeqRef.current !== seq) return;
+          if (!active || groupMembersLoadSeqRef.current !== seq) {return;}
 
           if (!resp.ok) {
             setGroupMembers([]);
@@ -2130,7 +4453,7 @@ const FrontScreen = ({
           }
 
           const data = await resp.json();
-          if (!active || groupMembersLoadSeqRef.current !== seq) return;
+          if (!active || groupMembersLoadSeqRef.current !== seq) {return;}
           if (!Array.isArray(data)) {
             setGroupMembers([]);
             return;
@@ -2163,11 +4486,11 @@ const FrontScreen = ({
 
           setGroupMembers(mapped);
         } catch (e) {
-          if (!active || groupMembersLoadSeqRef.current !== seq) return;
+          if (!active || groupMembersLoadSeqRef.current !== seq) {return;}
           console.error('Error loading group members:', e);
           setGroupMembers([]);
         } finally {
-          if (!active || groupMembersLoadSeqRef.current !== seq) return;
+          if (!active || groupMembersLoadSeqRef.current !== seq) {return;}
           setIsLoadingGroupMembers(false);
         }
       })();
@@ -2182,11 +4505,11 @@ const FrontScreen = ({
     (async () => {
       try {
         const AsyncStorage = getAsyncStorageSafe();
-        if (!AsyncStorage) return;
+        if (!AsyncStorage) {return;}
         const raw = await AsyncStorage.getItem(BLOCKED_JOINED_GROUP_IDS_KEY);
-        if (!raw) return;
+        if (!raw) {return;}
         const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) return;
+        if (!Array.isArray(parsed)) {return;}
         setBlockedJoinedGroupIds(parsed.map(String));
       } catch (e) {
         // Don't pass the Error object to console.warn(), it renders as an ERROR warning.
@@ -2197,7 +4520,7 @@ const FrontScreen = ({
   }, []);
 
   const visibleJoinedGroups = useMemo(() => {
-    if (blockedJoinedGroupIds.length === 0) return joinedGroups;
+    if (blockedJoinedGroupIds.length === 0) {return joinedGroups;}
     const blocked = new Set(blockedJoinedGroupIds);
     return joinedGroups.filter(g => !blocked.has(g.id));
   }, [joinedGroups, blockedJoinedGroupIds]);
@@ -2294,41 +4617,10 @@ const FrontScreen = ({
 
   const [sentGroupRequestStatusByTarget, setSentGroupRequestStatusByTarget] = useState<Record<string, 'pending' | 'accepted' | 'blocked'>>({});
 
-  type NotificationItem = {
-    id: number;
-    type: 'group_join_request';
-    groupId: number;
-    postId?: number | null;
-    postCreatedAt?: string | null;
-    status: 'pending' | 'accepted' | 'ignored' | string;
-    createdAt: string;
-    requesterUsername: string;
-    groupHashtag: string;
-  };
-
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [isLoadingNotifications, setIsLoadingNotifications] = useState(false);
-
   const [pendingJoinedGroupToast, setPendingJoinedGroupToast] = useState<{
     groupHashtag: string;
     requesterUsername: string;
   } | null>(null);
-
-  const [readNotificationIds, setReadNotificationIds] = useState<Record<number, true>>({});
-
-  const markNotificationAsRead = (id: number) => {
-    setReadNotificationIds(prev => (prev[id] ? prev : { ...prev, [id]: true }));
-  };
-
-  const unreadNotificationsCount = useMemo(() => {
-    return notifications.filter(n => n.status === 'pending' && !readNotificationIds[n.id]).length;
-  }, [notifications, readNotificationIds]);
-
-  useEffect(() => {
-    if (!authToken) return;
-    fetchNotifications();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authToken]);
 
   const [isSavingGroup, setIsSavingGroup] = useState(false);
 
@@ -2339,12 +4631,12 @@ const FrontScreen = ({
   };
 
   const handleCreateGroup = async () => {
-    if (!groupImageUri || !groupHashtag) return;
+    if (!groupImageUri || !groupHashtag) {return;}
     if (!authToken || !accountVerified) {
       showActionToast(t('chat.lockedYourGroupsMessage' as TranslationKey));
       return;
     }
-    if (isSavingGroup) return;
+    if (isSavingGroup) {return;}
 
     setIsSavingGroup(true);
     try {
@@ -2467,10 +4759,10 @@ const FrontScreen = ({
   const [profilePhotoUri, setProfilePhotoUri] = useState<string | undefined>(
     initialProfilePhotoUri,
   );
-  const [socialNetworks, setSocialNetworks] = useState<SocialNetwork[]>(
+  const [, setSocialNetworks] = useState<SocialNetwork[]>(
     initialSocialNetworks || [],
   );
-  const [activeBottomTab, setActiveBottomTab] = useState<BottomTabState>('home');
+  const [activeBottomTab, setActiveBottomTab] = useState<BottomTabState>(initialBottomTab ?? 'home');
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const keyboardHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2484,7 +4776,7 @@ const FrontScreen = ({
   const prevActiveBottomTabRef = useRef<string>('home');
   const [isHomePostsLoading, setIsHomePostsLoading] = useState(false);
   const [hasHomePostsLoadedOnce, setHasHomePostsLoadedOnce] = useState(false);
-  const [isHomeMainScrollEnabled, setIsHomeMainScrollEnabled] = useState(true);
+  const [, setIsHomeMainScrollEnabled] = useState(true);
   const isHomeCarouselGestureActiveRef = useRef(false);
   const homePagerTransitionInFlightRef = useRef(false);
   const presentationDotsRefsMap = useRef<Record<string, PresentationDotsHandle | null>>({});
@@ -2492,7 +4784,6 @@ const FrontScreen = ({
   const homeTabDidMountRef = useRef(false);
   const [homeRefreshCounter, setHomeRefreshCounter] = useState(0);
   const homeLoaderPulseAnim = useRef(new Animated.Value(0)).current;
-  const homeLoaderPulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
   const homeLoaderRotateAnim = useRef(new Animated.Value(0)).current;
   const homeLoaderRotateLoopRef = useRef<Animated.CompositeAnimation | null>(null);
   const profileEmptyArrowAnim = useRef(new Animated.Value(0)).current;
@@ -2502,6 +4793,8 @@ const FrontScreen = ({
   const homeSwipeTutorialAnim = useRef(new Animated.Value(0)).current;
   const homeSwipeTutorialLoopRef = useRef<Animated.CompositeAnimation | null>(null);
   const homeLoaderStartedAtRef = useRef<number>(0);
+  const homePostsFetchSeqRef = useRef(0);
+  const homePostsAbortControllerRef = useRef<AbortController | null>(null);
   const [showSidePanel, setShowSidePanel] = useState(false);
   const [sidePanelAnimation] = useState(new Animated.Value(0));
   const [isProfileAvatarPulsing, setIsProfileAvatarPulsing] = useState(false);
@@ -2520,12 +4813,41 @@ const FrontScreen = ({
   const [chatView, setChatView] = useState<'channel' | 'channels' | 'groups' | 'groupChat'>('channel');
   const [groupsTab, setGroupsTab] = useState<'tusGrupos' | 'unidos'>('tusGrupos');
   const [joinedGroupsRenderCount, setJoinedGroupsRenderCount] = useState(JOINED_GROUPS_RENDER_BATCH);
-  const contentTabTransitionProgress = useSharedValue(1);
-  const contentTabTransitionDirection = useSharedValue(0);
-  const lastAnimatedBottomTabRef = useRef<MainBottomTab>('home');
+  const isHomeFeedTabActive = isHomeFeedBottomTab(activeBottomTab);
+
+  useEffect(() => {
+    if (!initialBottomTab) {return;}
+    onConsumeInitialBottomTab?.();
+  }, [initialBottomTab, onConsumeInitialBottomTab]);
+
+  useEffect(() => {
+    if (!joinedGroupsRedirect) {return;}
+    setPendingJoinedGroupToast(joinedGroupsRedirect);
+    setActiveBottomTab('chat');
+    setChatView('groups');
+    setGroupsTab('unidos');
+    onConsumeJoinedGroupsRedirect?.();
+  }, [joinedGroupsRedirect, onConsumeJoinedGroupsRedirect]);
+
+  const [pendingJoinedChannelNotificationRedirect, setPendingJoinedChannelNotificationRedirect] = useState<{
+    postId: string;
+    publisherUsername: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!joinedChannelRedirect?.postId) {return;}
+    setPendingJoinedChannelNotificationRedirect({
+      postId: String(joinedChannelRedirect.postId),
+      publisherUsername: String(joinedChannelRedirect.publisherUsername || ''),
+    });
+    setActiveBottomTab('chat');
+    setChatView('channel');
+    setChannelTab('tusCanales');
+    onConsumeJoinedChannelRedirect?.();
+  }, [joinedChannelRedirect, onConsumeJoinedChannelRedirect]);
 
   const handleBottomTabChange = useCallback((nextTab: MainBottomTab) => {
-    if (nextTab === 'home') {
+    if (isHomeFeedBottomTab(nextTab)) {
       setHomeRefreshCounter(c => c + 1);
     }
     setActiveBottomTab(nextTab);
@@ -2533,7 +4855,7 @@ const FrontScreen = ({
   }, []);
 
   useEffect(() => {
-    if (groupsTab !== 'unidos') return;
+    if (groupsTab !== 'unidos') {return;}
     setJoinedGroupsRenderCount(JOINED_GROUPS_RENDER_BATCH);
   }, [groupsTab]);
 
@@ -2550,31 +4872,87 @@ const FrontScreen = ({
   );
 
   const loadMoreJoinedGroupsIfNeeded = useCallback((event: any) => {
-    if (groupsTab !== 'unidos') return;
-    if (joinedGroupsRenderCount >= visibleJoinedGroups.length) return;
+    if (groupsTab !== 'unidos') {return;}
+    if (joinedGroupsRenderCount >= visibleJoinedGroups.length) {return;}
 
     const native = event?.nativeEvent;
-    if (!native) return;
+    if (!native) {return;}
 
     const layoutHeight = Number(native.layoutMeasurement?.height ?? 0);
     const offsetY = Number(native.contentOffset?.y ?? 0);
     const contentHeight = Number(native.contentSize?.height ?? 0);
-    if (!Number.isFinite(layoutHeight) || !Number.isFinite(offsetY) || !Number.isFinite(contentHeight)) return;
+    if (!Number.isFinite(layoutHeight) || !Number.isFinite(offsetY) || !Number.isFinite(contentHeight)) {return;}
 
     const distanceToBottom = contentHeight - (offsetY + layoutHeight);
-    if (distanceToBottom > 220) return;
+    if (distanceToBottom > 220) {return;}
 
     setJoinedGroupsRenderCount(prev => Math.min(prev + JOINED_GROUPS_RENDER_BATCH, visibleJoinedGroups.length));
   }, [groupsTab, joinedGroupsRenderCount, visibleJoinedGroups.length]);
 
   const [chatInputValue, setChatInputValue] = useState('');
   const [showChannelAttachmentPanel, setShowChannelAttachmentPanel] = useState(false);
+  const [showChannelEventPanel, setShowChannelEventPanel] = useState(false);
+  const [isChannelEventPanelMinimized, setIsChannelEventPanelMinimized] = useState(false);
+  const channelEventPanelScrollRef = useRef<ScrollView | null>(null);
+  const channelEventHypeCostSectionYRef = useRef(0);
+  const [showChannelEventTypeOptions, setShowChannelEventTypeOptions] = useState(false);
+  const [showChannelEventSocialOptions, setShowChannelEventSocialOptions] = useState(false);
+  const [channelEventTypeSearchQuery, setChannelEventTypeSearchQuery] = useState('');
+  const [selectedChannelEventType, setSelectedChannelEventType] = useState<TranslationKey | null>(null);
+  const [channelEventName, setChannelEventName] = useState('');
+  const [channelEventDescription, setChannelEventDescription] = useState('');
+  const [channelEventDateText, setChannelEventDateText] = useState('');
+  const [channelEventDateValue, setChannelEventDateValue] = useState<Date | null>(null);
+  const [channelEventDateError, setChannelEventDateError] = useState('');
+  const [showChannelEventDatePicker, setShowChannelEventDatePicker] = useState(false);
+  const [channelEventDraftDateValue, setChannelEventDraftDateValue] = useState<Date>(getChannelEventMinimumDate());
+  const [channelEventTimeText, setChannelEventTimeText] = useState('');
+  const [channelEventTimeValue, setChannelEventTimeValue] = useState<Date | null>(null);
+  const [showChannelEventTimePicker, setShowChannelEventTimePicker] = useState(false);
+  const [channelEventDraftTimeValue, setChannelEventDraftTimeValue] = useState<Date>(new Date());
+  const [channelEventTimeFormat, setChannelEventTimeFormat] = useState<ChannelEventTimeFormat>('european');
+  const [channelEventDurationMinutes, setChannelEventDurationMinutes] = useState<number | null>(null);
+  const [showChannelEventDurationPicker, setShowChannelEventDurationPicker] = useState(false);
+  const [channelEventDraftDurationMinutes, setChannelEventDraftDurationMinutes] = useState(1);
+  const [selectedChannelEventSocialNetwork, setSelectedChannelEventSocialNetwork] = useState<(typeof CHANNEL_EVENT_SOCIAL_OPTIONS)[number] | null>(null);
+  const [channelEventSocialLink, setChannelEventSocialLink] = useState('');
+  const [channelEventSocialLinkError, setChannelEventSocialLinkError] = useState('');
+  const [channelEventLinkedSocialNetworks, setChannelEventLinkedSocialNetworks] = useState<Array<{
+    network: (typeof CHANNEL_EVENT_SOCIAL_OPTIONS)[number];
+    link: string;
+  }>>([]);
+  const [channelEventLocationLabelDraft, setChannelEventLocationLabelDraft] = useState('');
+  const [channelEventLocationUrlDraft, setChannelEventLocationUrlDraft] = useState('');
+  const [channelEventLocationPlaceIdDraft, setChannelEventLocationPlaceIdDraft] = useState<string | null>(null);
+  const [channelEventLocationLatDraft, setChannelEventLocationLatDraft] = useState<number | null>(null);
+  const [channelEventLocationLngDraft, setChannelEventLocationLngDraft] = useState<number | null>(null);
+  const [channelEventTasksEnabled, setChannelEventTasksEnabled] = useState(false);
+  const [channelEventAssignTaskEnabled, setChannelEventAssignTaskEnabled] = useState(false);
+  const [channelEventRewardTaskEnabled, setChannelEventRewardTaskEnabled] = useState(false);
+  const [channelEventTaskDescriptions, setChannelEventTaskDescriptions] = useState<string[]>(['', '', '']);
+  const [channelEventTaskRewardInputs, setChannelEventTaskRewardInputs] = useState<string[]>(['', '', '']);
+  const [channelEventTaskAssigneeInputs, setChannelEventTaskAssigneeInputs] = useState<string[]>(['', '', '']);
+  const [channelEventTaskAssigneeErrors, setChannelEventTaskAssigneeErrors] = useState<string[]>(['', '', '']);
+  const [channelEventTaskAssignments, setChannelEventTaskAssignments] = useState<Array<Array<{ username: string; memberEmail?: string }>>>([[], [], []]);
+  const [channelEventWhiteKeysBalance, setChannelEventWhiteKeysBalance] = useState<number | null>(null);
+  const [completingChannelEventTaskKey, setCompletingChannelEventTaskKey] = useState<string | null>(null);
+  const [channelEventCountdownNowMs, setChannelEventCountdownNowMs] = useState(() => Date.now());
+  const [channelEventImageUri, setChannelEventImageUri] = useState<string | null>(null);
+  const [channelEventHypeCostInput, setChannelEventHypeCostInput] = useState('');
+  const [showChannelEventHypeCostInfo, setShowChannelEventHypeCostInfo] = useState(false);
+  const [activeChannelEventDonationPanelKey, setActiveChannelEventDonationPanelKey] = useState<string | null>(null);
+  const [donatingChannelEventMessageKey, setDonatingChannelEventMessageKey] = useState<string | null>(null);
+  const [channelEventDonationErrorMessage, setChannelEventDonationErrorMessage] = useState('');
+  const [isCreatingChannelEvent, setIsCreatingChannelEvent] = useState(false);
   const [showChannelImageComposer, setShowChannelImageComposer] = useState(false);
   const [channelDraftImageUri, setChannelDraftImageUri] = useState<string | null>(null);
   const [channelDraftCaption, setChannelDraftCaption] = useState('');
   const [isSendingChannelImage, setIsSendingChannelImage] = useState(false);
   const [showChannelImageViewer, setShowChannelImageViewer] = useState(false);
   const [channelImageViewerUri, setChannelImageViewerUri] = useState<string | null>(null);
+  const [expandedChannelReading, setExpandedChannelReading] = useState<{ payload: ChannelReadingMessagePayload; message?: any } | null>(null);
+  const [expandedChannelReadingCitation, setExpandedChannelReadingCitation] = useState<ChannelReadingCitation | null>(null);
+  const expandedChannelReadingScrollRef = useRef<ScrollView | null>(null);
   const [isSendingChannelMessage, setIsSendingChannelMessage] = useState(false);
   const [groupChatInputValue, setGroupChatInputValue] = useState('');
   const [showGroupAttachmentPanel, setShowGroupAttachmentPanel] = useState(false);
@@ -2597,7 +4975,6 @@ const FrontScreen = ({
   const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
   const [replyingToMessageIndex, setReplyingToMessageIndex] = useState<number | null>(null);
   const [replyingToUsername, setReplyingToUsername] = useState<string | null>(null);
-  const [chatMode, setChatMode] = useState<'Tu canal' | 'Grupal'>('Tu canal');
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [groupChatMessages, setGroupChatMessages] = useState<any[]>([]);
   const [groupChatLoadingGroupId, setGroupChatLoadingGroupId] = useState<string | null>(null);
@@ -2608,23 +4985,736 @@ const FrontScreen = ({
   const [joinedChannelLastSeenReplySortByPostId, setJoinedChannelLastSeenReplySortByPostId] = useState<Record<string, number>>({});
   const [channelInteractions, setChannelInteractions] = useState<any[]>([]);
   const [channelTab, setChannelTab] = useState<'Tu canal' | 'tusCanales'>('Tu canal');
+  const [hypeTab, setHypeTab] = useState<'eventos' | 'lecturas'>('eventos');
+  const [hypeHeaderHeight, setHypeHeaderHeight] = useState(0);
+  const [selectedHypeCategory, setSelectedHypeCategory] = useState<HypeCategoryOption>(HYPE_CATEGORY_OPTIONS[0]);
+  const [isHypeAppActive, setIsHypeAppActive] = useState(AppState.currentState === 'active');
+  const [hypeViralEventPages, setHypeViralEventPages] = useState<HypeViralPagesState>({});
+  const hypeViralEventsRequestSeqRef = useRef<Record<string, number>>({});
+  const hypeViralEventPagesRef = useRef<HypeViralPagesState>({});
+  const [hypeViralReadingPages, setHypeViralReadingPages] = useState<HypeViralPagesState>({});
+  const hypeViralReadingsRequestSeqRef = useRef<Record<string, number>>({});
+  const hypeViralReadingPagesRef = useRef<HypeViralPagesState>({});
+  const selectedHypeCategoryRef = useRef<HypeCategoryOption>(selectedHypeCategory);
+  const renderableHypeViralEventsLengthRef = useRef(0);
+  const renderableHypeViralReadingsLengthRef = useRef(0);
   const [activeJoinedChannelOptionsKey, setActiveJoinedChannelOptionsKey] = useState<string | null>(null);
+  const [selectedChannel, setSelectedChannel] = useState<any | null>(null);
+  const [myPublication, setMyPublication] = useState<Publication | undefined>(undefined);
   // Used to place chat panels exactly below the top tabs (Groups/Channel).
   const [chatTopTabsHeight, setChatTopTabsHeight] = useState<number>(0);
   const chatPanelsTopOffset = useMemo(() => {
     const measured = CHAT_TABS_TOP + (chatTopTabsHeight || 0) + CHAT_TABS_GAP;
     return Math.max(CHAT_TABS_DEFAULT_OFFSET, measured);
   }, [chatTopTabsHeight]);
-  const [channelMessagesTab, setChannelMessagesTab] = useState<'General' | 'Respuestas'>('General');
+  const activeHypeViralEventsPage = getHypeViralPageState(hypeViralEventPages, selectedHypeCategory);
+  const activeHypeViralReadingsPage = getHypeViralPageState(hypeViralReadingPages, selectedHypeCategory);
+  const hypeViralEvents = activeHypeViralEventsPage.items;
+  const hypeViralReadings = activeHypeViralReadingsPage.items;
+  const isLoadingHypeViralEvents = activeHypeViralEventsPage.isLoadingInitial;
+  const isLoadingHypeViralEventsMore = activeHypeViralEventsPage.isLoadingMore;
+  const hasLoadedHypeViralEvents = activeHypeViralEventsPage.hasLoadedOnce;
+  const isLoadingHypeViralReadings = activeHypeViralReadingsPage.isLoadingInitial;
+  const isLoadingHypeViralReadingsMore = activeHypeViralReadingsPage.isLoadingMore;
+  const hasLoadedHypeViralReadings = activeHypeViralReadingsPage.hasLoadedOnce;
+  const [channelMessagesTab, setChannelMessagesTab] = useState<ChannelMessagesTab>('General');
+  const isPublished = !!myPublication;
+  const userPublication = myPublication;
+  const channelEventSourceCreatedAt = selectedChannel?.post_created_at
+    ?? selectedChannel?.postCreatedAt
+    ?? selectedChannel?.created_at
+    ?? selectedChannel?.createdAt
+    ?? userPublication?.createdAt
+    ?? null;
+  const channelEventDurationMaxMinutes = getChannelEventRemainingDurationMinutes(channelEventSourceCreatedAt);
+  const channelEventDurationHourOptions = Array.from(
+    { length: Math.max(1, Math.floor(channelEventDurationMaxMinutes / 60) + 1) },
+    (_, hour) => `${hour}`.padStart(2, '0'),
+  );
+  const channelEventTimeHourOptions = channelEventTimeFormat === 'us' ? CHANNEL_EVENT_TIME_HOURS_US : CHANNEL_EVENT_TIME_HOURS;
+  const channelEventDraftTimeMeridiem = getChannelEventTimeMeridiem(channelEventDraftTimeValue);
+  const channelEventDraftTimeHourValue = channelEventTimeFormat === 'us'
+    ? getChannelEventTimeHour12(channelEventDraftTimeValue)
+    : channelEventDraftTimeValue.getHours();
+  const channelEventJoinedUsersByUsername = useMemo(() => {
+    const next = new Map<string, { username: string; memberEmail?: string }>();
 
-  const [selectedChannel, setSelectedChannel] = useState<any | null>(null);
+    channelInteractions.forEach((row: any) => {
+      const normalizedUsername = normalizeChannelEventTaskUsername(row?.username);
+      if (!normalizedUsername) {return;}
+
+      const memberEmailRaw = row?.viewer_email ?? row?.viewerEmail ?? row?.member_email ?? row?.memberEmail;
+      const memberEmail = typeof memberEmailRaw === 'string' ? memberEmailRaw.trim() : undefined;
+
+      next.set(normalizedUsername.toLowerCase(), {
+        username: normalizedUsername,
+        memberEmail,
+      });
+    });
+
+    return next;
+  }, [channelInteractions]);
+  const channelEventJoinedUsers = useMemo(
+    () => Array.from(channelEventJoinedUsersByUsername.values()).sort((left, right) => left.username.localeCompare(right.username)),
+    [channelEventJoinedUsersByUsername],
+  );
+
+  const filteredChannelEventTypeOptions = useMemo(() => {
+    const query = channelEventTypeSearchQuery.trim().toLowerCase();
+    if (!query) {return CHANNEL_EVENT_TYPE_OPTIONS;}
+    return CHANNEL_EVENT_TYPE_OPTIONS.filter(option => t(option).toLowerCase().includes(query));
+  }, [channelEventTypeSearchQuery, t]);
+
+  const channelEventMinimizedTitle = useMemo(() => {
+    const trimmed = channelEventName.trim();
+    if (trimmed) {return trimmed;}
+
+    return localize({
+      es: 'Sin nombre',
+      en: 'Untitled',
+      fr: 'Sans nom',
+      pt: 'Sem nome',
+      de: 'Ohne Namen',
+      it: 'Senza nome',
+    });
+  }, [channelEventName, localize]);
+
+  const channelEventTaskRewardValues = channelEventTaskRewardInputs.map(value => sanitizeChannelEventAmountInput(String(value || '')));
+  const channelEventTaskRewardTotal = channelEventTaskRewardValues.reduce(
+    (sum, value) => sum + (Number.parseInt(value, 10) || 0),
+    0,
+  );
+  const channelEventRewardValidationError = !channelEventRewardTaskEnabled || channelEventWhiteKeysBalance === null
+    ? ''
+    : channelEventTaskRewardValues.some(value => (Number.parseInt(value, 10) || 0) > channelEventWhiteKeysBalance)
+      || channelEventTaskRewardTotal > channelEventWhiteKeysBalance
+      ? localize({
+        es: 'No tienes suficientes llaves blancas.',
+        en: 'You do not have enough white keys.',
+        fr: 'Vous n’avez pas assez de clés blanches.',
+        pt: 'Você não tem chaves brancas suficientes.',
+        de: 'Du hast nicht genug weiße Schlüssel.',
+        it: 'Non hai abbastanza chiavi bianche.',
+      })
+      : '';
+  const channelEventRewardBalanceHint = !channelEventRewardTaskEnabled || channelEventWhiteKeysBalance === null
+    ? ''
+    : localize({
+      es: `Llaves blancas disponibles: ${channelEventWhiteKeysBalance}`,
+      en: `Available white keys: ${channelEventWhiteKeysBalance}`,
+      fr: `Clés blanches disponibles : ${channelEventWhiteKeysBalance}`,
+      pt: `Chaves brancas disponíveis: ${channelEventWhiteKeysBalance}`,
+      de: `Verfügbare weiße Schlüssel: ${channelEventWhiteKeysBalance}`,
+      it: `Chiavi bianche disponibili: ${channelEventWhiteKeysBalance}`,
+    });
+  const channelEventHasTaskDescriptions = channelEventTaskDescriptions.some(value => value.trim().length > 0);
+  const channelEventAllRewardedTasksHaveAmount = channelEventTaskDescriptions.every((value, index) => {
+    if (!value.trim()) {return true;}
+    if (!channelEventRewardTaskEnabled) {return true;}
+    return (Number.parseInt(channelEventTaskRewardValues[index] ?? '0', 10) || 0) > 0;
+  });
+  const channelEventTaskAssignmentsRequired = channelEventTasksEnabled && channelEventAssignTaskEnabled;
+  const channelEventAllDescribedTasksAssigned = channelEventTaskDescriptions.every((value, index) => {
+    if (!value.trim()) {return true;}
+    return (channelEventTaskAssignments[index] ?? []).length > 0;
+  });
+  const handleChannelEventHypeCostInputChange = useCallback((text: string) => {
+    setChannelEventHypeCostInput(formatChannelEventIntegerInput(text));
+  }, []);
+  const handleShowChannelEventHypeCostInfo = useCallback(() => {
+    setShowChannelEventHypeCostInfo(previousValue => !previousValue);
+  }, []);
+  const canCreateChannelEvent = !isCreatingChannelEvent
+    && !!selectedChannelEventType
+    && channelEventName.trim().length > 0
+    && channelEventDescription.trim().length > 0
+    && (
+      channelEventTasksEnabled
+        ? !!channelEventDurationMinutes
+          && channelEventHasTaskDescriptions
+          && (!channelEventRewardTaskEnabled || channelEventAllRewardedTasksHaveAmount)
+          && !channelEventRewardValidationError
+          && (!channelEventTaskAssignmentsRequired || channelEventAllDescribedTasksAssigned)
+        : (!!channelEventDateValue && !!channelEventTimeValue && !channelEventDateError)
+    );
+
+  const refreshChannelEventWhiteKeysBalance = useCallback(async () => {
+    const progress = await loadHomeIntimidadesDailyGoalProgress({
+      email: userEmail,
+      token: authToken,
+    });
+    setChannelEventWhiteKeysBalance(progress.whiteKeysBalance);
+    return progress.whiteKeysBalance;
+  }, [authToken, userEmail]);
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setChannelEventCountdownNowMs(Date.now());
+    }, 1000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showChannelEventPanel) {return;}
+
+    let cancelled = false;
+
+    refreshChannelEventWhiteKeysBalance()
+      .then(balance => {
+        if (!cancelled) {
+          setChannelEventWhiteKeysBalance(balance);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshChannelEventWhiteKeysBalance, showChannelEventPanel]);
+
+  useEffect(() => {
+    if (!activeChannelEventDonationPanelKey) {return;}
+
+    refreshChannelEventWhiteKeysBalance().catch(() => {});
+  }, [activeChannelEventDonationPanelKey, refreshChannelEventWhiteKeysBalance]);
+
+  const handleDonateChannelEvent = useCallback(async ({
+    messageId,
+    messageKey,
+    donationAmount,
+    postId,
+  }: {
+    messageId: number;
+    messageKey: string;
+    donationAmount: number;
+    postId?: number | string | null;
+  }) => {
+    if (!authToken) {return;}
+    if (!Number.isFinite(messageId) || messageId <= 0) {return;}
+    if (donatingChannelEventMessageKey === messageKey) {return;}
+
+    const insufficientDonationBalanceMessage = localize({
+      es: 'No tienes suficientes llaves para donar',
+      en: 'You do not have enough keys to donate',
+      fr: 'Vous n\'avez pas assez de clés pour faire un don',
+      pt: 'Não tens chaves suficientes para doar',
+      de: 'Du hast nicht genug Schlüssel zum Spenden',
+      it: 'Non hai abbastanza chiavi per donare',
+    });
+
+    if (channelEventWhiteKeysBalance !== null && donationAmount > channelEventWhiteKeysBalance) {
+      setChannelEventDonationErrorMessage(insufficientDonationBalanceMessage);
+      return;
+    }
+
+    setDonatingChannelEventMessageKey(messageKey);
+    setChannelEventDonationErrorMessage('');
+
+    try {
+      const response = await fetch(`${API_URL}/api/channels/messages/${messageId}/donate`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        if (payload?.code === 'INSUFFICIENT_WHITE_KEYS_FOR_DONATION') {
+          setChannelEventDonationErrorMessage(insufficientDonationBalanceMessage);
+          return;
+        }
+
+        throw new Error(payload?.error || localize({
+          es: 'No se pudo completar la donación.',
+          en: 'The donation could not be completed.',
+          fr: 'Le don n\'a pas pu être effectué.',
+          pt: 'Não foi possível concluir a doação.',
+          de: 'Die Spende konnte nicht abgeschlossen werden.',
+          it: 'Non è stato possibile completare la donazione.',
+        }));
+      }
+
+      if (typeof payload?.donorWhiteKeysBalance === 'number') {
+        setChannelEventWhiteKeysBalance(payload.donorWhiteKeysBalance);
+      } else {
+        await refreshChannelEventWhiteKeysBalance().catch(() => {});
+      }
+
+      const nextDonationTotal = Math.max(0, Math.floor(Number(payload?.channelEventDonationTotal) || 0));
+      if (Number.isFinite(Number(payload?.channelEventDonationTotal))) {
+        setHypeViralEventPages(prev => patchHypeViralPagesItems(prev, (event) => {
+          if (String(event?.id ?? '') !== String(messageId)) {return event;}
+          return {
+            ...event,
+            channel_event_donation_total: nextDonationTotal,
+          };
+        }));
+        setHypeViralReadingPages(prev => patchHypeViralPagesItems(prev, (reading) => {
+          if (String(reading?.id ?? '') !== String(messageId)) {return reading;}
+          return {
+            ...reading,
+            channel_event_donation_total: nextDonationTotal,
+          };
+        }));
+      }
+
+      const targetPostId = String(
+        postId ??
+        selectedChannel?.post_id ??
+        selectedChannel?.postId ??
+        selectedChannel?.id ??
+        ''
+      );
+      const selectedPostId = String(
+        selectedChannel?.post_id ??
+        selectedChannel?.postId ??
+        selectedChannel?.id ??
+        ''
+      );
+      if (targetPostId && selectedPostId && targetPostId === selectedPostId) {
+        await fetchChannelMessages(targetPostId, 'poll').catch(() => {});
+      }
+
+      setChannelEventDonationErrorMessage('');
+      setActiveChannelEventDonationPanelKey(null);
+    } catch (error: any) {
+      Alert.alert(errorTitle, error?.message || localize({
+        es: 'No se pudo completar la donación.',
+        en: 'The donation could not be completed.',
+        fr: 'Le don n\'a pas pu être effectué.',
+        pt: 'Não foi possível concluir a doação.',
+        de: 'Die Spende konnte nicht abgeschlossen werden.',
+        it: 'Non è stato possibile completare la donazione.',
+      }));
+    } finally {
+      setDonatingChannelEventMessageKey(current => (current === messageKey ? null : current));
+    }
+  }, [authToken, channelEventWhiteKeysBalance, donatingChannelEventMessageKey, errorTitle, localize, refreshChannelEventWhiteKeysBalance, selectedChannel]);
+
+  const handleSelectChannelEventSocialNetwork = useCallback((network: (typeof CHANNEL_EVENT_SOCIAL_OPTIONS)[number]) => {
+    setSelectedChannelEventSocialNetwork(prev => (prev === network ? null : network));
+    setChannelEventSocialLink('');
+    setChannelEventSocialLinkError('');
+  }, []);
+
+  const handleChannelEventSocialLinkChange = useCallback((text: string) => {
+    setChannelEventSocialLink(text);
+
+    if (selectedChannelEventSocialNetwork && text.trim()) {
+      const isValid = validateSocialLink(selectedChannelEventSocialNetwork, text);
+      if (!isValid) {
+        setChannelEventSocialLinkError(
+          `${t('front.linkMustBeFrom' as TranslationKey)} ${SOCIAL_PLATFORM_NAMES[selectedChannelEventSocialNetwork] ?? selectedChannelEventSocialNetwork}`,
+        );
+      } else {
+        setChannelEventSocialLinkError('');
+      }
+    } else {
+      setChannelEventSocialLinkError('');
+    }
+  }, [selectedChannelEventSocialNetwork, t]);
+
+  const handleApplyChannelEventSocialLink = useCallback(() => {
+    if (!selectedChannelEventSocialNetwork || !channelEventSocialLink.trim() || channelEventSocialLinkError) {return;}
+
+    const normalizedLink = channelEventSocialLink.trim();
+    setChannelEventLinkedSocialNetworks(prev => {
+      const filtered = prev.filter(item => item.network !== selectedChannelEventSocialNetwork);
+      return [...filtered, { network: selectedChannelEventSocialNetwork, link: normalizedLink }];
+    });
+    setChannelEventSocialLink('');
+    setChannelEventSocialLinkError('');
+  }, [channelEventSocialLink, channelEventSocialLinkError, selectedChannelEventSocialNetwork]);
+
+  const channelEventCanApplySocialLink = !!selectedChannelEventSocialNetwork
+    && !!channelEventSocialLink.trim()
+    && !channelEventSocialLinkError;
+  const channelEventMinimumDate = useMemo(() => getChannelEventMinimumDate(), []);
+
+  const handleChannelEventTaskDescriptionChange = useCallback((index: number, text: string) => {
+    setChannelEventTaskDescriptions(previousValue => previousValue.map((item, itemIndex) => (
+      itemIndex === index ? text : item
+    )));
+
+    if (!text.trim()) {
+      setChannelEventTaskRewardInputs(previousValue => previousValue.map((item, itemIndex) => (
+        itemIndex === index ? '' : item
+      )));
+      setChannelEventTaskAssigneeInputs(previousValue => previousValue.map((item, itemIndex) => (
+        itemIndex === index ? '' : item
+      )));
+      setChannelEventTaskAssigneeErrors(previousValue => previousValue.map((item, itemIndex) => (
+        itemIndex === index ? '' : item
+      )));
+      setChannelEventTaskAssignments(previousValue => previousValue.map((item, itemIndex) => (
+        itemIndex === index ? [] : item
+      )));
+    }
+  }, []);
+
+  const handleChannelEventTaskRewardInputChange = useCallback((index: number, text: string) => {
+    const sanitizedValue = formatChannelEventIntegerInput(text);
+
+    setChannelEventTaskRewardInputs(previousValue => previousValue.map((item, itemIndex) => (
+      itemIndex === index ? sanitizedValue : item
+    )));
+  }, []);
+
+  const handleChannelEventTaskAssigneeInputChange = useCallback((index: number, text: string) => {
+    const normalizedInput = text.trim().length > 0
+      ? normalizeChannelEventTaskUsername(text)
+      : '';
+
+    setChannelEventTaskAssigneeInputs(previousValue => previousValue.map((item, itemIndex) => (
+      itemIndex === index ? normalizedInput : item
+    )));
+    setChannelEventTaskAssigneeErrors(previousValue => previousValue.map((item, itemIndex) => (
+      itemIndex === index ? '' : item
+    )));
+  }, []);
+
+  const handleRemoveChannelEventTaskAssignment = useCallback((index: number, usernameToRemove: string) => {
+    setChannelEventTaskAssignments(previousValue => previousValue.map((item, itemIndex) => {
+      if (itemIndex !== index) {return item;}
+      return item.filter(assignment => assignment.username.toLowerCase() !== usernameToRemove.toLowerCase());
+    }));
+  }, []);
+
+  const handleSelectChannelEventTaskAssigneeSuggestion = useCallback((index: number, suggestion: { username: string; memberEmail?: string }) => {
+    const normalizedSuggestion = normalizeChannelEventTaskUsername(suggestion.username);
+    if (!normalizedSuggestion) {return;}
+
+    setChannelEventTaskAssignments(previousValue => previousValue.map((item, itemIndex) => {
+      if (itemIndex !== index) {return item;}
+      if (item.some(assignment => assignment.username.toLowerCase() === normalizedSuggestion.toLowerCase())) {
+        return item;
+      }
+      if (item.length >= 1) {return item;}
+      return [{
+        username: normalizedSuggestion,
+        memberEmail: suggestion.memberEmail,
+      }];
+    }));
+    setChannelEventTaskAssigneeInputs(previousValue => previousValue.map((item, itemIndex) => (
+      itemIndex === index ? '' : item
+    )));
+    setChannelEventTaskAssigneeErrors(previousValue => previousValue.map((item, itemIndex) => (
+      itemIndex === index ? '' : item
+    )));
+  }, []);
+
+  const handleVerifyChannelEventTaskAssignee = useCallback((index: number) => {
+    const taskDescription = String(channelEventTaskDescriptions[index] ?? '').trim();
+    const rawAssignee = String(channelEventTaskAssigneeInputs[index] ?? '').trim();
+    const assigneeTokens = rawAssignee.split(/[\s,;]+/).filter(Boolean);
+    const normalizedAssignee = normalizeChannelEventTaskUsername(rawAssignee);
+    const currentAssignments = channelEventTaskAssignments[index] ?? [];
+
+    if (!taskDescription) {
+      setChannelEventTaskAssigneeErrors(previousValue => previousValue.map((item, itemIndex) => (
+        itemIndex === index
+          ? localize({
+            es: 'Escribe primero al menos un caracter en la descripcion de la tarea.',
+            en: 'Write at least one character in the task description first.',
+            fr: 'Ecris d\'abord au moins un caractere dans la description de la tache.',
+            pt: 'Escreve primeiro pelo menos um caractere na descricao da tarefa.',
+            de: 'Schreibe zuerst mindestens ein Zeichen in die Aufgabenbeschreibung.',
+            it: 'Scrivi prima almeno un carattere nella descrizione dell\'attivita.',
+          })
+          : item
+      )));
+      return;
+    }
+
+    if (!normalizedAssignee) {
+      setChannelEventTaskAssigneeErrors(previousValue => previousValue.map((item, itemIndex) => (
+        itemIndex === index
+          ? localize({
+            es: 'Introduce un @usuario valido.',
+            en: 'Enter a valid @username.',
+            fr: 'Saisis un @utilisateur valide.',
+            pt: 'Introduz um @utilizador valido.',
+            de: 'Gib einen gueltigen @Benutzernamen ein.',
+            it: 'Inserisci un @utente valido.',
+          })
+          : item
+      )));
+      return;
+    }
+
+    if (assigneeTokens.length > 1 || ((rawAssignee.match(/@/g) ?? []).length > 1)) {
+      setChannelEventTaskAssigneeErrors(previousValue => previousValue.map((item, itemIndex) => (
+        itemIndex === index
+          ? localize({
+            es: 'Verifica los @usuarios de uno en uno.',
+            en: 'Verify @usernames one by one.',
+            fr: 'Verifie les @utilisateurs un par un.',
+            pt: 'Verifica os @utilizadores um a um.',
+            de: 'Pruefe die @Benutzernamen einzeln.',
+            it: 'Verifica gli @utenti uno alla volta.',
+          })
+          : item
+      )));
+      return;
+    }
+
+    if (currentAssignments.length >= 1) {
+      setChannelEventTaskAssigneeErrors(previousValue => previousValue.map((item, itemIndex) => (
+        itemIndex === index
+          ? localize({
+            es: 'Cada tarea admite solo un usuario.',
+            en: 'Each task can include only one user.',
+            fr: 'Chaque tache peut inclure un seul utilisateur.',
+            pt: 'Cada tarefa pode incluir apenas um utilizador.',
+            de: 'Jede Aufgabe kann nur einen Benutzer enthalten.',
+            it: 'Ogni attivita puo includere un solo utente.',
+          })
+          : item
+      )));
+      return;
+    }
+
+    if (currentAssignments.some(assignment => assignment.username.toLowerCase() === normalizedAssignee.toLowerCase())) {
+      setChannelEventTaskAssigneeErrors(previousValue => previousValue.map((item, itemIndex) => (
+        itemIndex === index
+          ? localize({
+            es: 'Este usuario ya esta asignado a la tarea.',
+            en: 'This user is already assigned to the task.',
+            fr: 'Cet utilisateur est deja assigne a la tache.',
+            pt: 'Este utilizador ja esta atribuido a tarefa.',
+            de: 'Dieser Benutzer ist der Aufgabe bereits zugewiesen.',
+            it: 'Questo utente e gia assegnato all\'attivita.',
+          })
+          : item
+      )));
+      return;
+    }
+
+    const joinedUser = channelEventJoinedUsersByUsername.get(normalizedAssignee.toLowerCase());
+    if (!joinedUser) {
+      setChannelEventTaskAssigneeErrors(previousValue => previousValue.map((item, itemIndex) => (
+        itemIndex === index
+          ? localize({
+            es: 'El usuario no esta unido a tu canal.',
+            en: 'That user is not joined to your channel.',
+            fr: 'Cet utilisateur n\'a pas rejoint ton canal.',
+            pt: 'Esse utilizador nao esta no teu canal.',
+            de: 'Dieser Benutzer ist deinem Kanal nicht beigetreten.',
+            it: 'Questo utente non e iscritto al tuo canale.',
+          })
+          : item
+      )));
+      return;
+    }
+
+    setChannelEventTaskAssignments(previousValue => previousValue.map((item, itemIndex) => (
+      itemIndex === index ? [joinedUser] : item
+    )));
+    setChannelEventTaskAssigneeInputs(previousValue => previousValue.map((item, itemIndex) => (
+      itemIndex === index ? '' : item
+    )));
+    setChannelEventTaskAssigneeErrors(previousValue => previousValue.map((item, itemIndex) => (
+      itemIndex === index ? '' : item
+    )));
+  }, [channelEventJoinedUsersByUsername, channelEventTaskAssigneeInputs, channelEventTaskAssignments, channelEventTaskDescriptions, localize]);
+
+  const handleChannelEventDateTextChange = useCallback((text: string) => {
+    const normalized = normalizeChannelEventDateInput(text);
+    setChannelEventDateText(normalized);
+
+    const parsed = parseChannelEventDate(normalized);
+    if (!parsed) {
+      setChannelEventDateValue(null);
+      if (normalized.length === 10) {
+        setChannelEventDateError(localize({
+          es: 'Introduce una fecha valida igual o posterior a la actual.',
+          en: 'Enter a valid date that is today or later.',
+          fr: 'Saisis une date valide egale ou posterieure a aujourd\'hui.',
+          pt: 'Introduza uma data valida igual ou posterior a atual.',
+          de: 'Gib ein gueltiges Datum ein, das heute oder spaeter ist.',
+          it: 'Inserisci una data valida uguale o successiva a quella odierna.',
+        }));
+      } else {
+        setChannelEventDateError('');
+      }
+      return;
+    }
+
+    if (parsed.getTime() < channelEventMinimumDate.getTime()) {
+      setChannelEventDateValue(null);
+      setChannelEventDateError(localize({
+        es: 'La fecha del evento debe ser igual o posterior a la actual.',
+        en: 'The event date must be today or later.',
+        fr: 'La date de l\'evenement doit etre egale ou posterieure a aujourd\'hui.',
+        pt: 'A data do evento deve ser igual ou posterior a atual.',
+        de: 'Das Veranstaltungsdatum muss heute oder spaeter sein.',
+        it: 'La data dell\'evento deve essere uguale o successiva a quella odierna.',
+      }));
+      return;
+    }
+
+    setChannelEventDateValue(parsed);
+    setChannelEventDateError('');
+  }, [channelEventMinimumDate, localize]);
+
+  const handleOpenChannelEventDatePicker = useCallback(() => {
+    if (channelEventTasksEnabled) {return;}
+    setChannelEventDraftDateValue(channelEventDateValue || parseChannelEventDate(channelEventDateText) || channelEventMinimumDate);
+    setShowChannelEventDatePicker(true);
+  }, [channelEventDateText, channelEventDateValue, channelEventMinimumDate, channelEventTasksEnabled]);
+
+  const handleCloseChannelEventDatePicker = useCallback(() => {
+    setShowChannelEventDatePicker(false);
+  }, []);
+
+  const handleChannelEventCalendarDayPress = useCallback((day: { dateString: string }) => {
+    const selectedDate = new Date(`${day.dateString}T00:00:00`);
+    if (Number.isNaN(selectedDate.getTime())) {return;}
+    setChannelEventDraftDateValue(selectedDate);
+  }, []);
+
+  const handleApplyChannelEventDatePicker = useCallback(() => {
+    if (channelEventDraftDateValue.getTime() < channelEventMinimumDate.getTime()) {
+      setChannelEventDateValue(null);
+      setChannelEventDateError(localize({
+        es: 'La fecha del evento debe ser igual o posterior a la actual.',
+        en: 'The event date must be today or later.',
+        fr: 'La date de l\'evenement doit etre egale ou posterieure a aujourd\'hui.',
+        pt: 'A data do evento deve ser igual ou posterior a atual.',
+        de: 'Das Veranstaltungsdatum muss heute oder spaeter sein.',
+        it: 'La data dell\'evento deve essere uguale o successiva a quella odierna.',
+      }));
+      return;
+    }
+
+    setChannelEventDateValue(channelEventDraftDateValue);
+    setChannelEventDateText(formatChannelEventDate(channelEventDraftDateValue));
+    setChannelEventDateError('');
+    setShowChannelEventDatePicker(false);
+  }, [channelEventDraftDateValue, channelEventMinimumDate, localize]);
+
+  const handleOpenChannelEventTimePicker = useCallback(() => {
+    if (channelEventTasksEnabled) {return;}
+    setChannelEventDraftTimeValue(channelEventTimeValue || new Date());
+    setShowChannelEventTimePicker(true);
+  }, [channelEventTasksEnabled, channelEventTimeValue]);
+
+  const handleCloseChannelEventTimePicker = useCallback(() => {
+    setShowChannelEventTimePicker(false);
+  }, []);
+
+  const handleSelectChannelEventTimeHour = useCallback((hour: number) => {
+    setChannelEventDraftTimeValue(previousValue => {
+      const nextValue = new Date(previousValue);
+      const nextHour = channelEventTimeFormat === 'us'
+        ? toChannelEvent24Hour(hour, getChannelEventTimeMeridiem(previousValue))
+        : hour;
+      nextValue.setHours(nextHour, nextValue.getMinutes(), 0, 0);
+      return nextValue;
+    });
+  }, [channelEventTimeFormat]);
+
+  const handleSelectChannelEventTimeMinute = useCallback((minute: number) => {
+    setChannelEventDraftTimeValue(previousValue => {
+      const nextValue = new Date(previousValue);
+      nextValue.setHours(nextValue.getHours(), minute, 0, 0);
+      return nextValue;
+    });
+  }, []);
+
+  const handleSelectChannelEventTimeMeridiem = useCallback((meridiem: 'AM' | 'PM') => {
+    setChannelEventDraftTimeValue(previousValue => {
+      const nextValue = new Date(previousValue);
+      nextValue.setHours(toChannelEvent24Hour(getChannelEventTimeHour12(previousValue), meridiem), nextValue.getMinutes(), 0, 0);
+      return nextValue;
+    });
+  }, []);
+
+  const handleApplyChannelEventTimePicker = useCallback(() => {
+    setChannelEventTimeValue(channelEventDraftTimeValue);
+    setChannelEventTimeText(formatChannelEventTime(channelEventDraftTimeValue, channelEventTimeFormat));
+    setShowChannelEventTimePicker(false);
+  }, [channelEventDraftTimeValue, channelEventTimeFormat]);
+
+  const handleOpenChannelEventDurationPicker = useCallback(() => {
+    if (!channelEventTasksEnabled) {return;}
+
+    const maxMinutes = getChannelEventRemainingDurationMinutes(channelEventSourceCreatedAt);
+    if (maxMinutes < 1) {return;}
+
+    const initialMinutes = clampChannelEventDurationMinutes(
+      channelEventDurationMinutes ?? Math.min(60, maxMinutes),
+      maxMinutes,
+    );
+
+    setChannelEventDraftDurationMinutes(initialMinutes);
+    setShowChannelEventDurationPicker(true);
+  }, [channelEventDurationMinutes, channelEventSourceCreatedAt, channelEventTasksEnabled]);
+
+  const handleCloseChannelEventDurationPicker = useCallback(() => {
+    setShowChannelEventDurationPicker(false);
+  }, []);
+
+  const handleSelectChannelEventDurationHour = useCallback((hour: number) => {
+    const maxMinutes = getChannelEventRemainingDurationMinutes(channelEventSourceCreatedAt);
+    if (maxMinutes < 1) {return;}
+
+    setChannelEventDraftDurationMinutes(previousValue => {
+      const minutePart = previousValue % 60;
+      return clampChannelEventDurationMinutes((hour * 60) + minutePart, maxMinutes);
+    });
+  }, [channelEventSourceCreatedAt]);
+
+  const handleSelectChannelEventDurationMinute = useCallback((minute: number) => {
+    const maxMinutes = getChannelEventRemainingDurationMinutes(channelEventSourceCreatedAt);
+    if (maxMinutes < 1) {return;}
+
+    setChannelEventDraftDurationMinutes(previousValue => {
+      const hourPart = Math.floor(previousValue / 60);
+      return clampChannelEventDurationMinutes((hourPart * 60) + minute, maxMinutes);
+    });
+  }, [channelEventSourceCreatedAt]);
+
+  const handleApplyChannelEventDurationPicker = useCallback(() => {
+    const maxMinutes = getChannelEventRemainingDurationMinutes(channelEventSourceCreatedAt);
+    if (maxMinutes < 1) {
+      setChannelEventDurationMinutes(null);
+      setShowChannelEventDurationPicker(false);
+      return;
+    }
+
+    const nextMinutes = clampChannelEventDurationMinutes(channelEventDraftDurationMinutes, maxMinutes);
+    setChannelEventDurationMinutes(nextMinutes);
+    setShowChannelEventDurationPicker(false);
+  }, [channelEventDraftDurationMinutes, channelEventSourceCreatedAt]);
+
+  useEffect(() => {
+    if (!channelEventTasksEnabled) {return;}
+
+    const maxMinutes = getChannelEventRemainingDurationMinutes(channelEventSourceCreatedAt);
+    if (maxMinutes < 1) {
+      setChannelEventDurationMinutes(null);
+      return;
+    }
+
+    setChannelEventDurationMinutes(previousValue => {
+      if (previousValue === null) {return previousValue;}
+      return clampChannelEventDurationMinutes(previousValue, maxMinutes);
+    });
+  }, [channelEventSourceCreatedAt, channelEventTasksEnabled]);
+
   const joinedChannelThreadReadsStorageKey = useMemo(
     () => makeJoinedChannelThreadReadsStorageKey(userEmail),
     [userEmail],
   );
 
   const normalizeChannelMessageUsername = useCallback((msg: any) => {
-    if (typeof msg === 'string') return '';
+    if (typeof msg === 'string') {return '';}
     if (msg?.username) {
       const u = String(msg.username);
       return u.startsWith('@') ? u : `@${u}`;
@@ -2637,7 +5727,7 @@ const FrontScreen = ({
   // Use message `id` (monotonic) as the primary ordering key so everyone sees the same order.
   const getChannelMessageSortKey = useCallback((createdAt: any, id?: any) => {
     const n = Number(id);
-    if (Number.isFinite(n)) return n;
+    if (Number.isFinite(n)) {return n;}
     const t = Date.parse(String(createdAt ?? ''));
     return Number.isFinite(t) ? t : 0;
   }, []);
@@ -2669,7 +5759,7 @@ const FrontScreen = ({
     const sortedMessages = [...rawMessages].sort((a: any, b: any) => {
       const ta = getChannelMessageSortKey(a?.created_at, a?.id);
       const tb = getChannelMessageSortKey(b?.created_at, b?.id);
-      if (ta !== tb) return ta - tb;
+      if (ta !== tb) {return ta - tb;}
       return String(a?.id ?? '').localeCompare(String(b?.id ?? ''));
     });
 
@@ -2681,7 +5771,7 @@ const FrontScreen = ({
         const senderHandle = normalizeChannelMessageUsername(msg);
         const activeKey = senderHandle ? activeThreadKeyByUsername[senderHandle] : '';
         if (activeKey) {
-          if (!repliesByMessageKey[activeKey]) repliesByMessageKey[activeKey] = [];
+          if (!repliesByMessageKey[activeKey]) {repliesByMessageKey[activeKey] = [];}
           repliesByMessageKey[activeKey].push({
             id: msg?.id,
             created_at: msg?.created_at,
@@ -2699,7 +5789,7 @@ const FrontScreen = ({
           const content = messageText.substring(firstSpaceIndex + 1);
           const targetMessageKey = activeThreadKeyByUsername[targetUsername] || lastMessageKeyByUsername[targetUsername];
           if (targetMessageKey) {
-            if (!repliesByMessageKey[targetMessageKey]) repliesByMessageKey[targetMessageKey] = [];
+            if (!repliesByMessageKey[targetMessageKey]) {repliesByMessageKey[targetMessageKey] = [];}
             repliesByMessageKey[targetMessageKey].push({
               id: msg?.id,
               created_at: msg?.created_at,
@@ -2727,14 +5817,14 @@ const FrontScreen = ({
     processedMessages.sort((a: any, b: any) => {
       const ta = getChannelMessageSortKey(a?.created_at, a?.id);
       const tb = getChannelMessageSortKey(b?.created_at, b?.id);
-      if (ta !== tb) return ta - tb;
+      if (ta !== tb) {return ta - tb;}
       const ka = String(a?.__key ?? a?.id ?? '');
       const kb = String(b?.__key ?? b?.id ?? '');
       return ka.localeCompare(kb);
     });
 
     return processedMessages.reduce((total: number, msg: any, index: number) => {
-      if (String(msg?.sender_email ?? '') !== viewerEmailValue) return total;
+      if (String(msg?.sender_email ?? '') !== viewerEmailValue) {return total;}
       const key = String(msg?.__key ?? msg?.id ?? `idx-${index}`);
       const replies = repliesByMessageKey[key] || [];
       const unreadPublisherReplies = replies.filter(reply => (
@@ -2753,9 +5843,19 @@ const FrontScreen = ({
   ), []);
 
   const buildChannelChatListSignature = useCallback((messages: any[]) => {
-    const firstId = messages.length ? String((messages[0] as any)?.id ?? '') : '';
-    const lastId = messages.length ? String((messages[messages.length - 1] as any)?.id ?? '') : '';
-    return `${messages.length}:${firstId}:${lastId}`;
+    const signatureParts = messages.map((message: any, index: number) => {
+      const messageId = String(message?.id ?? `idx-${index}`);
+      const hiddenFlag = message?.hidden ? '1' : '0';
+      const donationTotal = Math.max(0, Math.floor(Number(message?.channel_event_donation_total) || 0));
+      const rewardStatuses = Array.isArray(message?.channel_event_task_rewards)
+        ? message.channel_event_task_rewards
+          .map((reward: any) => `${Number(reward?.taskIndex ?? reward?.task_index ?? 0)}:${String(reward?.status || '')}`)
+          .join('|')
+        : '';
+      return `${messageId}:${hiddenFlag}:${donationTotal}:${rewardStatuses}`;
+    });
+
+    return signatureParts.join(';');
   }, []);
 
   const buildChannelChatThreadArtifacts = useCallback((
@@ -2789,9 +5889,9 @@ const FrontScreen = ({
         const senderHandle = normalizeChannelMessageUsername(msg);
         const activeKey = senderHandle ? activeThreadKeyByUsername[senderHandle] : '';
         if (activeKey) {
-          if (!repliesByMessageKey[activeKey]) repliesByMessageKey[activeKey] = [];
+          if (!repliesByMessageKey[activeKey]) {repliesByMessageKey[activeKey] = [];}
           repliesByMessageKey[activeKey].push({ id: msg?.id, created_at: msg?.created_at, content: messageText, author: 'viewer' });
-          if (!rawMessageKeysByConversationKey[activeKey]) rawMessageKeysByConversationKey[activeKey] = [];
+          if (!rawMessageKeysByConversationKey[activeKey]) {rawMessageKeysByConversationKey[activeKey] = [];}
           rawMessageKeysByConversationKey[activeKey].push(rawKey);
           return;
         }
@@ -2804,9 +5904,9 @@ const FrontScreen = ({
           const content = messageText.substring(firstSpaceIndex + 1);
           const targetMessageKey = activeThreadKeyByUsername[targetUsername] || lastMessageKeyByUsername[targetUsername];
           if (targetMessageKey) {
-            if (!repliesByMessageKey[targetMessageKey]) repliesByMessageKey[targetMessageKey] = [];
+            if (!repliesByMessageKey[targetMessageKey]) {repliesByMessageKey[targetMessageKey] = [];}
             repliesByMessageKey[targetMessageKey].push({ id: msg?.id, created_at: msg?.created_at, content, author: 'publisher' });
-            if (!rawMessageKeysByConversationKey[targetMessageKey]) rawMessageKeysByConversationKey[targetMessageKey] = [];
+            if (!rawMessageKeysByConversationKey[targetMessageKey]) {rawMessageKeysByConversationKey[targetMessageKey] = [];}
             rawMessageKeysByConversationKey[targetMessageKey].push(rawKey);
             activeThreadKeyByUsername[targetUsername] = targetMessageKey;
             return;
@@ -2817,7 +5917,7 @@ const FrontScreen = ({
       const key = String(msg?.id ?? `idx-${rawIndex}`);
       const decorated = (typeof msg === 'string') ? msg : { ...msg, __key: key };
       processedMessages.push(decorated);
-      if (!rawMessageKeysByConversationKey[key]) rawMessageKeysByConversationKey[key] = [];
+      if (!rawMessageKeysByConversationKey[key]) {rawMessageKeysByConversationKey[key] = [];}
       rawMessageKeysByConversationKey[key].push(rawKey);
 
       if (!isOwnerMessage) {
@@ -2832,7 +5932,7 @@ const FrontScreen = ({
       processedMessages.sort((a: any, b: any) => {
         const ta = getChannelMessageSortKey(a?.created_at, a?.id);
         const tb = getChannelMessageSortKey(b?.created_at, b?.id);
-        if (ta !== tb) return ta - tb;
+        if (ta !== tb) {return ta - tb;}
         const ka = String(a?.__key ?? a?.id ?? '');
         const kb = String(b?.__key ?? b?.id ?? '');
         return ka.localeCompare(kb);
@@ -2854,7 +5954,7 @@ const FrontScreen = ({
         const kb = String(b?.__key ?? b?.id ?? '');
         const ta = activityTimeByKey[ka] || 0;
         const tb = activityTimeByKey[kb] || 0;
-        if (ta !== tb) return ta - tb;
+        if (ta !== tb) {return ta - tb;}
         return ka.localeCompare(kb);
       });
     }
@@ -2916,25 +6016,44 @@ const FrontScreen = ({
   const channelChatRenderModel = useMemo(() => {
     const { processedMessages, repliesByMessageKey } = channelChatThreadArtifacts;
 
-    const isChannelHostForThisView = !!userEmail && !!currentChannelOwnerEmail && String(userEmail) === String(currentChannelOwnerEmail);
-    const isJoinedChannelViewerForThisView = !!selectedChannel && !!userEmail && !!currentChannelOwnerEmail && !isChannelHostForThisView;
-    const baseMessagesToRender = (channelMessagesTab === 'Respuestas')
-      ? processedMessages.filter((msg: any) => {
-        const key = String(msg?.__key ?? msg?.id ?? '');
-        if (!key) return false;
+    const normalizedUserEmail = String(userEmail ?? '').trim();
+    const normalizedChannelOwnerEmail = String(currentChannelOwnerEmail ?? '').trim();
+    const isChannelHostForThisView = !!normalizedUserEmail && !!normalizedChannelOwnerEmail && normalizedUserEmail === normalizedChannelOwnerEmail;
+    const isJoinedChannelViewerForThisView = !!selectedChannel && !!normalizedUserEmail && !!normalizedChannelOwnerEmail && !isChannelHostForThisView;
+    const baseMessagesToRender = channelMessagesTab === 'General'
+      ? processedMessages
+      : processedMessages.filter((msg: any, index: number) => {
+        const key = String(msg?.__key ?? msg?.id ?? `idx-${index}`);
+        if (!key) {return false;}
 
-        if (isChannelHostForThisView) {
-          const replies = repliesByMessageKey[key] || [];
-          return replies.some(r => r.author === 'publisher');
+        if (channelMessagesTab === 'Hilos') {
+          if (isChannelHostForThisView) {
+            const replies = repliesByMessageKey[key] || [];
+            return replies.some(r => r.author === 'publisher');
+          }
+
+          if (isJoinedChannelViewerForThisView) {
+            return String(msg?.sender_email ?? '').trim() === normalizedUserEmail;
+          }
+
+          return true;
         }
 
-        if (isJoinedChannelViewerForThisView) {
-          return String(msg?.sender_email ?? '') === String(userEmail);
+        if (!normalizedChannelOwnerEmail || String(msg?.sender_email ?? '').trim() !== normalizedChannelOwnerEmail) {
+          return false;
         }
 
-        return true;
-      })
-      : processedMessages;
+        const rawMessage = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
+        if (channelMessagesTab === 'Eventos') {
+          return !!parseChannelEventMessage(rawMessage);
+        }
+
+        if (channelMessagesTab === 'Lecturas') {
+          return !!parseChannelReadingMessage(rawMessage);
+        }
+
+        return !!parseChannelImageMessage(rawMessage);
+      });
 
     return {
       messagesToRender: baseMessagesToRender,
@@ -2942,6 +6061,7 @@ const FrontScreen = ({
     };
   }, [
     channelChatThreadArtifacts,
+    currentChannelOwnerEmail,
     selectedChannel,
     userEmail,
     channelMessagesTab,
@@ -2956,13 +6076,13 @@ const FrontScreen = ({
     ).trim();
     const selectedChannelOwnerEmail = String((selectedChannel as any)?.publisher_email ?? '').trim();
 
-    if (!selectedPostId) return;
-    if (!userEmail || !selectedChannelOwnerEmail || String(userEmail) === selectedChannelOwnerEmail) return;
+    if (!selectedPostId) {return;}
+    if (!userEmail || !selectedChannelOwnerEmail || String(userEmail) === selectedChannelOwnerEmail) {return;}
 
     let maxPublisherReplySortKey = 0;
     Object.values(channelChatRenderModel.repliesByMessageKey).forEach((replies: any) => {
       (Array.isArray(replies) ? replies : []).forEach((reply: any) => {
-        if (reply?.author !== 'publisher') return;
+        if (reply?.author !== 'publisher') {return;}
         maxPublisherReplySortKey = Math.max(
           maxPublisherReplySortKey,
           getChannelMessageSortKey(reply?.created_at, reply?.id),
@@ -2970,17 +6090,17 @@ const FrontScreen = ({
       });
     });
 
+    if (maxPublisherReplySortKey <= 0) {return;}
+
     setJoinedChannelUnreadReplyCounts(prev => {
-      if (!prev[selectedPostId]) return prev;
+      if (!prev[selectedPostId]) {return prev;}
       const next = { ...prev };
       delete next[selectedPostId];
       return next;
     });
 
-    if (maxPublisherReplySortKey <= 0) return;
-
     setJoinedChannelLastSeenReplySortByPostId(prev => {
-      if ((prev[selectedPostId] ?? 0) >= maxPublisherReplySortKey) return prev;
+      if ((prev[selectedPostId] ?? 0) >= maxPublisherReplySortKey) {return prev;}
       return {
         ...prev,
         [selectedPostId]: maxPublisherReplySortKey,
@@ -2991,12 +6111,58 @@ const FrontScreen = ({
   useEffect(() => {
     const selectedChannelOwnerEmail = String((selectedChannel as any)?.publisher_email ?? '').trim();
 
-    if (!selectedChannel) return;
-    if (channelMessagesTab !== 'Respuestas') return;
-    if (!userEmail || !selectedChannelOwnerEmail || String(userEmail) === selectedChannelOwnerEmail) return;
+    if (!selectedChannel) {return;}
+    if (!userEmail || !selectedChannelOwnerEmail || String(userEmail) === selectedChannelOwnerEmail) {return;}
 
     markSelectedJoinedChannelThreadsAsRead();
-  }, [selectedChannel, channelMessagesTab, userEmail, markSelectedJoinedChannelThreadsAsRead]);
+  }, [selectedChannel, userEmail, markSelectedJoinedChannelThreadsAsRead]);
+
+  useEffect(() => {
+    const selectedPostId = String(
+      (selectedChannel as any)?.post_id ??
+      (selectedChannel as any)?.postId ??
+      (selectedChannel as any)?.id ??
+      ''
+    ).trim();
+    const selectedChannelOwnerEmail = String((selectedChannel as any)?.publisher_email ?? '').trim();
+    const normalizedUserEmail = String(userEmail ?? '').trim();
+
+    if (!selectedPostId || !normalizedUserEmail || !selectedChannelOwnerEmail || normalizedUserEmail === selectedChannelOwnerEmail) {
+      completedChannelHostThreadGoalEvidenceRef.current = null;
+      return;
+    }
+
+    const matchedThread = channelChatThreadArtifacts.processedMessages.find((message: any, index: number) => {
+      if (String(message?.sender_email ?? '').trim() !== normalizedUserEmail) {return false;}
+
+      const messageKey = String(message?.__key ?? message?.id ?? `idx-${index}`).trim();
+      if (!messageKey) {return false;}
+
+      const replies = channelChatThreadArtifacts.repliesByMessageKey[messageKey] || [];
+      return replies.some(reply => reply.author === 'publisher');
+    });
+
+    if (!matchedThread) {return;}
+
+    const messageKey = String(matchedThread?.__key ?? matchedThread?.id ?? '').trim();
+    const replies = channelChatThreadArtifacts.repliesByMessageKey[messageKey] || [];
+    const latestPublisherReply = [...replies]
+      .filter(reply => reply.author === 'publisher')
+      .sort((left, right) => getChannelMessageSortKey(right?.created_at, right?.id) - getChannelMessageSortKey(left?.created_at, left?.id))[0];
+    const evidenceKey = `${selectedPostId}:${messageKey}:${String(latestPublisherReply?.id ?? latestPublisherReply?.created_at ?? 'reply')}`;
+
+    if (!evidenceKey || completedChannelHostThreadGoalEvidenceRef.current === evidenceKey) {
+      return;
+    }
+
+    completedChannelHostThreadGoalEvidenceRef.current = evidenceKey;
+    recordChannelHostThreadGoalCompletion({
+      email: userEmailRef.current,
+      token: authTokenRef.current,
+    }).catch(() => {
+      completedChannelHostThreadGoalEvidenceRef.current = null;
+    });
+  }, [channelChatThreadArtifacts, getChannelMessageSortKey, selectedChannel, userEmail]);
 
   const setHomeCarouselGestureActive = (active: boolean) => {
     isHomeCarouselGestureActiveRef.current = active;
@@ -3006,11 +6172,11 @@ const FrontScreen = ({
   };
 
   useEffect(() => {
-    if (activeBottomTab !== 'home') {
+    if (!isHomeFeedTabActive) {
       isHomeCarouselGestureActiveRef.current = false;
       setIsHomeMainScrollEnabled(true);
     }
-  }, [activeBottomTab]);
+  }, [isHomeFeedTabActive]);
 
   useEffect(() => {
     const prev = prevActiveBottomTabRef.current;
@@ -3018,6 +6184,12 @@ const FrontScreen = ({
       setChannelChatMountKey(k => k + 1);
     }
     prevActiveBottomTabRef.current = activeBottomTab;
+  }, [activeBottomTab]);
+
+  useEffect(() => {
+    if (activeBottomTab === 'hype') {
+      setSelectedHypeCategory(HYPE_CATEGORY_OPTIONS[0]);
+    }
   }, [activeBottomTab]);
 
   useEffect(() => {
@@ -3098,7 +6270,7 @@ const FrontScreen = ({
 
   const openGroupImageViewer = (uri: string) => {
     const resolved = String(uri || '').trim();
-    if (!resolved) return;
+    if (!resolved) {return;}
     setGroupImageViewerUri(resolved);
     setShowGroupImageViewer(true);
   };
@@ -3121,10 +6293,10 @@ const FrontScreen = ({
       return;
     }
 
-    if (!selectedGroup?.id) return;
+    if (!selectedGroup?.id) {return;}
 
     const hasPermission = await requestGalleryPermission();
-    if (!hasPermission) return;
+    if (!hasPermission) {return;}
 
     try {
       const image = await ImageCropPicker.openPicker({
@@ -3160,7 +6332,7 @@ const FrontScreen = ({
   };
 
   const handleCloseGroupImageComposer = () => {
-    if (isSendingGroupImage) return;
+    if (isSendingGroupImage) {return;}
     setShowGroupImageComposer(false);
     setGroupDraftImageUri(null);
     setGroupDraftCaption('');
@@ -3168,7 +6340,7 @@ const FrontScreen = ({
   };
 
   const handleApplyGroupImage = async () => {
-    if (isSendingGroupImage) return;
+    if (isSendingGroupImage) {return;}
     if (!authToken) {
       Alert.alert(sessionRequiredTitle, localize({
         es: 'Inicia sesión para enviar imágenes.',
@@ -3180,8 +6352,8 @@ const FrontScreen = ({
       }));
       return;
     }
-    if (!selectedGroup?.id) return;
-    if (!groupDraftImageUri) return;
+    if (!selectedGroup?.id) {return;}
+    if (!groupDraftImageUri) {return;}
 
     setIsSendingGroupImage(true);
     try {
@@ -3249,7 +6421,7 @@ const FrontScreen = ({
 
   const openChannelImageViewer = (uri: string) => {
     const resolved = String(uri || '').trim();
-    if (!resolved) return;
+    if (!resolved) {return;}
     setChannelImageViewerUri(resolved);
     setShowChannelImageViewer(true);
   };
@@ -3278,7 +6450,7 @@ const FrontScreen = ({
     }
 
     const hasPermission = await requestGalleryPermission();
-    if (!hasPermission) return;
+    if (!hasPermission) {return;}
 
     try {
       const image = await ImageCropPicker.openPicker({
@@ -3313,8 +6485,289 @@ const FrontScreen = ({
     }
   };
 
+  const handleOpenChannelReading = () => {
+    const targetPostId = selectedChannel
+      ? (selectedChannel.post_id ?? (selectedChannel as any).postId ?? (selectedChannel as any).id)
+      : userPublication?.id;
+
+    if (!targetPostId) {
+      return;
+    }
+
+    setShowChannelAttachmentPanel(false);
+    onNavigateToReading?.({ channelPostId: targetPostId });
+  };
+
+  const handlePickChannelEventImage = async () => {
+    if (!authToken) {
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para añadir imágenes al evento.',
+        en: 'Sign in to add images to the event.',
+        fr: 'Connectez-vous pour ajouter des images à l’événement.',
+        pt: 'Entre para adicionar imagens ao evento.',
+        de: 'Melde dich an, um Bilder zum Event hinzuzufügen.',
+        it: 'Accedi per aggiungere immagini all’evento.',
+      }));
+      return;
+    }
+
+    const isChannelHost = !!userEmail && !!channelOwnerEmail && String(userEmail) === String(channelOwnerEmail);
+    if (!isChannelHost) {
+      return;
+    }
+
+    const hasPermission = await requestGalleryPermission();
+    if (!hasPermission) {return;}
+
+    try {
+      const image = await ImageCropPicker.openPicker({
+        mediaType: 'photo',
+        cropping: false,
+        compressImageQuality: 0.82,
+        compressImageMaxWidth: 1440,
+        compressImageMaxHeight: 1440,
+        forceJpg: true,
+        includeBase64: false,
+        writeTempFile: true,
+      });
+
+      if (image?.path) {
+        setChannelEventImageUri(image.path);
+      }
+    } catch (error: any) {
+      if (error?.code !== 'E_PICKER_CANCELLED') {
+        console.error('Error al seleccionar imagen del evento:', error);
+        Alert.alert(errorTitle, localize({
+          es: 'No se pudo seleccionar la imagen del evento. Intenta de nuevo.',
+          en: 'The event image could not be selected. Please try again.',
+          fr: 'Impossible de sélectionner l’image de l’événement. Réessayez.',
+          pt: 'Não foi possível selecionar a imagem do evento. Tente novamente.',
+          de: 'Das Eventbild konnte nicht ausgewählt werden. Bitte versuche es erneut.',
+          it: 'Impossibile selezionare l’immagine dell’evento. Riprova.',
+        }));
+      }
+    }
+  };
+
+  const handleRemoveChannelEventImage = () => {
+    setChannelEventImageUri(null);
+    ImageCropPicker.clean().catch(() => undefined);
+  };
+
+  const resetChannelEventDraft = () => {
+    setShowChannelEventTypeOptions(false);
+    setShowChannelEventSocialOptions(false);
+    setChannelEventTypeSearchQuery('');
+    setSelectedChannelEventType(null);
+    setChannelEventName('');
+    setChannelEventDescription('');
+    setChannelEventDateText('');
+    setChannelEventDateValue(null);
+    setChannelEventDateError('');
+    setChannelEventTimeText('');
+    setChannelEventTimeValue(null);
+    setChannelEventTimeFormat('european');
+    setSelectedChannelEventSocialNetwork(null);
+    setChannelEventSocialLink('');
+    setChannelEventSocialLinkError('');
+    setChannelEventLinkedSocialNetworks([]);
+    setChannelEventLocationLabelDraft('');
+    setChannelEventLocationUrlDraft('');
+    setChannelEventLocationPlaceIdDraft(null);
+    setChannelEventLocationLatDraft(null);
+    setChannelEventLocationLngDraft(null);
+    setChannelEventHypeCostInput('');
+    setShowChannelEventHypeCostInfo(false);
+    setChannelEventImageUri(null);
+    setChannelEventTasksEnabled(false);
+    setChannelEventAssignTaskEnabled(false);
+    setChannelEventRewardTaskEnabled(false);
+    setChannelEventTaskDescriptions(['', '', '']);
+    setChannelEventTaskRewardInputs(['', '', '']);
+    setChannelEventTaskAssigneeInputs(['', '', '']);
+    setChannelEventTaskAssigneeErrors(['', '', '']);
+    setChannelEventTaskAssignments([[], [], []]);
+    setChannelEventDurationMinutes(null);
+  };
+
+  const handleCreateBasicChannelEvent = async () => {
+    if (!canCreateChannelEvent || !authToken || !selectedChannelEventType) {
+      return;
+    }
+
+    const isTaskEvent = channelEventTasksEnabled;
+    const normalizedTaskRows = channelEventTaskDescriptions.reduce<Array<{
+      description: string;
+      rewardAmount: number;
+      assignments: Array<{ username: string; memberEmail?: string }>;
+    }>>((result, value, index) => {
+      const description = String(value || '').trim();
+      if (!description) {return result;}
+
+      const assignments = Array.isArray(channelEventTaskAssignments[index])
+        ? channelEventTaskAssignments[index].filter(item => normalizeChannelEventTaskUsername(item?.username))
+        : [];
+      const rewardAmount = Math.max(0, Number.parseInt(channelEventTaskRewardValues[index] ?? '0', 10) || 0);
+
+      result.push({
+        description,
+        rewardAmount,
+        assignments,
+      });
+      return result;
+    }, []);
+    const trimmedTaskDescriptions = normalizedTaskRows.map(item => item.description);
+    const normalizedTaskRewardAmounts = normalizedTaskRows.map(item => item.rewardAmount);
+    const normalizedTaskAssignments = normalizedTaskRows.map(item => item.assignments);
+    const hasRewardAmountForEveryTask = channelEventTaskDescriptions.every((value, index) => {
+      if (!value.trim()) {return true;}
+      if (!channelEventRewardTaskEnabled) {return true;}
+      return (Number.parseInt(channelEventTaskRewardValues[index] ?? '0', 10) || 0) > 0;
+    });
+
+    if (isTaskEvent) {
+      const hasAssignmentsForEveryTask = channelEventTaskDescriptions.every((value, index) => {
+        if (!value.trim()) {return true;}
+        return (normalizedTaskAssignments[index] ?? []).length > 0;
+      });
+
+      if (!channelEventDurationMinutes || trimmedTaskDescriptions.length === 0) {
+        return;
+      }
+
+      if (channelEventRewardTaskEnabled && (!hasRewardAmountForEveryTask || !!channelEventRewardValidationError)) {
+        return;
+      }
+
+      if (channelEventAssignTaskEnabled && !hasAssignmentsForEveryTask) {
+        return;
+      }
+    } else if (!channelEventDateValue || !channelEventTimeValue) {
+      return;
+    }
+
+    const targetPostId = selectedChannel
+      ? (selectedChannel.post_id ?? (selectedChannel as any).postId ?? (selectedChannel as any).id)
+      : userPublication?.id;
+    if (!targetPostId) {return;}
+
+    let startAtIso = '';
+    if (!isTaskEvent && channelEventDateValue && channelEventTimeValue) {
+      const startAt = new Date(channelEventDateValue);
+      startAt.setHours(channelEventTimeValue.getHours(), channelEventTimeValue.getMinutes(), 0, 0);
+      startAtIso = startAt.toISOString();
+    }
+
+    setIsCreatingChannelEvent(true);
+    try {
+      let imageUrl = String(channelEventImageUri || '').trim();
+      if (imageUrl && !imageUrl.startsWith('http')) {
+        imageUrl = await uploadImage(imageUrl, authToken, { postId: targetPostId, timeoutMs: 120000 });
+      }
+
+      const taskEventExpiresAt = isTaskEvent
+        ? getChannelEventExpiresAtIso(channelEventDurationMinutes, channelEventSourceCreatedAt)
+        : null;
+
+      const encoded = encodeChannelEventMessage({
+        name: channelEventName.trim(),
+        description: channelEventDescription.trim(),
+        startAt: startAtIso,
+        timeFormat: channelEventTimeFormat,
+        typeKey: selectedChannelEventType,
+        hypeCost: Number.parseInt(sanitizeChannelEventAmountInput(channelEventHypeCostInput), 10) || 0,
+        imageUrl,
+        tasksEnabled: isTaskEvent,
+        durationMinutes: isTaskEvent ? channelEventDurationMinutes : null,
+        expiresAt: taskEventExpiresAt,
+        taskDescriptions: isTaskEvent ? trimmedTaskDescriptions : [],
+        taskRewardAmounts: isTaskEvent ? normalizedTaskRewardAmounts : [],
+        taskAssignments: isTaskEvent ? normalizedTaskAssignments : [],
+        socialNetworks: channelEventLinkedSocialNetworks,
+        locationLabel: channelEventLocationLabelDraft.trim(),
+        locationUrl: channelEventLocationUrlDraft.trim(),
+        locationPlaceId: channelEventLocationPlaceIdDraft,
+        locationLat: channelEventLocationLatDraft,
+        locationLng: channelEventLocationLngDraft,
+      });
+
+      const response = await fetch(`${API_URL}/api/channels/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          postId: targetPostId,
+          message: encoded,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create channel event');
+      }
+
+      const newMessage = await response.json();
+      if (isTaskEvent && taskEventExpiresAt && newMessage && typeof newMessage === 'object') {
+        const rawMessage = String((newMessage as any).message || '').trim();
+        const parsedCreatedEvent = parseChannelEventMessage(rawMessage);
+
+        if (parsedCreatedEvent && !String(parsedCreatedEvent.expiresAt || '').trim()) {
+          (newMessage as any).message = encodeChannelEventMessage({
+            ...parsedCreatedEvent,
+            expiresAt: taskEventExpiresAt,
+          });
+        }
+
+        if (!String((newMessage as any).channel_event_expires_at || '').trim()) {
+          (newMessage as any).channel_event_expires_at = taskEventExpiresAt;
+        }
+      }
+      if (typeof newMessage?.host_white_keys_balance === 'number') {
+        setChannelEventWhiteKeysBalance(newMessage.host_white_keys_balance);
+      }
+      void recordChannelEventCreateGoalCompletion({
+        email: userEmail,
+        token: authToken,
+      }).catch(() => {});
+      setChatMessages(prev => {
+        const snapshot = resolveChannelChatStateSnapshot([...prev, newMessage], {
+          hasMoreOlderMessages: channelHasMoreOlderMessagesRef.current,
+          allowTrim: true,
+        });
+        channelOldestMessageIdRef.current = snapshot.oldestMessageId;
+        setChannelHasMoreOlderMessages(snapshot.hasMoreOlderMessages);
+        if (snapshot.didTrim) {
+          pendingChannelScrollToLatestAfterRefreshRef.current = true;
+        }
+        cacheChannelChatState(targetPostId, snapshot.messages, {
+          hasMoreOlderMessages: snapshot.hasMoreOlderMessages,
+          oldestMessageId: snapshot.oldestMessageId,
+          lastSig: snapshot.lastSig,
+        });
+        return snapshot.messages;
+      });
+
+      setShowChannelEventPanel(false);
+      setIsChannelEventPanelMinimized(false);
+      resetChannelEventDraft();
+    } catch (error) {
+      console.error('Error al crear evento del canal:', error);
+      Alert.alert(errorTitle, localize({
+        es: 'No se pudo crear el evento. Intenta de nuevo.',
+        en: 'The event could not be created. Please try again.',
+        fr: 'Impossible de créer l’événement. Réessayez.',
+        pt: 'Não foi possível criar o evento. Tente novamente.',
+        de: 'Das Event konnte nicht erstellt werden. Bitte versuche es erneut.',
+        it: 'Impossibile creare l’evento. Riprova.',
+      }));
+    } finally {
+      setIsCreatingChannelEvent(false);
+    }
+  };
+
   const handleCloseChannelImageComposer = () => {
-    if (isSendingChannelImage) return;
+    if (isSendingChannelImage) {return;}
     setShowChannelImageComposer(false);
     setChannelDraftImageUri(null);
     setChannelDraftCaption('');
@@ -3322,7 +6775,7 @@ const FrontScreen = ({
   };
 
   const handleApplyChannelImage = async () => {
-    if (isSendingChannelImage) return;
+    if (isSendingChannelImage) {return;}
     if (!authToken) {
       Alert.alert(sessionRequiredTitle, localize({
         es: 'Inicia sesión para enviar imágenes.',
@@ -3334,12 +6787,12 @@ const FrontScreen = ({
       }));
       return;
     }
-    if (!channelDraftImageUri) return;
+    if (!channelDraftImageUri) {return;}
 
     const targetPostId = selectedChannel
       ? (selectedChannel.post_id ?? (selectedChannel as any).postId ?? (selectedChannel as any).id)
       : userPublication?.id;
-    if (!targetPostId) return;
+    if (!targetPostId) {return;}
 
     setIsSendingChannelImage(true);
     try {
@@ -3389,6 +6842,10 @@ const FrontScreen = ({
         setReplyingToUsername(null);
         setReplyingToMessageIndex(null);
         setShowChannelAttachmentPanel(false);
+        void recordChannelImageShareGoalCompletion({
+          email: userEmail,
+          token: authToken,
+        }).catch(() => {});
         handleCloseChannelImageComposer();
       } else {
         const errorData = await response.json().catch(() => ({}));
@@ -3449,7 +6906,7 @@ const FrontScreen = ({
 
   // ── Alternar visibilidad de un mensaje (solo anfitrión) ──
   const toggleMessageVisibility = async (messageId: number | string) => {
-    if (!authToken) return;
+    if (!authToken) {return;}
     try {
       const response = await fetch(`${API_URL}/api/channels/messages/${messageId}/visibility`, {
         method: 'PATCH',
@@ -3540,15 +6997,15 @@ const FrontScreen = ({
   const markYourProfileHintSeen = () => {
     setHasSeenYourProfileHint(true);
     const AsyncStorage = getAsyncStorageSafe();
-    if (!AsyncStorage) return;
+    if (!AsyncStorage) {return;}
     AsyncStorage.setItem(PROFILE_YOUR_PROFILE_HINT_SEEN_KEY, '1').catch(() => { });
   };
 
   const markHomeSwipeTutorialSeen = () => {
     const emailKey = normalizeEmailKey(userEmail);
-    if (emailKey) homeSwipeTutorialSeenMemoryByEmail.add(emailKey);
+    if (emailKey) {homeSwipeTutorialSeenMemoryByEmail.add(emailKey);}
     setHasSeenHomeSwipeTutorial(true);
-    if (!authToken) return;
+    if (!authToken) {return;}
     setMyUiHints(authToken, { homeSwipeTutorialSeen: true }).catch(() => { });
   };
 
@@ -3559,16 +7016,16 @@ const FrontScreen = ({
       const AsyncStorage = getAsyncStorageSafe();
 
       if (!AsyncStorage) {
-        if (!cancelled) setHasSeenYourProfileHint(false);
+        if (!cancelled) {setHasSeenYourProfileHint(false);}
         return;
       }
 
       try {
         const raw = await AsyncStorage.getItem(PROFILE_YOUR_PROFILE_HINT_SEEN_KEY);
-        if (cancelled) return;
+        if (cancelled) {return;}
         setHasSeenYourProfileHint(raw === '1');
       } catch {
-        if (!cancelled) setHasSeenYourProfileHint(false);
+        if (!cancelled) {setHasSeenYourProfileHint(false);}
       }
     })();
 
@@ -3586,15 +7043,15 @@ const FrontScreen = ({
 
       // Only show when we *know* it's not seen; default to hidden on errors.
       if (!authToken) {
-        if (!cancelled) setHasSeenHomeSwipeTutorial(seenInMemory);
+        if (!cancelled) {setHasSeenHomeSwipeTutorial(seenInMemory);}
         return;
       }
 
       try {
         const hints = await getMyUiHints(authToken);
-        if (cancelled) return;
+        if (cancelled) {return;}
         if (hints.homeSwipeTutorialSeen) {
-          if (emailKey) homeSwipeTutorialSeenMemoryByEmail.add(emailKey);
+          if (emailKey) {homeSwipeTutorialSeenMemoryByEmail.add(emailKey);}
         }
         setHasSeenHomeSwipeTutorial(hints.homeSwipeTutorialSeen || seenInMemory);
       } catch {
@@ -3612,7 +7069,7 @@ const FrontScreen = ({
 
   const handleSelectGroupImage = async () => {
     const hasPermission = await requestGalleryPermission();
-    if (!hasPermission) return;
+    if (!hasPermission) {return;}
 
     // Evitar el “flash” del panel al volver de la galería.
     // Mostramos un overlay bloqueante y ocultamos el panel mientras se prepara el editor.
@@ -3668,7 +7125,7 @@ const FrontScreen = ({
   };
 
   const loadMyGroups = async () => {
-    if (!authToken || !accountVerified) return;
+    if (!authToken || !accountVerified) {return;}
 
     try {
       const resp = await fetch(`${API_URL}/api/groups/my-groups`, {
@@ -3682,7 +7139,7 @@ const FrontScreen = ({
       }
 
       const data = await resp.json();
-      if (!Array.isArray(data)) return;
+      if (!Array.isArray(data)) {return;}
 
       const mapped: Group[] = data.map((row: any) => ({
         id: String(row.id),
@@ -3700,13 +7157,13 @@ const FrontScreen = ({
   };
 
   const loadJoinedGroups = async () => {
-    if (!authToken || !accountVerified) return;
+    if (!authToken || !accountVerified) {return;}
 
     try {
       const resp = await fetch(`${API_URL}/api/groups/joined-groups`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
-        }
+        },
       });
 
       if (!resp.ok) {
@@ -3736,14 +7193,14 @@ const FrontScreen = ({
   };
 
   useEffect(() => {
-    if (!authToken || !accountVerified) return;
+    if (!authToken || !accountVerified) {return;}
     if (chatView === 'groups' && groupsTab === 'tusGrupos') {
       loadMyGroups();
     }
   }, [chatView, groupsTab, authToken, accountVerified]);
 
   useEffect(() => {
-    if (!authToken || !accountVerified) return;
+    if (!authToken || !accountVerified) {return;}
     if (chatView === 'groups' && groupsTab === 'unidos') {
       loadJoinedGroups();
     }
@@ -3767,7 +7224,7 @@ const FrontScreen = ({
 
   const normalizeMentionUsername = (raw?: string) => {
     const trimmed = (raw || '').trim();
-    if (!trimmed) return '';
+    if (!trimmed) {return '';}
     return trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
   };
 
@@ -3780,7 +7237,7 @@ const FrontScreen = ({
   };
 
   const shouldShowVerifiedBadgeForHandle = (rawHandle: string) => {
-    if (!accountVerified) return false;
+    if (!accountVerified) {return false;}
     const me = normalizeMentionUsername(username).toLowerCase();
     const other = normalizeMentionUsername(rawHandle).toLowerCase();
     return !!me && !!other && me === other;
@@ -3788,7 +7245,7 @@ const FrontScreen = ({
 
   const showActionToast = (message: string) => {
     const msg = String(message || '').trim();
-    if (!msg) return;
+    if (!msg) {return;}
 
     setActionToast(msg);
     actionToastAnim.stopAnimation();
@@ -3800,7 +7257,7 @@ const FrontScreen = ({
         duration: 150,
         useNativeDriver: false,
       }),
-      Animated.delay(1700),
+      Animated.delay(3700),
       Animated.timing(actionToastAnim, {
         toValue: 0,
         duration: 150,
@@ -3816,15 +7273,22 @@ const FrontScreen = ({
     });
   };
 
+  const showHostOnlyChannelHypeToast = (contentType: 'event' | 'reading') => {
+    const messageKey: TranslationKey = contentType === 'reading'
+      ? 'chat.hostOnlyReadingHypeMessage'
+      : 'chat.hostOnlyEventHypeMessage';
+    showActionToast(t(messageKey));
+  };
+
   const fetchMentionProfileIfNeeded = async (mentionUsernameWithAt: string) => {
     const normalized = normalizeMentionUsername(mentionUsernameWithAt);
-    if (!normalized) return;
-    if (mentionProfiles[normalized]) return;
+    if (!normalized) {return;}
+    if (mentionProfiles[normalized]) {return;}
 
     const usernameNoAt = normalized.slice(1);
     try {
       const resp = await fetch(`${API_URL}/api/users/profile/${encodeURIComponent(usernameNoAt)}`);
-      if (!resp.ok) return;
+      if (!resp.ok) {return;}
       const data = await resp.json();
 
       const rawSocials = data?.social_networks ?? data?.socialNetworks ?? data?.social_network ?? [];
@@ -3834,7 +7298,7 @@ const FrontScreen = ({
       } else if (typeof rawSocials === 'string' && rawSocials.trim().length > 0) {
         try {
           const maybe = JSON.parse(rawSocials);
-          if (Array.isArray(maybe)) parsedSocials = maybe;
+          if (Array.isArray(maybe)) {parsedSocials = maybe;}
         } catch {
           // ignore
         }
@@ -3856,9 +7320,9 @@ const FrontScreen = ({
     mentionUsernameWithAt: string,
     enabled: boolean
   ) => {
-    if (!enabled) return;
+    if (!enabled) {return;}
     const normalized = normalizeMentionUsername(mentionUsernameWithAt);
-    if (!normalized) return;
+    if (!normalized) {return;}
 
     const isSame = expandedMention?.messageIndex === messageIndex && expandedMention?.username === normalized;
     if (isSame) {
@@ -3872,13 +7336,13 @@ const FrontScreen = ({
 
   const normalizeExternalUrl = (rawUrl: string): string | null => {
     const trimmed = String(rawUrl ?? '').trim();
-    if (!trimmed) return null;
+    if (!trimmed) {return null;}
 
     // Keep URLs with a scheme (https:, http:, mailto:, tel:, etc.)
-    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {return trimmed;}
 
     // Handle protocol-relative URLs
-    if (trimmed.startsWith('//')) return `https:${trimmed}`;
+    if (trimmed.startsWith('//')) {return `https:${trimmed}`;}
 
     // Common: users store links without scheme, e.g. "t.me/user" or "www.example.com"
     return `https://${trimmed}`;
@@ -3886,16 +7350,16 @@ const FrontScreen = ({
 
   const resolveGoogleMapsShortUrlIfNeeded = async (url: string): Promise<string> => {
     const candidate = String(url || '').trim();
-    if (!/^https?:/i.test(candidate)) return candidate;
+    if (!/^https?:/i.test(candidate)) {return candidate;}
 
     try {
       const hostMatch = candidate.match(/^https?:\/\/([^\/?#]+)/i);
       const host = String(hostMatch?.[1] || '').toLowerCase();
-      if (!host) return candidate;
+      if (!host) {return candidate;}
 
       // Common Google Maps share shorteners.
       const isShortHost = host === 'maps.app.goo.gl' || host === 'goo.gl' || host.endsWith('.goo.gl');
-      if (!isShortHost) return candidate;
+      if (!isShortHost) {return candidate;}
 
       // Follow redirects to get a stable https://www.google.com/maps/... URL.
       const resp = await fetch(candidate, { method: 'GET', redirect: 'follow' as any });
@@ -3908,7 +7372,7 @@ const FrontScreen = ({
 
   const openExternalLink = async (rawUrl: string) => {
     let url = normalizeExternalUrl(rawUrl);
-    if (!url) return;
+    if (!url) {return;}
 
     url = await resolveGoogleMapsShortUrlIfNeeded(url);
 
@@ -3956,12 +7420,646 @@ const FrontScreen = ({
     }
   };
 
+  const normalizeReadingCitationSocialIconKey = (raw: unknown) => {
+    const key = String(raw ?? '').trim().toLowerCase();
+    if (!key) {
+      return '';
+    }
+    if (key === 'x' || key === 'x_twitter' || key === 'xtwitter') {
+      return 'twitter';
+    }
+    if (key === 'only_fans') {
+      return 'onlyfans';
+    }
+    return key;
+  };
+
+  const getRenderableReadingCitationUserSocials = (socialNetworks?: Array<{ network?: string; id?: string; link?: string | null }>) => {
+    if (!Array.isArray(socialNetworks)) {
+      return [];
+    }
+
+    const seen = new Set<string>();
+    return socialNetworks.reduce<Array<{ key: string; iconSource: any; link: string }>>((accumulator, social) => {
+      const key = normalizeReadingCitationSocialIconKey(social?.network ?? social?.id);
+      if (!key || seen.has(key)) {
+        return accumulator;
+      }
+
+      const normalizedLink = normalizeExternalUrl(String(social?.link || ''));
+      if (!normalizedLink) {
+        return accumulator;
+      }
+
+      const iconSource = SOCIAL_ICONS[key as keyof typeof SOCIAL_ICONS];
+      if (!iconSource) {
+        return accumulator;
+      }
+
+      seen.add(key);
+      accumulator.push({ key, iconSource, link: normalizedLink });
+      return accumulator;
+    }, []);
+  };
+
+  const openExpandedChannelReading = (payload: ChannelReadingMessagePayload, message?: any) => {
+    setExpandedChannelReading({ payload, message });
+  };
+
+  const closeExpandedChannelReading = () => {
+    setExpandedChannelReading(null);
+    setExpandedChannelReadingCitation(null);
+  };
+
+  const closeExpandedChannelReadingCitation = () => {
+    setExpandedChannelReadingCitation(null);
+  };
+
+  useEffect(() => {
+    setExpandedChannelReading(null);
+    setExpandedChannelReadingCitation(null);
+  }, [authToken, userEmail]);
+
+  useEffect(() => {
+    if (!expandedChannelReading) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      expandedChannelReadingScrollRef.current?.scrollTo({ y: 0, animated: false });
+    });
+  }, [expandedChannelReading, userEmail]);
+
+  const formatChannelReadingPublishedDateLabel = (rawDate?: string, message?: any) => {
+    const localeByLanguage: Record<Language, string> = {
+      es: 'es-ES',
+      en: 'en-US',
+      fr: 'fr-FR',
+      pt: 'pt-PT',
+      de: 'de-DE',
+      it: 'it-IT',
+    };
+
+    const locale = localeByLanguage[language] || 'en-US';
+    const fallbackCreatedAt = new Date(String(message?.created_at ?? message?.createdAt ?? ''));
+    const hasValidFallbackCreatedAt = !Number.isNaN(fallbackCreatedAt.getTime());
+    const userSelectedDate = parseChannelEventDate(String(rawDate || ''));
+    const displayDate = userSelectedDate || (hasValidFallbackCreatedAt ? fallbackCreatedAt : null);
+
+    if (!displayDate) {
+      return '';
+    }
+
+    const weekdayLabelRaw = new Intl.DateTimeFormat(locale, { weekday: 'long' }).format(displayDate);
+    const weekdayLabel = weekdayLabelRaw
+      ? `${weekdayLabelRaw.charAt(0).toUpperCase()}${weekdayLabelRaw.slice(1)}`
+      : '';
+    const dayLabel = new Intl.DateTimeFormat(locale, { day: 'numeric' }).format(displayDate);
+    const monthLabel = new Intl.DateTimeFormat(locale, { month: 'long' }).format(displayDate);
+    const yearLabel = new Intl.DateTimeFormat(locale, { year: 'numeric' }).format(displayDate);
+
+    return [weekdayLabel && dayLabel ? `${weekdayLabel} ${dayLabel}` : '', monthLabel, yearLabel]
+      .filter(Boolean)
+      .join(' ');
+  };
+
+  const formatChannelReadingCategoryLabel = (rawCategory?: string) => {
+    const normalizedCategory = String(rawCategory || '').trim();
+
+    if (!normalizedCategory) {
+      return '';
+    }
+
+    if ((CHANNEL_EVENT_TYPE_OPTIONS as readonly string[]).includes(normalizedCategory)) {
+      return t(normalizedCategory as TranslationKey);
+    }
+
+    return normalizedCategory;
+  };
+
+  const renderChannelReadingMessageCard = (
+    payload: ChannelReadingMessagePayload,
+    options?: {
+      onOpenImage?: (uri: string) => void;
+      message?: any;
+      imageBlurRadius?: number;
+      imageOpacity?: number;
+      canOpenImage?: boolean;
+      canOpenExpanded?: boolean;
+      showLockIcon?: boolean;
+    }
+  ) => {
+    const normalizeReadingMediaUri = (rawUri: string) => {
+      const uri = String(rawUri || '').trim();
+      if (!uri) {return '';}
+      if (/^(https?:|file:|content:|data:)/i.test(uri)) {return uri;}
+      if (uri.startsWith('/api/') || uri.startsWith('/uploads/')) {return getServerResourceUrl(uri);}
+      if (uri.startsWith('api/') || uri.startsWith('uploads/')) {return getServerResourceUrl(`/${uri}`);}
+      return uri;
+    };
+    const publishedDateLabel = formatChannelReadingPublishedDateLabel(payload.date, options?.message);
+    const categoryLabel = formatChannelReadingCategoryLabel(payload.category);
+
+    const imageUris = Array.isArray(payload.imageUrls)
+      ? payload.imageUrls.map((item) => normalizeReadingMediaUri(item)).filter(Boolean)
+      : [];
+    const canOpenImage = options?.canOpenImage !== false;
+    const canOpenExpanded = options?.canOpenExpanded !== false;
+    const readingFooterLabel = localize({
+      es: 'Lectura',
+      en: 'Reading',
+      fr: 'Lecture',
+      pt: 'Leitura',
+      de: 'Lesung',
+      it: 'Lettura',
+    });
+
+    return (
+      <View style={styles.channelReadingMessageCard}>
+        {imageUris.length > 0 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.channelReadingMessageImagesRow}
+            style={styles.channelReadingMessageImagesScroller}
+          >
+            {imageUris.map((imageUri, index) => (
+              <TouchableOpacity
+                key={`${imageUri}-${index}`}
+                activeOpacity={canOpenImage ? 0.9 : 1}
+                disabled={!canOpenImage}
+                onPress={() => {
+                  if (!canOpenImage) {return;}
+                  options?.onOpenImage ? options.onOpenImage(imageUri) : openChannelImageViewer(imageUri);
+                }}
+                style={styles.channelReadingMessageImageTouchable}
+              >
+                <Image
+                  source={{ uri: imageUri }}
+                  style={[
+                    styles.channelReadingMessageImage,
+                    typeof options?.imageOpacity === 'number' ? { opacity: options.imageOpacity } : null,
+                  ]}
+                  resizeMode="cover"
+                  blurRadius={typeof options?.imageBlurRadius === 'number' ? options.imageBlurRadius : undefined}
+                />
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        ) : null}
+
+        <View style={styles.channelReadingMessageContent}>
+          <Text style={styles.channelReadingMessageTitle}>{payload.title}</Text>
+          <Text style={styles.channelReadingMessageSubtitle}>{payload.subtitle}</Text>
+          <Text style={styles.channelReadingMessageLead}>{payload.lead}</Text>
+
+          <View style={styles.channelReadingMessageFooter}>
+            <TouchableOpacity
+              activeOpacity={canOpenExpanded ? 0.85 : 1}
+              disabled={!canOpenExpanded}
+              onPress={() => {
+                if (!canOpenExpanded) {return;}
+                openExpandedChannelReading(payload, options?.message);
+              }}
+              style={styles.channelReadingMessageFooterHeader}
+            >
+              <MaterialCommunityIcons name="book-open-page-variant" size={16} color="#FFFFFF" />
+              <Text style={styles.channelReadingMessageFooterLabel}>{readingFooterLabel}</Text>
+              {options?.showLockIcon ? (
+                <MaterialIcons name="lock-outline" size={14} color="#FFFFFF" style={{ marginLeft: 6, opacity: 0.85 }} />
+              ) : null}
+            </TouchableOpacity>
+            {!!publishedDateLabel && <Text style={styles.channelReadingMessagePublishedDate}>{publishedDateLabel}</Text>}
+            {!!categoryLabel && <Text style={styles.channelReadingMessageCategory}>{categoryLabel}</Text>}
+          </View>
+        </View>
+      </View>
+    );
+  };
+
+  const renderExpandedChannelReadingSection = (sectionText: string, sectionIndex: number, citations: ChannelReadingCitation[]) => {
+    if (!citations.length) {
+      return <Text style={styles.expandedChannelReadingBodyText}>{sectionText}</Text>;
+    }
+
+    return (
+      <Text style={styles.expandedChannelReadingBodyText}>
+        {renderExpandedReadingTextFragments({
+          text: sectionText,
+          citations,
+          keyPrefix: `expanded-reading-${sectionIndex}`,
+          plainTextStyle: styles.expandedChannelReadingBodyText,
+          whiteCitationStyle: styles.expandedChannelReadingCitationTextWhite,
+          gradientCitationStyle: styles.expandedChannelReadingCitationTextGradient,
+          onPressCitation: setExpandedChannelReadingCitation,
+        })}
+      </Text>
+    );
+  };
+
+  const renderExpandedChannelReadingContent = () => {
+    if (!expandedChannelReading) {
+      return null;
+    }
+
+    const payload = expandedChannelReading.payload;
+    const publishedDateLabel = formatChannelReadingPublishedDateLabel(payload.date, expandedChannelReading.message);
+    const categoryLabel = formatChannelReadingCategoryLabel(payload.category);
+    const expandedReadingHostProfile = selectedChannel
+      ? {
+        username: formatUsernameWithAt(String(selectedChannel.username || 'Usuario')),
+        profilePhotoUri: typeof selectedChannel.profile_photo_uri === 'string' ? selectedChannel.profile_photo_uri.trim() : '',
+        socialNetworks: Array.isArray(selectedChannel.social_networks) ? selectedChannel.social_networks : [],
+        accountVerified: !!selectedChannel.account_verified,
+        keintiVerified: !!selectedChannel.keinti_verified,
+      }
+      : (userPublication?.user ? {
+        username: formatUsernameWithAt(String(userPublication.user.username || 'Usuario')),
+        profilePhotoUri: typeof userPublication.user.profilePhotoUri === 'string' ? userPublication.user.profilePhotoUri.trim() : '',
+        socialNetworks: Array.isArray(userPublication.user.socialNetworks) ? userPublication.user.socialNetworks : [],
+        accountVerified: !!userPublication.user.accountVerified,
+        keintiVerified: !!userPublication.user.keintiVerified,
+      } : null);
+    const expandedReadingHostAvatarUri = expandedReadingHostProfile?.profilePhotoUri
+      ? getServerResourceUrl(expandedReadingHostProfile.profilePhotoUri)
+      : '';
+    const expandedReadingHostSocials = getRenderableReadingCitationUserSocials(expandedReadingHostProfile?.socialNetworks);
+    const expandedReadingHostSocialViewportCount = Math.min(expandedReadingHostSocials.length, READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT);
+    const expandedReadingHostSocialViewportWidth = expandedReadingHostSocialViewportCount > 0
+      ? (expandedReadingHostSocialViewportCount * READING_CITATION_USER_SOCIAL_ICON_SIZE)
+        + ((expandedReadingHostSocialViewportCount - 1) * READING_CITATION_USER_SOCIAL_ICON_GAP)
+      : 0;
+    const bodySections = Array.isArray(payload.bodySections) ? payload.bodySections : [];
+    const insertions = Array.isArray(payload.insertions) ? payload.insertions : [];
+    const citationsBySection = (Array.isArray(payload.citations) ? payload.citations : []).reduce<Record<number, ChannelReadingCitation[]>>((accumulator, citation) => {
+      if (!accumulator[citation.sectionIndex]) {
+        accumulator[citation.sectionIndex] = [];
+      }
+      accumulator[citation.sectionIndex].push(citation);
+      accumulator[citation.sectionIndex].sort((left, right) => left.start - right.start);
+      return accumulator;
+    }, {});
+    const resolveReadingMediaUri = (rawUri: string) => {
+      const uri = String(rawUri || '').trim();
+      if (!uri) {return '';}
+      if (/^(https?:|file:|content:|data:)/i.test(uri)) {return uri;}
+      if (uri.startsWith('/api/') || uri.startsWith('/uploads/')) {return getServerResourceUrl(uri);}
+      if (uri.startsWith('api/') || uri.startsWith('uploads/')) {return getServerResourceUrl(`/${uri}`);}
+      return uri;
+    };
+
+    return (
+      <>
+        {bodySections.map((sectionText, index) => {
+          const trailingInsertion = insertions[index] ?? null;
+          const hasSectionContent = String(sectionText || '').length > 0;
+          const sectionCitations = citationsBySection[index] || [];
+
+          return (
+            <React.Fragment key={`expanded-reading-section-${index}`}>
+              {hasSectionContent ? (
+                <View style={styles.expandedChannelReadingSectionBlock}>
+                  {renderExpandedChannelReadingSection(String(sectionText || ''), index, sectionCitations)}
+                </View>
+              ) : null}
+
+              {trailingInsertion?.type === 'intertitle' && trailingInsertion.text ? (
+                <Text style={styles.expandedChannelReadingIntertitle}>{trailingInsertion.text}</Text>
+              ) : null}
+
+              {trailingInsertion?.type === 'image' && trailingInsertion.url ? (
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  onPress={() => openChannelImageViewer(resolveReadingMediaUri(trailingInsertion.url))}
+                  style={styles.expandedChannelReadingImageTouchable}
+                >
+                  <Image
+                    source={{ uri: resolveReadingMediaUri(trailingInsertion.url) }}
+                    style={styles.expandedChannelReadingImage}
+                    resizeMode="cover"
+                  />
+                </TouchableOpacity>
+              ) : null}
+            </React.Fragment>
+          );
+        })}
+
+        {!!publishedDateLabel && (
+          <Text style={styles.expandedChannelReadingPublishedDate}>{publishedDateLabel}</Text>
+        )}
+        {!!categoryLabel && (
+          <Text style={styles.expandedChannelReadingCategory}>{categoryLabel}</Text>
+        )}
+        {expandedReadingHostProfile ? (
+          <View style={styles.expandedChannelReadingHostCard}>
+            <TouchableOpacity
+              activeOpacity={expandedReadingHostAvatarUri ? 0.85 : 1}
+              disabled={!expandedReadingHostAvatarUri}
+              onPress={() => {
+                if (!expandedReadingHostAvatarUri) {return;}
+                setFullScreenAvatarUri(expandedReadingHostAvatarUri);
+              }}
+              style={styles.expandedChannelReadingHostAvatarButton}
+            >
+              {expandedReadingHostAvatarUri ? (
+                <Image source={{ uri: expandedReadingHostAvatarUri }} style={styles.expandedChannelReadingHostAvatar} resizeMode="cover" />
+              ) : (
+                <View style={styles.expandedChannelReadingHostAvatarFallback}>
+                  <MaterialIcons name="person" size={24} color="#FFFFFF" />
+                </View>
+              )}
+            </TouchableOpacity>
+
+            <View style={styles.expandedChannelReadingHostBody}>
+              <View style={styles.expandedChannelReadingHostUsernameRow}>
+                {expandedReadingHostProfile.accountVerified ? (
+                  <View style={styles.expandedChannelReadingHostVerifiedBadge}>
+                    <VerifiedBadgeIcon size={14} solidColor="#FFFFFF" solidOpacity={0.6} />
+                  </View>
+                ) : null}
+                <Text style={styles.expandedChannelReadingHostUsername}>{expandedReadingHostProfile.username}</Text>
+                {expandedReadingHostProfile.keintiVerified ? (
+                  <View style={styles.expandedChannelReadingHostKeintiBadge}>
+                    <VerifiedBadgeIcon size={14} variant="gradient" />
+                  </View>
+                ) : null}
+              </View>
+
+              {expandedReadingHostSocials.length > 0 ? (
+                <View style={[styles.expandedChannelReadingHostSocialViewport, { width: expandedReadingHostSocialViewportWidth }]}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    scrollEnabled={expandedReadingHostSocials.length > READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT}
+                    contentContainerStyle={styles.expandedChannelReadingHostSocialRow}
+                  >
+                    {expandedReadingHostSocials.map((social, socialIndex) => {
+                      const isLastSocial = socialIndex === expandedReadingHostSocials.length - 1;
+
+                      return (
+                        <TouchableOpacity
+                          key={`expanded-reading-host-social-${social.key}`}
+                          accessibilityRole="button"
+                          activeOpacity={0.85}
+                          onPress={() => openExternalLink(social.link)}
+                          style={isLastSocial ? null : styles.expandedChannelReadingHostSocialIconSpacing}
+                        >
+                          <Image
+                            source={social.iconSource}
+                            style={styles.expandedChannelReadingHostSocialIcon}
+                            resizeMode="contain"
+                          />
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+      </>
+    );
+  };
+
+  const renderChannelEventMessageCard = (
+    payload: ChannelEventMessagePayload,
+    options?: {
+      onOpenImage?: (uri: string) => void;
+      message?: any;
+      imageBlurRadius?: number;
+      imageOpacity?: number;
+      canOpenImage?: boolean;
+      canCompleteRewardedTasks?: boolean;
+      onCompleteRewardedTask?: (messageId: number | string, taskIndex: number) => void;
+    }
+  ) => {
+    const localeByLanguage: Record<Language, string> = {
+      es: 'es-ES',
+      en: 'en-US',
+      fr: 'fr-FR',
+      pt: 'pt-PT',
+      de: 'de-DE',
+      it: 'it-IT',
+    };
+
+    const startAtDate = new Date(String(payload.startAt || ''));
+    const isValidDate = !Number.isNaN(startAtDate.getTime());
+    const locale = localeByLanguage[language] || 'en-US';
+    const weekdayLabelRaw = isValidDate
+      ? new Intl.DateTimeFormat(locale, { weekday: 'long' }).format(startAtDate)
+      : '';
+    const weekdayLabel = weekdayLabelRaw
+      ? `${weekdayLabelRaw.charAt(0).toUpperCase()}${weekdayLabelRaw.slice(1)}`
+      : '';
+    const dateLabel = isValidDate
+      ? new Intl.DateTimeFormat(locale, { day: '2-digit', month: '2-digit', year: 'numeric' }).format(startAtDate)
+      : '';
+    const eventTimeFormat = payload.timeFormat === 'us' ? 'us' : 'european';
+    const timeLabel = isValidDate
+      ? formatChannelEventTime(startAtDate, eventTimeFormat)
+      : '';
+    const dateTimeLabel = [dateLabel, timeLabel].filter(Boolean).join(' · ');
+    const taskDescriptions = Array.isArray(payload.taskDescriptions)
+      ? payload.taskDescriptions.map(item => String(item || '').trim()).filter(Boolean)
+      : [];
+    const taskRewardAmounts = Array.isArray(payload.taskRewardAmounts)
+      ? payload.taskRewardAmounts.map(item => Math.max(0, Math.floor(Number(item) || 0)))
+      : [];
+    const taskAssignments = Array.isArray(payload.taskAssignments)
+      ? payload.taskAssignments.map(taskAssignmentList => (
+        Array.isArray(taskAssignmentList)
+          ? taskAssignmentList.filter(item => normalizeChannelEventTaskUsername(item?.username))
+          : []
+      ))
+      : [];
+    const rewardRows = Array.isArray(options?.message?.channel_event_task_rewards)
+      ? options?.message?.channel_event_task_rewards
+      : [];
+    const eventExpiresAt = payload.expiresAt
+      ?? options?.message?.channel_event_expires_at
+      ?? rewardRows.find((item: any) => String(item?.expiresAt || '').trim())?.expiresAt
+      ?? null;
+    const eventCreatedAt = options?.message?.created_at ?? options?.message?.createdAt ?? null;
+    const remainingDurationMinutes = getChannelEventCountdownMinutes(
+      eventExpiresAt,
+      eventCreatedAt,
+      payload.durationMinutes,
+      channelEventCountdownNowMs,
+    );
+    const imageUriRaw = String(payload.imageUrl || '').trim();
+    const imageUri = imageUriRaw && !/^(https?:|file:|content:|data:)/i.test(imageUriRaw)
+      ? (imageUriRaw.startsWith('/api/') || imageUriRaw.startsWith('/uploads/')
+        ? getServerResourceUrl(imageUriRaw)
+        : imageUriRaw.startsWith('api/') || imageUriRaw.startsWith('uploads/')
+          ? getServerResourceUrl(`/${imageUriRaw}`)
+          : imageUriRaw)
+      : imageUriRaw;
+    const canOpenImage = options?.canOpenImage !== false;
+
+    return (
+      <View style={styles.channelEventMessageCard}>
+        {!!imageUri && (
+          <TouchableOpacity
+            activeOpacity={canOpenImage ? 0.9 : 1}
+            disabled={!canOpenImage}
+            onPress={() => {
+              if (!canOpenImage) {return;}
+              options?.onOpenImage ? options.onOpenImage(imageUri) : openChannelImageViewer(imageUri);
+            }}
+          >
+            <Image
+              source={{ uri: imageUri }}
+              style={[
+                styles.channelEventMessageImage,
+                typeof options?.imageOpacity === 'number' ? { opacity: options.imageOpacity } : null,
+              ]}
+              resizeMode="cover"
+              blurRadius={Math.max(0, Number(options?.imageBlurRadius) || 0)}
+            />
+          </TouchableOpacity>
+        )}
+        <View style={styles.channelEventMessageContent}>
+          <Text style={styles.channelEventMessageName}>{payload.name}</Text>
+          <Text style={styles.channelEventMessageDescription}>{payload.description}</Text>
+
+          {!!weekdayLabel && (
+            <Text style={styles.channelEventMessageWeekday}>{weekdayLabel}</Text>
+          )}
+
+          {!!dateTimeLabel && (
+            <Text style={styles.channelEventMessageDateTime}>{dateTimeLabel}</Text>
+          )}
+
+          {Array.isArray(payload.socialNetworks) && payload.socialNetworks.length > 0 ? (
+            <View style={styles.channelEventMessageSocialSection}>
+              <View style={styles.channelEventMessageSocialRow}>
+                {payload.socialNetworks.map((item, index) => {
+                  const iconSource = SOCIAL_ICONS[item.network as keyof typeof SOCIAL_ICONS];
+                  if (!iconSource) {return null;}
+                  return (
+                    <TouchableOpacity
+                      key={`${item.network}-${index}`}
+                      activeOpacity={0.85}
+                      onPress={() => openExternalLink(item.link)}
+                      style={styles.channelEventMessageSocialButton}
+                    >
+                      <Image source={iconSource} style={styles.channelEventMessageSocialIcon} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+
+          {!!payload.locationLabel && (
+            <View style={styles.channelEventMessageLocationSection}>
+              <TouchableOpacity activeOpacity={0.85} onPress={() => openExternalLink(payload.locationUrl || 'https://www.google.com/maps')}>
+                <Text style={styles.channelEventMessageLocation}>{payload.locationLabel}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View style={styles.channelEventMessageFooter}>
+            <Text style={styles.channelEventMessageFooterLabel}>Evento</Text>
+            <Text style={styles.channelEventMessageFooterType}>{t(payload.typeKey)}</Text>
+          </View>
+
+          {taskDescriptions.length > 0 ? (
+            <View style={styles.channelEventMessageTasksSection}>
+              <View style={styles.channelEventMessageDivider} />
+              <View style={styles.channelEventMessageTasksList}>
+                {taskDescriptions.map((taskDescription, index) => {
+                  const taskAssignee = String(taskAssignments[index]?.[0]?.username || '').trim();
+                  const rewardAmount = Math.max(0, Number(taskRewardAmounts[index] || 0));
+                  const rewardRow = rewardRows.find((item: any) => Number(item?.taskIndex) === index);
+                  const rewardStatus = String(rewardRow?.status || (rewardAmount > 0 ? 'pending' : ''));
+                  const isRewardCompleted = rewardStatus === 'completed';
+                  const isRewardPending = rewardStatus === 'pending';
+                  const isRewardRefunded = rewardStatus === 'refunded';
+                  const actionKey = `${options?.message?.id}:${index}`;
+                  const isCompletingReward = completingChannelEventTaskKey === actionKey;
+                  const canPressRewardCheckbox = !!options?.canCompleteRewardedTasks
+                    && !!options?.onCompleteRewardedTask
+                    && !!options?.message?.id
+                    && rewardAmount > 0
+                    && isRewardPending
+                    && !isCompletingReward;
+
+                  return (
+                    <View key={`channel-event-task-view-${index}`} style={styles.channelEventMessageTaskRow}>
+                      <View style={styles.channelEventMessageTaskContent}>
+                        <View style={styles.channelEventMessageTaskHeaderRow}>
+                          {rewardAmount > 0 ? (
+                            <TouchableOpacity
+                              activeOpacity={canPressRewardCheckbox ? 0.8 : 1}
+                              disabled={!canPressRewardCheckbox}
+                              onPress={() => options?.onCompleteRewardedTask?.(options?.message?.id, index)}
+                              style={[
+                                styles.channelEventMessageTaskCheckbox,
+                                isRewardCompleted ? styles.channelEventMessageTaskCheckboxCompleted : null,
+                                canPressRewardCheckbox ? styles.channelEventMessageTaskCheckboxActionable : null,
+                                isRewardRefunded ? styles.channelEventMessageTaskCheckboxRefunded : null,
+                              ]}
+                            >
+                              {isRewardCompleted ? (
+                                <MaterialIcons name="check" size={13} color="#000000" />
+                              ) : isCompletingReward ? (
+                                <ActivityIndicator size="small" color="#FFB74D" />
+                              ) : null}
+                            </TouchableOpacity>
+                          ) : null}
+                          {!!taskAssignee && (
+                            <Text style={[
+                              styles.channelEventMessageTaskAssignee,
+                            ]}>{taskAssignee}</Text>
+                          )}
+                        </View>
+                        {rewardAmount > 0 ? (
+                          <View style={styles.channelEventMessageTaskRewardRow}>
+                            <MaterialCommunityIcons
+                              name="key-outline"
+                              size={15}
+                              color={isRewardRefunded ? 'rgba(255,255,255,0.58)' : '#FFFFFF'}
+                            />
+                            <Text
+                              style={[
+                                styles.channelEventMessageTaskRewardText,
+                                isRewardRefunded ? styles.channelEventMessageTaskRewardTextRefunded : null,
+                              ]}
+                            >
+                              {rewardAmount}
+                            </Text>
+                          </View>
+                        ) : null}
+                        <Text style={[
+                          styles.channelEventMessageTaskText,
+                          rewardAmount <= 0 ? styles.channelEventMessageTaskTextWithoutCheckbox : null,
+                        ]}>{taskDescription}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+              {typeof payload.durationMinutes === 'number' && payload.durationMinutes > 0 ? (
+                <Text style={styles.channelEventMessageDurationText}>
+                  <Text style={styles.channelEventMessageDurationPrefix}>{`${t('event.endsIn' as TranslationKey)} `}</Text>
+                  {formatChannelEventDurationValue(remainingDurationMinutes)}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+        </View>
+      </View>
+    );
+  };
+
   const renderTextWithMentions = (
     text: string,
     onPressMention: (mentionUsernameWithAt: string) => void,
     enabled: boolean
   ) => {
-    if (!text) return null;
+    if (!text) {return null;}
 
     const parts: Array<{ type: 'text' | 'mention'; value: string }> = [];
     const mentionRegex = /@[\w.]+/g;
@@ -4014,7 +8112,7 @@ const FrontScreen = ({
         toValue: 0,
         duration: 300,
         useNativeDriver: true,
-      })
+      }),
     ]).start(() => {
       setLimitWarning(null);
     });
@@ -4058,7 +8156,7 @@ const FrontScreen = ({
             Authorization: `Bearer ${authToken}`,
           },
         });
-        if (!resp.ok) return;
+        if (!resp.ok) {return;}
         const data = await resp.json().catch(() => ({}));
         const name = String(data?.username || '').trim();
         if (!didCancel) {
@@ -4121,7 +8219,7 @@ const FrontScreen = ({
     }
   ) => {
     const postId = String(postIdLike ?? '').trim();
-    if (!postId) return;
+    if (!postId) {return;}
 
     channelChatStateCacheRef.current[postId] = {
       messages: [...messages],
@@ -4133,10 +8231,10 @@ const FrontScreen = ({
 
   const restoreChannelChatState = (postIdLike: string | number | null | undefined) => {
     const postId = String(postIdLike ?? '').trim();
-    if (!postId) return false;
+    if (!postId) {return false;}
 
     const cached = channelChatStateCacheRef.current[postId];
-    if (!cached) return false;
+    if (!cached) {return false;}
 
     currentChannelPostIdRef.current = postId;
     channelChatLastSigRef.current = cached.lastSig || '';
@@ -4194,6 +8292,16 @@ const FrontScreen = ({
     channelChatLoadingPostIdRef.current = postId || null;
     setChannelChatLoadingPostId(postId || null);
 
+    if (postId) {
+      void dismissChannelReplyNotification(authToken, Number(postId))
+        .then(() => {
+          onNotificationsChanged?.();
+        })
+        .catch((error) => {
+          console.error('Error dismissing joined channel reply notification:', error);
+        });
+    }
+
     // Android render workaround: force a repaint across the first two frames
     // when entering a joined channel chat to avoid black/invisible initial draw.
     requestAnimationFrame(() => {
@@ -4204,12 +8312,23 @@ const FrontScreen = ({
     });
   };
 
+  useEffect(() => {
+    if (!pendingJoinedChannelNotificationRedirect?.postId) {return;}
+    if (activeBottomTab !== 'chat' || chatView !== 'channel' || channelTab !== 'tusCanales') {return;}
+
+    const matchingChannel = myChannels.find(channel => String(channel?.post_id ?? channel?.postId ?? channel?.id ?? '').trim() === pendingJoinedChannelNotificationRedirect.postId);
+    if (!matchingChannel) {return;}
+
+    openJoinedChannelChat(matchingChannel);
+    setPendingJoinedChannelNotificationRedirect(null);
+  }, [activeBottomTab, chatView, channelTab, myChannels, pendingJoinedChannelNotificationRedirect]);
+
   const fetchMyChannels = async () => {
     try {
       const response = await fetch(`${API_URL}/api/channels/my-channels`, {
         headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
+          'Authorization': `Bearer ${authToken}`,
+        },
       });
       if (response.ok) {
         const data = await response.json();
@@ -4220,6 +8339,342 @@ const FrontScreen = ({
       console.error('Error fetching channels:', error);
     }
   };
+
+  useEffect(() => {
+    hypeViralEventPagesRef.current = hypeViralEventPages;
+  }, [hypeViralEventPages]);
+
+  useEffect(() => {
+    hypeViralReadingPagesRef.current = hypeViralReadingPages;
+  }, [hypeViralReadingPages]);
+
+  useEffect(() => {
+    selectedHypeCategoryRef.current = selectedHypeCategory;
+  }, [selectedHypeCategory]);
+
+  const resetHypePaginationState = useCallback(() => {
+    hypeViralEventsRequestSeqRef.current = {};
+    hypeViralReadingsRequestSeqRef.current = {};
+    setHypeViralEventPages({});
+    setHypeViralReadingPages({});
+  }, []);
+
+    const fetchHypeViralEvents = useCallback(async (
+      category: HypeCategoryOption,
+      options?: { loadMore?: boolean },
+    ) => {
+      if (!authToken) {return;}
+
+      const currentPage = getHypeViralPageState(hypeViralEventPagesRef.current, category);
+      const isLoadMore = options?.loadMore === true;
+
+      if (isLoadMore) {
+        if (
+          !currentPage.hasLoadedOnce
+          || currentPage.isLoadingInitial
+          || currentPage.isLoadingMore
+          || !currentPage.hasMore
+          || !currentPage.nextCursor
+        ) {
+          return;
+        }
+      } else if (currentPage.hasLoadedOnce || currentPage.isLoadingInitial || currentPage.isLoadingMore) {
+        return;
+      }
+
+      const requestSeq = (hypeViralEventsRequestSeqRef.current[category] || 0) + 1;
+      hypeViralEventsRequestSeqRef.current[category] = requestSeq;
+
+      setHypeViralEventPages(prev => updateHypeViralPageState(prev, category, (page) => ({
+        ...page,
+        isLoadingInitial: !isLoadMore,
+        isLoadingMore: isLoadMore,
+      })));
+
+      try {
+        const queryString = buildHypeViralEndpointQuery(category, isLoadMore ? currentPage.nextCursor : null);
+        const response = await fetch(`${API_URL}/api/channels/events/viral?${queryString}`, {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload?.error || localize({
+            es: 'No se pudieron cargar los eventos virales.',
+            en: 'The viral events could not be loaded.',
+            fr: 'Les événements viraux n\'ont pas pu être chargés.',
+            pt: 'Não foi possível carregar os eventos virais.',
+            de: 'Die viralen Events konnten nicht geladen werden.',
+            it: 'Non è stato possibile caricare gli eventi virali.',
+          }));
+        }
+
+        if (hypeViralEventsRequestSeqRef.current[category] !== requestSeq) {return;}
+
+        const incomingEvents = Array.isArray(payload?.events) ? payload.events : [];
+        const nextCursor = normalizeHypeViralCursorToken(payload?.nextCursor);
+
+        setHypeViralEventPages(prev => updateHypeViralPageState(prev, category, (page) => ({
+          ...page,
+          items: isLoadMore ? mergeUniqueHypeViralItems(page.items, incomingEvents) : incomingEvents,
+          isLoadingInitial: false,
+          isLoadingMore: false,
+          hasLoadedOnce: true,
+          hasMore: payload?.hasMore === true && !!nextCursor,
+          nextCursor: payload?.hasMore === true ? nextCursor : null,
+        })));
+      } catch (error: any) {
+        if (hypeViralEventsRequestSeqRef.current[category] !== requestSeq) {return;}
+
+        setHypeViralEventPages(prev => updateHypeViralPageState(prev, category, (page) => ({
+          ...page,
+          isLoadingInitial: false,
+          isLoadingMore: false,
+          hasLoadedOnce: true,
+        })));
+        Alert.alert(errorTitle, error?.message || localize({
+          es: 'No se pudieron cargar los eventos virales.',
+          en: 'The viral events could not be loaded.',
+          fr: 'Les événements viraux n\'ont pas pu être chargés.',
+          pt: 'Não foi possível carregar os eventos virais.',
+          de: 'Die viralen Events konnten nicht geladen werden.',
+          it: 'Non è stato possibile caricare gli eventi virali.',
+        }));
+      }
+    }, [authToken, errorTitle, localize]);
+
+    const fetchHypeViralReadings = useCallback(async (
+      category: HypeCategoryOption,
+      options?: { loadMore?: boolean },
+    ) => {
+      if (!authToken) {return;}
+
+      const currentPage = getHypeViralPageState(hypeViralReadingPagesRef.current, category);
+      const isLoadMore = options?.loadMore === true;
+
+      if (isLoadMore) {
+        if (
+          !currentPage.hasLoadedOnce
+          || currentPage.isLoadingInitial
+          || currentPage.isLoadingMore
+          || !currentPage.hasMore
+          || !currentPage.nextCursor
+        ) {
+          return;
+        }
+      } else if (currentPage.hasLoadedOnce || currentPage.isLoadingInitial || currentPage.isLoadingMore) {
+        return;
+      }
+
+      const requestSeq = (hypeViralReadingsRequestSeqRef.current[category] || 0) + 1;
+      hypeViralReadingsRequestSeqRef.current[category] = requestSeq;
+
+      setHypeViralReadingPages(prev => updateHypeViralPageState(prev, category, (page) => ({
+        ...page,
+        isLoadingInitial: !isLoadMore,
+        isLoadingMore: isLoadMore,
+      })));
+
+      try {
+        const queryString = buildHypeViralEndpointQuery(category, isLoadMore ? currentPage.nextCursor : null);
+        const response = await fetch(`${API_URL}/api/channels/readings/viral?${queryString}`, {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload?.error || localize({
+            es: 'No se pudieron cargar las lecturas virales.',
+            en: 'The viral readings could not be loaded.',
+            fr: 'Les lectures virales n\'ont pas pu être chargées.',
+            pt: 'Não foi possível carregar as leituras virais.',
+            de: 'Die viralen Lesungen konnten nicht geladen werden.',
+            it: 'Non è stato possibile caricare le letture virali.',
+          }));
+        }
+
+        if (hypeViralReadingsRequestSeqRef.current[category] !== requestSeq) {return;}
+
+        const incomingReadings = Array.isArray(payload?.readings) ? payload.readings : [];
+        const nextCursor = normalizeHypeViralCursorToken(payload?.nextCursor);
+
+        setHypeViralReadingPages(prev => updateHypeViralPageState(prev, category, (page) => ({
+          ...page,
+          items: isLoadMore ? mergeUniqueHypeViralItems(page.items, incomingReadings) : incomingReadings,
+          isLoadingInitial: false,
+          isLoadingMore: false,
+          hasLoadedOnce: true,
+          hasMore: payload?.hasMore === true && !!nextCursor,
+          nextCursor: payload?.hasMore === true ? nextCursor : null,
+        })));
+      } catch (error: any) {
+        if (hypeViralReadingsRequestSeqRef.current[category] !== requestSeq) {return;}
+
+        setHypeViralReadingPages(prev => updateHypeViralPageState(prev, category, (page) => ({
+          ...page,
+          isLoadingInitial: false,
+          isLoadingMore: false,
+          hasLoadedOnce: true,
+        })));
+        Alert.alert(errorTitle, error?.message || localize({
+          es: 'No se pudieron cargar las lecturas virales.',
+          en: 'The viral readings could not be loaded.',
+          fr: 'Les lectures virales n\'ont pas pu être chargées.',
+          pt: 'Não foi possível carregar as leituras virais.',
+          de: 'Die viralen Lesungen konnten nicht geladen werden.',
+          it: 'Non è stato possibile caricare le letture virali.',
+        }));
+      }
+    }, [authToken, errorTitle, localize]);
+
+    const fetchHypeViralEventsRef = useRef(fetchHypeViralEvents);
+    const fetchHypeViralReadingsRef = useRef(fetchHypeViralReadings);
+
+    useEffect(() => {
+      fetchHypeViralEventsRef.current = fetchHypeViralEvents;
+    }, [fetchHypeViralEvents]);
+
+    useEffect(() => {
+      fetchHypeViralReadingsRef.current = fetchHypeViralReadings;
+    }, [fetchHypeViralReadings]);
+
+  useEffect(() => {
+    if (activeBottomTab !== 'hype' || !isHypeAppActive) {return;}
+
+    if (hypeTab === 'eventos') {
+      if (!activeHypeViralEventsPage.hasLoadedOnce && !activeHypeViralEventsPage.isLoadingInitial) {
+        void fetchHypeViralEvents(selectedHypeCategory);
+      }
+      return;
+    }
+
+    if (!activeHypeViralReadingsPage.hasLoadedOnce && !activeHypeViralReadingsPage.isLoadingInitial) {
+      void fetchHypeViralReadings(selectedHypeCategory);
+    }
+  }, [
+    activeBottomTab,
+    activeHypeViralEventsPage.hasLoadedOnce,
+    activeHypeViralEventsPage.isLoadingInitial,
+    activeHypeViralReadingsPage.hasLoadedOnce,
+    activeHypeViralReadingsPage.isLoadingInitial,
+    fetchHypeViralEvents,
+    fetchHypeViralReadings,
+    hypeTab,
+    isHypeAppActive,
+    selectedHypeCategory,
+  ]);
+
+  const renderableHypeViralEvents = useMemo(() => {
+    const next: RenderableHypeViralChannelEvent[] = [];
+
+    for (const event of hypeViralEvents) {
+      const donationTotal = Math.max(0, Math.floor(Number(event?.channel_event_donation_total) || 0));
+      if (donationTotal < 1) {continue;}
+
+      const parsedPayload = parseChannelEventMessage(String(event?.message || '').trim());
+      if (!parsedPayload) {continue;}
+
+      next.push({
+        ...event,
+        parsedPayload,
+      });
+    }
+
+    return next;
+  }, [hypeViralEvents]);
+
+  useEffect(() => {
+    renderableHypeViralEventsLengthRef.current = renderableHypeViralEvents.length;
+  }, [renderableHypeViralEvents.length]);
+
+  const renderableHypeViralReadings = useMemo(() => {
+    const next: RenderableHypeViralChannelReading[] = [];
+
+    for (const reading of hypeViralReadings) {
+      const donationTotal = Math.max(0, Math.floor(Number(reading?.channel_event_donation_total) || 0));
+      if (donationTotal < 1) {continue;}
+
+      const parsedPayload = parseChannelReadingMessage(String(reading?.message || '').trim());
+      if (!parsedPayload) {continue;}
+
+      next.push({
+        ...reading,
+        parsedPayload,
+      });
+    }
+
+    return next;
+  }, [hypeViralReadings]);
+
+  useEffect(() => {
+    renderableHypeViralReadingsLengthRef.current = renderableHypeViralReadings.length;
+  }, [renderableHypeViralReadings.length]);
+
+  const handleLoadMoreHypeViralEvents = useCallback(() => {
+    const category = selectedHypeCategoryRef.current;
+    const currentPage = getHypeViralPageState(hypeViralEventPagesRef.current, category);
+    if (
+      !currentPage.hasLoadedOnce
+      || currentPage.isLoadingInitial
+      || currentPage.isLoadingMore
+      || !currentPage.hasMore
+      || !currentPage.nextCursor
+    ) {
+      return;
+    }
+
+    void fetchHypeViralEventsRef.current(category, { loadMore: true });
+  }, []);
+
+  const handleLoadMoreHypeViralReadings = useCallback(() => {
+    const category = selectedHypeCategoryRef.current;
+    const currentPage = getHypeViralPageState(hypeViralReadingPagesRef.current, category);
+    if (
+      !currentPage.hasLoadedOnce
+      || currentPage.isLoadingInitial
+      || currentPage.isLoadingMore
+      || !currentPage.hasMore
+      || !currentPage.nextCursor
+    ) {
+      return;
+    }
+
+    void fetchHypeViralReadingsRef.current(category, { loadMore: true });
+  }, []);
+
+  const handleHypeViralEventsViewableItemsChanged = useCallback(({ viewableItems }: any) => {
+    const currentLength = renderableHypeViralEventsLengthRef.current;
+    if (currentLength === 0) {return;}
+
+    const highestVisibleIndex = Array.isArray(viewableItems)
+      ? viewableItems.reduce((maximumIndex: number, item: any) => (
+        typeof item?.index === 'number' ? Math.max(maximumIndex, item.index) : maximumIndex
+      ), -1)
+      : -1;
+
+    if (highestVisibleIndex >= currentLength - 1) {
+      handleLoadMoreHypeViralEvents();
+    }
+  }, [handleLoadMoreHypeViralEvents]);
+
+  const handleHypeViralReadingsViewableItemsChanged = useCallback(({ viewableItems }: any) => {
+    const currentLength = renderableHypeViralReadingsLengthRef.current;
+    if (currentLength === 0) {return;}
+
+    const highestVisibleIndex = Array.isArray(viewableItems)
+      ? viewableItems.reduce((maximumIndex: number, item: any) => (
+        typeof item?.index === 'number' ? Math.max(maximumIndex, item.index) : maximumIndex
+      ), -1)
+      : -1;
+
+    if (highestVisibleIndex >= currentLength - 1) {
+      handleLoadMoreHypeViralReadings();
+    }
+  }, [handleLoadMoreHypeViralReadings]);
 
   const fetchJoinedChannelUnreadReplyCountForChannel = useCallback(async (
     channel: any,
@@ -4326,11 +8781,11 @@ const FrontScreen = ({
       }
     }));
 
-    if (refreshSeq !== joinedChannelUnreadRefreshSeqRef.current) return;
+    if (refreshSeq !== joinedChannelUnreadRefreshSeqRef.current) {return;}
 
     const next: Record<string, number> = {};
     entries.forEach((entry) => {
-      if (!entry?.postId) return;
+      if (!entry?.postId) {return;}
       if ((entry.count || 0) > 0) {
         next[entry.postId] = entry.count;
       }
@@ -4347,7 +8802,7 @@ const FrontScreen = ({
   }, [authToken, userEmail, myChannels, fetchJoinedChannelUnreadReplyCountForChannel]);
 
   const fetchChannelInteractions = async (postId?: string) => {
-    if (!authToken) return;
+    if (!authToken) {return;}
 
     const idToFetch = postId ? String(postId) : null;
     const fetchSeq = ++channelInteractionsFetchSeqRef.current;
@@ -4360,8 +8815,8 @@ const FrontScreen = ({
 
       const response = await fetch(url, {
         headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
+          'Authorization': `Bearer ${authToken}`,
+        },
       });
 
       if (idToFetch) {
@@ -4370,10 +8825,10 @@ const FrontScreen = ({
       }
 
       // Ignore if a newer fetch started after this one.
-      if (fetchSeq !== channelInteractionsFetchSeqRef.current) return;
+      if (fetchSeq !== channelInteractionsFetchSeqRef.current) {return;}
 
       // Ignore if the user already switched to a different channel.
-      if (idToFetch && currentChannelPostIdRef.current !== idToFetch) return;
+      if (idToFetch && currentChannelPostIdRef.current !== idToFetch) {return;}
 
       if (response.ok) {
         const data = await response.json();
@@ -4389,8 +8844,8 @@ const FrontScreen = ({
 
   const handleEnterChannel = async (pub: Publication) => {
     const postId = String(pub?.id ?? '').trim();
-    if (!postId) return;
-    if (enteringChannelPostIdsRef.current.has(postId)) return;
+    if (!postId) {return;}
+    if (enteringChannelPostIdsRef.current.has(postId)) {return;}
 
     enteringChannelPostIdsRef.current.add(postId);
     console.log('Entering channel:', pub.id, pub.user.email);
@@ -4399,24 +8854,38 @@ const FrontScreen = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`
+          'Authorization': `Bearer ${authToken}`,
         },
         body: JSON.stringify({
           publisherEmail: pub.user.email,
-          postId: pub.id
-        })
+          postId: pub.id,
+        }),
       });
 
       const data = await response.json();
       if (response.ok) {
         const joinedNow = data?.joined === true || response.status === 201;
         setPublications(prev => prev.map(existing => {
-          if (String(existing.id) !== String(pub.id)) return existing;
+          if (String(existing.id) !== String(pub.id)) {return existing;}
           return {
             ...existing,
             channelSubscriberCount: joinedNow
               ? (getPublicationChannelSubscriberCount(existing) + 1)
               : getPublicationChannelSubscriberCount(existing),
+          };
+        }));
+        setHypeViralEventPages(prev => patchHypeViralPagesItems(prev, (existing) => {
+          if (String(existing?.post_id ?? '') !== postId) {return existing;}
+          return {
+            ...existing,
+            viewer_is_subscribed: true,
+          };
+        }));
+        setHypeViralReadingPages(prev => patchHypeViralPagesItems(prev, (existing) => {
+          if (String(existing?.post_id ?? '') !== postId) {return existing;}
+          return {
+            ...existing,
+            viewer_is_subscribed: true,
           };
         }));
 
@@ -4458,13 +8927,12 @@ const FrontScreen = ({
 
   const [isChannelNearBottom, setIsChannelNearBottom] = useState(true);
   const [showChannelScrollToLatest, setShowChannelScrollToLatest] = useState(false);
-  const [channelScrollToLatestPulse, setChannelScrollToLatestPulse] = useState(false);
+  const [channelScrollToLatestPulse] = useState(false);
   const [channelScrollToLatestLoading, setChannelScrollToLatestLoading] = useState(false);
   const channelScrollToLatestPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [isGroupNearBottom, setIsGroupNearBottom] = useState(true);
   const [showGroupScrollToLatest, setShowGroupScrollToLatest] = useState(false);
-  const [groupScrollToLatestPulse, setGroupScrollToLatestPulse] = useState(false);
   const [groupScrollToLatestLoading, setGroupScrollToLatestLoading] = useState(false);
   const groupScrollToLatestPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [groupHasMoreOlderMessages, setGroupHasMoreOlderMessages] = useState(true);
@@ -4559,7 +9027,7 @@ const FrontScreen = ({
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [carouselImages, setCarouselImages] = useState<CarouselImageData[]>([]);
   const [activeCarouselImageIndex, setActiveCarouselImageIndex] = useState(0);
-  const [activeProfileImageIndex, setActiveProfileImageIndex] = useState(0);
+  const [, setActiveProfileImageIndex] = useState(0);
   const editablePresentationActiveIndexRef = useRef(0);
   const profilePresentationActiveIndexRef = useRef(0);
   const profileDotsRef = useRef<PresentationDotsHandle | null>(null);
@@ -4698,7 +9166,7 @@ const FrontScreen = ({
         });
 
         const data = await resp.json().catch(() => ({}));
-        if (!resp.ok) return;
+        if (!resp.ok) {return;}
 
         const rings = normalizeProfileRingsFromApi((data as any)?.rings);
         const sig = makeProfileRingsSig(rings);
@@ -4711,7 +9179,7 @@ const FrontScreen = ({
         console.error('Error hydrating profile rings:', e);
       } finally {
         isProfileRingsHydratingRef.current = false;
-        if (!didCancel) setIsProfileRingsHydrating(false);
+        if (!didCancel) {setIsProfileRingsHydrating(false);}
       }
     })();
 
@@ -4729,8 +9197,8 @@ const FrontScreen = ({
   ), [makeProfileRingsSig, profileRingPoints]);
 
   const persistProfileRingsImmediately = useCallback(async (rings: ProfileRingPoint[]) => {
-    if (!authToken) return;
-    if (isProfileRingsHydratingRef.current) return;
+    if (!authToken) {return;}
+    if (isProfileRingsHydratingRef.current) {return;}
 
     if (profileRingsSaveTimerRef.current) {
       clearTimeout(profileRingsSaveTimerRef.current);
@@ -4765,9 +9233,9 @@ const FrontScreen = ({
 
   // Persist created rings (debounced) to Supabase via backend.
   useEffect(() => {
-    if (!authToken) return;
-    if (isProfileRingsHydratingRef.current) return;
-    if (createdProfileRingsSig === profileRingsLastSavedSigRef.current) return;
+    if (!authToken) {return;}
+    if (isProfileRingsHydratingRef.current) {return;}
+    if (createdProfileRingsSig === profileRingsLastSavedSigRef.current) {return;}
 
     if (profileRingsSaveTimerRef.current) {
       clearTimeout(profileRingsSaveTimerRef.current);
@@ -4833,7 +9301,7 @@ const FrontScreen = ({
   const [profileRingViewerPanelAnimation] = useState(new Animated.Value(PROFILE_RING_PANEL_HIDDEN_Y));
   const [viewingProfileRingId, setViewingProfileRingId] = useState<string | null>(null);
   const [viewingProfileRingSource, setViewingProfileRingSource] = useState<'profile' | 'home'>('profile');
-  const [viewingProfileRingHomePostId, setViewingProfileRingHomePostId] = useState<string | null>(null);
+  const [, setViewingProfileRingHomePostId] = useState<string | null>(null);
   const [viewingProfileRingOverride, setViewingProfileRingOverride] = useState<ProfileRingPoint | null>(null);
 
   const [showDeleteProfileRingModal, setShowDeleteProfileRingModal] = useState(false);
@@ -4856,7 +9324,7 @@ const FrontScreen = ({
   const [profileRingLocationLngDraft, setProfileRingLocationLngDraft] = useState<number | null>(null);
 
   const makeGoogleMapsLatLngUrl = useCallback((lat: number, lng: number, label?: string | null, placeId?: string | null) => {
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return 'https://www.google.com/maps';
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {return 'https://www.google.com/maps';}
 
     const coords = `${lat},${lng}`;
     const safeLabel = String(label || '').trim();
@@ -4878,6 +9346,7 @@ const FrontScreen = ({
   }, []);
 
   const [showProfileRingLocationPicker, setShowProfileRingLocationPicker] = useState(false);
+  const [activeLocationPickerTarget, setActiveLocationPickerTarget] = useState<'profileRing' | 'channelEvent' | null>(null);
   const [profileRingPickedLatLng, setProfileRingPickedLatLng] = useState<{ lat: number; lng: number } | null>(null);
   const [isProfileRingLocating, setIsProfileRingLocating] = useState(false);
   const profileRingLocationMapRef = useRef<MapView | null>(null);
@@ -4890,24 +9359,19 @@ const FrontScreen = ({
   const [isProfileRingLocationSearching, setIsProfileRingLocationSearching] = useState(false);
   const [profileRingLocationSearchError, setProfileRingLocationSearchError] = useState('');
 
-  const selectedProfileRing = useMemo(() => {
-    if (!selectedProfileRingId) return null;
-    return profileRingPoints.find(p => p.id === selectedProfileRingId) ?? null;
-  }, [profileRingPoints, selectedProfileRingId]);
-
   const viewingProfileRing = useMemo(() => {
-    if (!viewingProfileRingId) return null;
+    if (!viewingProfileRingId) {return null;}
     if (viewingProfileRingSource === 'profile') {
       return profileRingPoints.find(p => p.id === viewingProfileRingId) ?? null;
     }
 
-    if (!viewingProfileRingOverride) return null;
-    if (String(viewingProfileRingOverride?.id) !== String(viewingProfileRingId)) return null;
+    if (!viewingProfileRingOverride) {return null;}
+    if (String(viewingProfileRingOverride?.id) !== String(viewingProfileRingId)) {return null;}
     return viewingProfileRingOverride;
   }, [profileRingPoints, viewingProfileRingId, viewingProfileRingOverride, viewingProfileRingSource]);
 
   const requestLocationPermissionIfNeeded = useCallback(async () => {
-    if (Platform.OS !== 'android') return true;
+    if (Platform.OS !== 'android') {return true;}
 
     try {
       const fine = PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION;
@@ -4937,6 +9401,8 @@ const FrontScreen = ({
       }));
       return;
     }
+
+    setActiveLocationPickerTarget('profileRing');
 
     // Pre-fill search with current draft (or saved) label.
     const savedLabel = String(profileRingLocationLabelDraft || '').trim();
@@ -4980,6 +9446,59 @@ const FrontScreen = ({
     );
   }, [profileRingLocationLabelDraft, profileRingLocationLatDraft, profileRingLocationLngDraft, profileRingLocationPlaceIdDraft, profileRingPickedLatLng, requestLocationPermissionIfNeeded]);
 
+  const openChannelEventLocationPicker = useCallback(async () => {
+    const ok = await requestLocationPermissionIfNeeded();
+    if (!ok) {
+      Alert.alert(permissionRequiredTitle, localize({
+        es: 'Activa el permiso de ubicación para seleccionar una ubicación.',
+        en: 'Enable location permission to select a location.',
+        fr: 'Activez l’autorisation de localisation pour sélectionner un lieu.',
+        pt: 'Ative a permissão de localização para selecionar um local.',
+        de: 'Aktiviere die Standortberechtigung, um einen Standort auszuwählen.',
+        it: 'Attiva il permesso di posizione per selezionare una posizione.',
+      }));
+      return;
+    }
+
+    setActiveLocationPickerTarget('channelEvent');
+
+    const savedLabel = String(channelEventLocationLabelDraft || '').trim();
+    setProfileRingPickedLocationLabel(savedLabel || null);
+    setProfileRingPickedLocationPlaceId(channelEventLocationPlaceIdDraft ? String(channelEventLocationPlaceIdDraft) : null);
+    setProfileRingLocationSearchQuery(savedLabel);
+    setProfileRingLocationPredictions([]);
+    setProfileRingLocationSearchError('');
+
+    const savedLat = Number(channelEventLocationLatDraft ?? NaN);
+    const savedLng = Number(channelEventLocationLngDraft ?? NaN);
+    if (Number.isFinite(savedLat) && Number.isFinite(savedLng)) {
+      setProfileRingPickedLatLng({ lat: savedLat, lng: savedLng });
+    } else if (!profileRingPickedLatLng) {
+      setProfileRingPickedLatLng({ lat: 40.4168, lng: -3.7038 });
+    }
+
+    setIsProfileRingLocating(true);
+    setShowProfileRingLocationPicker(true);
+
+    Geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = Number(pos?.coords?.latitude);
+        const lng = Number(pos?.coords?.longitude);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          profileRingLocationAutoMoveRef.current = true;
+          setProfileRingPickedLatLng({ lat, lng });
+          setProfileRingPickedLocationLabel(null);
+          setProfileRingPickedLocationPlaceId(null);
+        }
+        setIsProfileRingLocating(false);
+      },
+      () => {
+        setIsProfileRingLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 15000 }
+    );
+  }, [channelEventLocationLabelDraft, channelEventLocationLatDraft, channelEventLocationLngDraft, channelEventLocationPlaceIdDraft, profileRingPickedLatLng, requestLocationPermissionIfNeeded]);
+
   const isPlacesSearchEnabled = useMemo(() => {
     // Places search is served by the backend (it holds the API key).
     // We require an auth token because the backend route is protected.
@@ -4987,8 +9506,8 @@ const FrontScreen = ({
   }, [authToken]);
 
   useEffect(() => {
-    if (!showProfileRingLocationPicker) return;
-    if (!isPlacesSearchEnabled) return;
+    if (!showProfileRingLocationPicker) {return;}
+    if (!isPlacesSearchEnabled) {return;}
     const q = String(profileRingLocationSearchQuery || '').trim();
     if (q.length < 3) {
       setProfileRingLocationPredictions([]);
@@ -5013,34 +9532,34 @@ const FrontScreen = ({
 
         if (!resp.ok) {
           if (resp.status === 401 || resp.status === 403) {
-            if (isActive) setProfileRingLocationSearchError(localize({
+            if (isActive) {setProfileRingLocationSearchError(localize({
               es: 'Inicia sesión para buscar ubicaciones.',
               en: 'Sign in to search for locations.',
               fr: 'Connectez-vous pour rechercher des lieux.',
               pt: 'Entre para pesquisar locais.',
               de: 'Melde dich an, um Standorte zu suchen.',
               it: 'Accedi per cercare posizioni.',
-            }));
+            }));}
           } else if (resp.status === 503) {
-            if (isActive) setProfileRingLocationSearchError(localize({
+            if (isActive) {setProfileRingLocationSearchError(localize({
               es: 'La búsqueda de ubicación no está configurada en el servidor.',
               en: 'Location search is not configured on the server.',
               fr: 'La recherche de lieux n’est pas configurée sur le serveur.',
               pt: 'A busca de locais não está configurada no servidor.',
               de: 'Die Standortsuche ist auf dem Server nicht konfiguriert.',
               it: 'La ricerca di posizione non è configurata sul server.',
-            }));
+            }));}
           } else {
-            if (isActive) setProfileRingLocationSearchError(localize({
+            if (isActive) {setProfileRingLocationSearchError(localize({
               es: 'No se pudo buscar la ubicación.',
               en: 'The location could not be searched.',
               fr: 'Impossible de rechercher ce lieu.',
               pt: 'Não foi possível pesquisar o local.',
               de: 'Der Standort konnte nicht gesucht werden.',
               it: 'Impossibile cercare la posizione.',
-            }));
+            }));}
           }
-          if (isActive) setProfileRingLocationPredictions([]);
+          if (isActive) {setProfileRingLocationPredictions([]);}
           return;
         }
 
@@ -5053,7 +9572,7 @@ const FrontScreen = ({
           .filter((p: any) => p.placeId && p.description)
           .slice(0, 8);
 
-        if (isActive) setProfileRingLocationPredictions(items);
+        if (isActive) {setProfileRingLocationPredictions(items);}
       } catch {
         if (isActive) {
           setProfileRingLocationPredictions([]);
@@ -5067,7 +9586,7 @@ const FrontScreen = ({
           }));
         }
       } finally {
-        if (isActive) setIsProfileRingLocationSearching(false);
+        if (isActive) {setIsProfileRingLocationSearching(false);}
       }
     }, 350);
 
@@ -5093,9 +9612,9 @@ const FrontScreen = ({
   }, []);
 
   const handleSelectProfileRingLocationPrediction = useCallback(async (placeId: string, description: string) => {
-    if (!isPlacesSearchEnabled) return;
+    if (!isPlacesSearchEnabled) {return;}
     const safePlaceId = String(placeId || '').trim();
-    if (!safePlaceId) return;
+    if (!safePlaceId) {return;}
 
     setIsProfileRingLocationSearching(true);
     setProfileRingLocationSearchError('');
@@ -5159,6 +9678,7 @@ const FrontScreen = ({
 
   const closeProfileRingLocationPicker = useCallback(() => {
     setShowProfileRingLocationPicker(false);
+    setActiveLocationPickerTarget(null);
     setIsProfileRingLocating(false);
     setProfileRingLocationPredictions([]);
     setProfileRingLocationSearchError('');
@@ -5166,23 +9686,39 @@ const FrontScreen = ({
   }, []);
 
   const applyProfileRingPickedLocation = useCallback(() => {
-    if (!selectedProfileRingId) return;
     const picked = profileRingPickedLatLng;
-    if (!picked) return;
+    if (!picked) {return;}
 
     const lat = picked.lat;
     const lng = picked.lng;
     const label = String(profileRingPickedLocationLabel || '').trim() || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
     const url = makeGoogleMapsLatLngUrl(lat, lng, label, profileRingPickedLocationPlaceId);
 
-    setProfileRingLocationLatDraft(lat);
-    setProfileRingLocationLngDraft(lng);
-    setProfileRingLocationLabelDraft(label);
-    setProfileRingLocationUrlDraft(url);
-    setProfileRingLocationPlaceIdDraft(profileRingPickedLocationPlaceId ? String(profileRingPickedLocationPlaceId) : null);
+    if (activeLocationPickerTarget === 'channelEvent') {
+      setChannelEventLocationLatDraft(lat);
+      setChannelEventLocationLngDraft(lng);
+      setChannelEventLocationLabelDraft(label);
+      setChannelEventLocationUrlDraft(url);
+      setChannelEventLocationPlaceIdDraft(profileRingPickedLocationPlaceId ? String(profileRingPickedLocationPlaceId) : null);
+    } else {
+      if (!selectedProfileRingId) {return;}
+      setProfileRingLocationLatDraft(lat);
+      setProfileRingLocationLngDraft(lng);
+      setProfileRingLocationLabelDraft(label);
+      setProfileRingLocationUrlDraft(url);
+      setProfileRingLocationPlaceIdDraft(profileRingPickedLocationPlaceId ? String(profileRingPickedLocationPlaceId) : null);
+    }
 
     closeProfileRingLocationPicker();
-  }, [closeProfileRingLocationPicker, makeGoogleMapsLatLngUrl, profileRingPickedLatLng, profileRingPickedLocationLabel, profileRingPickedLocationPlaceId, selectedProfileRingId]);
+  }, [activeLocationPickerTarget, closeProfileRingLocationPicker, makeGoogleMapsLatLngUrl, profileRingPickedLatLng, profileRingPickedLocationLabel, profileRingPickedLocationPlaceId, selectedProfileRingId]);
+
+  const clearChannelEventLocationDraft = useCallback(() => {
+    setChannelEventLocationLabelDraft('');
+    setChannelEventLocationUrlDraft('');
+    setChannelEventLocationPlaceIdDraft(null);
+    setChannelEventLocationLatDraft(null);
+    setChannelEventLocationLngDraft(null);
+  }, []);
 
   const canCreateProfileRingMeta = useMemo(() => {
     const hasColor = !!profileRingColorSelectedDraft;
@@ -5275,7 +9811,7 @@ const FrontScreen = ({
       duration: 260,
       useNativeDriver: true,
     }).start(({ finished }) => {
-      if (!finished) return;
+      if (!finished) {return;}
       setShowProfileRingColorPanel(false);
       setSelectedProfileRingId(null);
       setIsProfileRingLinkExpanded(false);
@@ -5314,7 +9850,7 @@ const FrontScreen = ({
       duration: 260,
       useNativeDriver: true,
     }).start(({ finished }) => {
-      if (!finished) return;
+      if (!finished) {return;}
       setShowProfileRingViewerPanel(false);
       setHomeProfileRingBannerReady(false);
       setHomeProfileRingBannerSize(HOME_PROFILE_RING_DEFAULT_BANNER_SIZE);
@@ -5331,9 +9867,9 @@ const FrontScreen = ({
   }, [closeProfileRingViewerPanelAndThen]);
 
   useEffect(() => {
-    if (!showProfileRingViewerPanel) return;
-    if (!viewingProfileRingId) return;
-    if (viewingProfileRing) return;
+    if (!showProfileRingViewerPanel) {return;}
+    if (!viewingProfileRingId) {return;}
+    if (viewingProfileRing) {return;}
     closeProfileRingViewerPanel();
   }, [closeProfileRingViewerPanel, showProfileRingViewerPanel, viewingProfileRing, viewingProfileRingId]);
 
@@ -5367,7 +9903,7 @@ const FrontScreen = ({
       }).start(() => setShowReactionPanel(false));
     }
 
-    if (showProfileRingColorPanel) return;
+    if (showProfileRingColorPanel) {return;}
 
     profileRingColorPanelAnimation.stopAnimation();
     setShowProfileRingColorPanel(true);
@@ -5397,7 +9933,7 @@ const FrontScreen = ({
       }).start(() => setShowReactionPanel(false));
     }
 
-    if (showProfileRingViewerPanel) return;
+    if (showProfileRingViewerPanel) {return;}
 
     profileRingViewerPanelAnimation.stopAnimation();
     setShowProfileRingViewerPanel(true);
@@ -5412,7 +9948,7 @@ const FrontScreen = ({
   const openHomeProfileRingViewerPanel = useCallback((postId: string | number, ringId: string) => {
     // Backwards compatible signature (old calls) – keep in case some callsite still passes (postId, ringId).
     const rid = String(ringId || '').trim();
-    if (!rid) return;
+    if (!rid) {return;}
     setViewingProfileRingSource('home');
     setViewingProfileRingHomePostId(String(postId || '').trim() || null);
     setViewingProfileRingOverride(null);
@@ -5421,7 +9957,7 @@ const FrontScreen = ({
 
   const openHomeProfileRingViewerPanelFromRing = useCallback((ring: ProfileRingPoint) => {
     const rid = String(ring?.id || '').trim();
-    if (!rid) return;
+    if (!rid) {return;}
     setViewingProfileRingSource('home');
     setViewingProfileRingHomePostId(null);
     setViewingProfileRingOverride(ring);
@@ -5429,16 +9965,16 @@ const FrontScreen = ({
   }, [openProfileRingViewerPanel]);
 
   const handleEditViewingProfileRing = useCallback(() => {
-    if (viewingProfileRingSource !== 'profile') return;
-    if (!viewingProfileRingId) return;
+    if (viewingProfileRingSource !== 'profile') {return;}
+    if (!viewingProfileRingId) {return;}
     const id = viewingProfileRingId;
     // Open editor immediately; it will close the viewer internally.
     openProfileRingColorPanel(id);
   }, [openProfileRingColorPanel, viewingProfileRingId, viewingProfileRingSource]);
 
   const requestDeleteViewingProfileRing = useCallback(() => {
-    if (viewingProfileRingSource !== 'profile') return;
-    if (!viewingProfileRingId) return;
+    if (viewingProfileRingSource !== 'profile') {return;}
+    if (!viewingProfileRingId) {return;}
     setPendingDeleteProfileRingId(viewingProfileRingId);
     setShowDeleteProfileRingModal(true);
   }, [viewingProfileRingId, viewingProfileRingSource]);
@@ -5450,7 +9986,7 @@ const FrontScreen = ({
 
   const confirmDeleteProfileRing = useCallback(() => {
     const id = pendingDeleteProfileRingId;
-    if (!id) return;
+    if (!id) {return;}
 
     const next = profileRingPoints.filter(p => p.id !== id);
     setProfileRingPoints(next);
@@ -5461,7 +9997,7 @@ const FrontScreen = ({
 
   const handleProfileRingPress = useCallback((ringId: string) => {
     const ring = profileRingPoints.find(p => p.id === ringId);
-    if (!ring) return;
+    if (!ring) {return;}
     if (ring.isCreated) {
       setViewingProfileRingSource('profile');
       setViewingProfileRingHomePostId(null);
@@ -5476,15 +10012,15 @@ const FrontScreen = ({
   }, [openProfileRingColorPanel, openProfileRingViewerPanel, profileRingPoints]);
 
   const createSelectedProfileRing = useCallback(() => {
-    if (!selectedProfileRingId) return;
-    if (!canCreateProfileRingMeta) return;
+    if (!selectedProfileRingId) {return;}
+    if (!canCreateProfileRingMeta) {return;}
 
     const ringId = selectedProfileRingId;
     const draftNetwork = String(profileRingLinkNetworkDraft || '').trim();
     const draftUrl = String(profileRingLinkUrlDraft || '').trim();
 
     const next = profileRingPoints.map(p => {
-      if (p.id !== ringId) return p;
+      if (p.id !== ringId) {return p;}
 
       const nextName = String(profileRingNameDraft || '').slice(0, 38);
       const nextDescription = String(profileRingDescriptionDraft || '').slice(0, 280);
@@ -5538,7 +10074,7 @@ const FrontScreen = ({
 
   const handleSelectProfileRingLinkNetwork = useCallback((network: string) => {
     const normalized = String(network || '').trim();
-    if (!normalized) return;
+    if (!normalized) {return;}
     setProfileRingLinkNetworkDraft(prev => (prev === normalized ? null : normalized));
     setProfileRingLinkUrlDraft('');
     setProfileRingLinkErrorDraft('');
@@ -5598,27 +10134,27 @@ const FrontScreen = ({
   }, []);
 
   const applyProfileRingLinkDraft = useCallback(() => {
-    if (!selectedProfileRingId) return;
-    if (!profileRingLinkNetworkDraft || !!profileRingLinkErrorDraft) return;
+    if (!selectedProfileRingId) {return;}
+    if (!profileRingLinkNetworkDraft || !!profileRingLinkErrorDraft) {return;}
     const link = String(profileRingLinkUrlDraft || '').trim();
-    if (!link) return;
+    if (!link) {return;}
 
     setIsProfileRingLinkExpanded(false);
   }, [profileRingLinkErrorDraft, profileRingLinkNetworkDraft, profileRingLinkUrlDraft, selectedProfileRingId]);
 
   const applyColorToSelectedRing = useCallback((color: string) => {
-    if (!selectedProfileRingId) return;
+    if (!selectedProfileRingId) {return;}
     setProfileRingColorDraft(color);
     setProfileRingColorSelectedDraft(true);
   }, [selectedProfileRingId]);
 
   const updateSelectedProfileRingName = useCallback((name: string) => {
-    if (!selectedProfileRingId) return;
+    if (!selectedProfileRingId) {return;}
     setProfileRingNameDraft(name);
   }, [selectedProfileRingId]);
 
   const updateSelectedProfileRingDescription = useCallback((description: string) => {
-    if (!selectedProfileRingId) return;
+    if (!selectedProfileRingId) {return;}
     setProfileRingDescriptionDraft(description);
   }, [selectedProfileRingId]);
 
@@ -5643,7 +10179,7 @@ const FrontScreen = ({
     void persistProfileRingsImmediately(next);
     closeProfileRingColorPanel();
   }, [closeProfileRingColorPanel, persistProfileRingsImmediately, profileRingPoints, selectedProfileRingId]);
-  
+
   const handleProfileRingIconPress = useCallback(() => {
     if (profileRingHintTimerRef.current) {
       clearTimeout(profileRingHintTimerRef.current);
@@ -5678,7 +10214,7 @@ const FrontScreen = ({
 
   const handleProfileCarouselImagePress = useCallback((imageIndex: number, e: any) => {
     // Require explicitly re-enabling ring placement via the ring icon after each ring is added.
-    if (!profileRingPlacementEnabledRef.current || showProfileRingHint) return;
+    if (!profileRingPlacementEnabledRef.current || showProfileRingHint) {return;}
 
     if (profileRingPoints.length >= 5) {
       showActionToast(t('front.profileRingHintMaxRings' as TranslationKey));
@@ -5702,7 +10238,7 @@ const FrontScreen = ({
 
     const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setProfileRingPoints(prev => {
-      if (prev.length >= 5) return prev;
+      if (prev.length >= 5) {return prev;}
       return [...prev, {
         id,
         imageIndex,
@@ -5748,13 +10284,10 @@ const FrontScreen = ({
   const homePublicationSwipeLockTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const homePublicationAdvanceQueuedRef = useRef(false);
   const [isHomePublicationAtTop, setIsHomePublicationAtTop] = useState(true);
-  const [myPublication, setMyPublication] = useState<Publication | undefined>(undefined);
-  const isPublished = !!myPublication;
-  const userPublication = myPublication;
   const channelOwnerEmail = selectedChannel ? selectedChannel.publisher_email : (userPublication ? userPublication.user.email : null);
 
   const shouldShowHomeSwipeTutorial =
-    activeBottomTab === 'home' &&
+    isHomeFeedTabActive &&
     hasSeenHomeSwipeTutorial === false &&
     publications.length > 0;
 
@@ -5768,54 +10301,17 @@ const FrontScreen = ({
   );
 
   const isBottomNavInteractionDisabled =
-    activeBottomTab === 'home' &&
+    isHomeFeedTabActive &&
     (isHomePostsLoading || !hasHomePostsLoadedOnce);
 
   const profileRingPanelsBottomOffset = Math.max(bottomNavHeight, bottomSystemOffset);
 
   useEffect(() => {
-    if (!isMainBottomTab(activeBottomTab)) {
-      return;
-    }
-
-    const previousTab = lastAnimatedBottomTabRef.current;
-    if (previousTab === activeBottomTab) {
-      return;
-    }
-
-    const previousIndex = getMainBottomTabIndex(previousTab);
-    const nextIndex = getMainBottomTabIndex(activeBottomTab);
-    contentTabTransitionDirection.value = nextIndex >= previousIndex ? 1 : -1;
-    contentTabTransitionProgress.value = 0;
-    contentTabTransitionProgress.value = withTiming(1, {
-      duration: 260,
-      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
-    });
-    lastAnimatedBottomTabRef.current = activeBottomTab;
-  }, [activeBottomTab, contentTabTransitionDirection, contentTabTransitionProgress]);
-
-  const bottomContentTransitionStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(contentTabTransitionProgress.value, [0, 1], [0.78, 1]),
-    transform: [
-      {
-        translateX: interpolate(
-          contentTabTransitionProgress.value,
-          [0, 1],
-          [contentTabTransitionDirection.value * 18, 0],
-        ),
-      },
-      {
-        translateY: interpolate(contentTabTransitionProgress.value, [0, 1], [8, 0]),
-      },
-    ],
-  }));
-
-  useEffect(() => {
-    if (activeBottomTab !== 'home') {
+    if (!isHomeFeedTabActive) {
       setHomeProfileRingBannerReady(false);
       setHomeProfileRingBannerSize(HOME_PROFILE_RING_DEFAULT_BANNER_SIZE);
     }
-  }, [activeBottomTab]);
+  }, [isHomeFeedTabActive]);
 
   const homeSwipeTutorialIconOpacity = homeSwipeTutorialAnim.interpolate({
     inputRange: [0, 1],
@@ -5874,7 +10370,7 @@ const FrontScreen = ({
   }, [shouldShowHomeSwipeTutorial, homeSwipeTutorialAnim]);
 
   useEffect(() => {
-    if (prevHomeAnimatedIndexRef.current === currentPostIndex) return;
+    if (prevHomeAnimatedIndexRef.current === currentPostIndex) {return;}
     prevHomeAnimatedIndexRef.current = currentPostIndex;
     homePublicationScrollYRef.current = 0;
     setIsHomePublicationAtTop(true);
@@ -5926,7 +10422,7 @@ const FrontScreen = ({
     prevIsNextPublicationAnimatingRef.current = isNextPublicationAnimating;
 
     // Only animate when the icon comes back after the progress sequence.
-    if (!wasAnimating || isNextPublicationAnimating) return;
+    if (!wasAnimating || isNextPublicationAnimating) {return;}
 
     if (nextPublicationIconAppearAnimRef.current) {
       nextPublicationIconAppearAnimRef.current.stop();
@@ -5956,7 +10452,7 @@ const FrontScreen = ({
 
     nextPublicationIconAppearAnimRef.current.start(({ finished }) => {
       nextPublicationIconAppearAnimRef.current = null;
-      if (!finished) return;
+      if (!finished) {return;}
       nextPublicationIconScale.setValue(1);
       nextPublicationIconOpacity.setValue(1);
     });
@@ -6013,7 +10509,7 @@ const FrontScreen = ({
   const homeRingIconPulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
 
   const startHomeRingIconPulse = useCallback(() => {
-    if (homeRingIconPulseLoopRef.current) return; // already running
+    if (homeRingIconPulseLoopRef.current) {return;} // already running
     homeRingIconPulseAnim.setValue(1);
     const loop = Animated.loop(
       Animated.sequence([
@@ -6045,7 +10541,7 @@ const FrontScreen = ({
 
   const toggleHomeProfileRingsVisible = useCallback((postId: string) => {
     const key = String(postId || '');
-    if (!key) return;
+    if (!key) {return;}
     setHomeProfileRingsVisibleByPostId(prev => {
       const isVisible = prev[key] === true;
       if (isVisible) {
@@ -6139,8 +10635,8 @@ const FrontScreen = ({
 
   const maybeShowHomeInterstitial = () => {
     const interstitial = homeInterstitialRef.current;
-    if (!interstitial) return;
-    if (isHomeInterstitialShowingRef.current) return;
+    if (!interstitial) {return;}
+    if (isHomeInterstitialShowingRef.current) {return;}
 
     if (!isHomeInterstitialLoadedRef.current) {
       try {
@@ -6160,10 +10656,10 @@ const FrontScreen = ({
   };
 
   const trackHomePublicationAdvanceForAds = () => {
-    if (activeBottomTab !== 'home') return;
+    if (!isHomeFeedTabActive) {return;}
     homeViewedPostsSinceAdRef.current += 1;
 
-    if (homeViewedPostsSinceAdRef.current < homeNextAdAtRef.current) return;
+    if (homeViewedPostsSinceAdRef.current < homeNextAdAtRef.current) {return;}
 
     homeViewedPostsSinceAdRef.current = 0;
     homeNextAdAtRef.current = getNextHomeInterstitialThreshold();
@@ -6171,7 +10667,7 @@ const FrontScreen = ({
   };
 
   useEffect(() => {
-    if (!adsSdkReady) return;
+    if (!adsSdkReady) {return;}
 
     isHomeInterstitialLoadedRef.current = false;
     isHomeInterstitialShowingRef.current = false;
@@ -6220,15 +10716,15 @@ const FrontScreen = ({
   const handleNextRandomPublication = (options?: { animate?: boolean }) => {
     const shouldAnimate = options?.animate !== false;
 
-    if (shouldAnimate && isNextPublicationAnimating) return;
-    if (publications.length <= 1) return;
+    if (shouldAnimate && isNextPublicationAnimating) {return;}
+    if (publications.length <= 1) {return;}
 
     const seen = seenPublicationIdsRef.current;
 
     const pickCandidateIndex = (
       entries: Array<{ index: number; idStr: string; createdAtMs: number }>,
     ) => {
-      if (entries.length === 0) return -1;
+      if (entries.length === 0) {return -1;}
 
       const sortedEntries = [...entries].sort((left, right) => right.createdAtMs - left.createdAtMs);
       const recentPool = sortedEntries.slice(0, Math.min(HOME_DISCOVER_RECENT_POOL_SIZE, sortedEntries.length));
@@ -6260,11 +10756,11 @@ const FrontScreen = ({
           idStr: p?.id != null ? String(p.id) : '',
           createdAtMs: getPublicationCreatedAtMs(p),
         }))
-        .filter(({ index, idStr }) => index !== currentPostIndex && idStr)
+        .filter(({ index, idStr }) => index !== currentPostIndex && idStr);
 
-      if (resetCandidates.length === 0) return;
+      if (resetCandidates.length === 0) {return;}
       const nextIndex = pickCandidateIndex(resetCandidates);
-      if (nextIndex < 0) return;
+      if (nextIndex < 0) {return;}
       const nextIdStr = publications[nextIndex]?.id != null ? String(publications[nextIndex].id) : '';
       setCurrentPostIndex(nextIndex);
       if (nextIdStr) {
@@ -6278,7 +10774,7 @@ const FrontScreen = ({
     }
 
     const nextIndex = pickCandidateIndex(candidateEntries);
-    if (nextIndex < 0) return;
+    if (nextIndex < 0) {return;}
     const nextIdStr = publications[nextIndex]?.id != null ? String(publications[nextIndex].id) : '';
     setCurrentPostIndex(nextIndex);
     if (nextIdStr) {
@@ -6368,8 +10864,8 @@ const FrontScreen = ({
   };
 
   const submitGroupRequest = async () => {
-    if (!selectedRequestGroupId || !groupRequestTargetUsername) return;
-    if (isSubmittingGroupRequest) return;
+    if (!selectedRequestGroupId || !groupRequestTargetUsername) {return;}
+    if (isSubmittingGroupRequest) {return;}
 
     if (!authToken) {
       Alert.alert(sessionRequiredTitle, localize({
@@ -6423,8 +10919,8 @@ const FrontScreen = ({
         en: `The request has been sent to ${targetWithAt}`,
         fr: `La demande a été envoyée à ${targetWithAt}`,
         pt: `A solicitação foi enviada para ${targetWithAt}`,
-        de: `Die Anfrage wurde gesendet an`,
-        it: `La richiesta è stata inviata a`,
+        de: 'Die Anfrage wurde gesendet an',
+        it: 'La richiesta è stata inviata a',
       }));
 
       // Optimistic UI: show pending immediately
@@ -6442,7 +10938,7 @@ const FrontScreen = ({
   };
 
   const fetchSentGroupRequests = async () => {
-    if (!authToken) return;
+    if (!authToken) {return;}
 
     try {
       const resp = await fetch(`${API_URL}/api/group-requests/sent`, {
@@ -6451,16 +10947,16 @@ const FrontScreen = ({
         },
       });
 
-      if (!resp.ok) return;
+      if (!resp.ok) {return;}
       const data = await resp.json();
-      if (!Array.isArray(data)) return;
+      if (!Array.isArray(data)) {return;}
 
       const rows = data as SentGroupRequest[];
       const byTarget: Record<string, 'pending' | 'accepted' | 'blocked'> = {};
 
       for (const row of rows) {
         const target = String(row.targetUsername || '').trim();
-        if (!target) continue;
+        if (!target) {continue;}
 
         // Prefer blocked > accepted > pending
         if (row.status === 'blocked') {
@@ -6478,87 +10974,13 @@ const FrontScreen = ({
     }
   };
 
-  const fetchNotifications = async () => {
-    if (!authToken) return;
-    if (isLoadingNotifications) return;
-
-    setIsLoadingNotifications(true);
-    try {
-      const resp = await fetch(`${API_URL}/api/notifications`, {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-        },
-      });
-
-      if (!resp.ok) {
-        setNotifications([]);
-        return;
-      }
-
-      const data = await resp.json();
-      if (Array.isArray(data)) {
-        setNotifications(data as NotificationItem[]);
-      }
-    } catch (e) {
-      console.error('Error fetching notifications:', e);
-    } finally {
-      setIsLoadingNotifications(false);
-    }
-  };
-
-  const respondToGroupJoinRequest = async (n: NotificationItem, action: 'accept' | 'ignore') => {
-    if (!authToken) return;
-    try {
-      const resp = await fetch(`${API_URL}/api/group-requests/${n.id}/${action}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-        },
-      });
-
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err?.error || localize({
-          es: 'No se pudo actualizar la solicitud.',
-          en: 'The request could not be updated.',
-          fr: 'Impossible de mettre à jour la demande.',
-          pt: 'Não foi possível atualizar a solicitação.',
-          de: 'Die Anfrage konnte nicht aktualisiert werden.',
-          it: 'Impossibile aggiornare la richiesta.',
-        }));
-      }
-
-      setNotifications(prev => prev.map(row => row.id === n.id ? { ...row, status: action === 'accept' ? 'accepted' : 'ignored' } : row));
-
-      if (action === 'accept') {
-        await loadJoinedGroups();
-        setPendingJoinedGroupToast({
-          groupHashtag: String(n.groupHashtag ?? ''),
-          requesterUsername: String(n.requesterUsername ?? ''),
-        });
-        setActiveBottomTab('chat');
-        setChatView('groups');
-        setGroupsTab('unidos');
-      }
-    } catch (e: any) {
-      Alert.alert(errorTitle, e?.message || localize({
-        es: 'No se pudo actualizar la solicitud.',
-        en: 'The request could not be updated.',
-        fr: 'Impossible de mettre à jour la demande.',
-        pt: 'Não foi possível atualizar a solicitação.',
-        de: 'Die Anfrage konnte nicht aktualisiert werden.',
-        it: 'Impossibile aggiornare la richiesta.',
-      }));
-    }
-  };
-
   useEffect(() => {
-    if (!pendingJoinedGroupToast) return;
-    if (activeBottomTab !== 'chat') return;
+    if (!pendingJoinedGroupToast) {return;}
+    if (activeBottomTab !== 'chat') {return;}
 
     const isOnJoinedGroupsScreen = chatView === 'groups' && groupsTab === 'unidos';
     const isInGroupChat = chatView === 'groupChat';
-    if (!isOnJoinedGroupsScreen && !isInGroupChat) return;
+    if (!isOnJoinedGroupsScreen && !isInGroupChat) {return;}
 
     const group = formatGroupHashtagWithHash(pendingJoinedGroupToast.groupHashtag);
     const user = formatUsernameWithAt(pendingJoinedGroupToast.requesterUsername);
@@ -6578,12 +11000,12 @@ const FrontScreen = ({
     groupId: string,
     mode: 'latest' | 'poll' | 'older' = 'latest'
   ) => {
-    if (!authToken) return;
+    if (!authToken) {return;}
 
     let beforeId: number | null = null;
     if (mode === 'older') {
       beforeId = groupOldestMessageIdRef.current;
-      if (!beforeId || !Number.isFinite(beforeId)) return;
+      if (!beforeId || !Number.isFinite(beforeId)) {return;}
     }
 
     const fetchSeq = ++groupChatFetchSeqRef.current;
@@ -6598,16 +11020,16 @@ const FrontScreen = ({
       const resp = await fetch(`${API_URL}/api/groups/${groupId}/messages?${params.toString()}`, {
         headers: {
           'Authorization': `Bearer ${authToken}`,
-        }
+        },
       });
 
       // Ignore if a newer fetch started after this one.
-      if (fetchSeq !== groupChatFetchSeqRef.current) return;
+      if (fetchSeq !== groupChatFetchSeqRef.current) {return;}
 
       // Ignore if the user already switched to a different group.
-      if (selectedGroupIdRef.current !== groupId) return;
+      if (selectedGroupIdRef.current !== groupId) {return;}
 
-      if (!resp.ok) return;
+      if (!resp.ok) {return;}
       const data = await resp.json().catch(() => ([] as any));
       const pageMessages = Array.isArray(data)
         ? data
@@ -6625,7 +11047,7 @@ const FrontScreen = ({
 
       if (mode === 'older') {
         setGroupHasMoreOlderMessages(hasMore);
-        if (pageMessages.length === 0) return;
+        if (pageMessages.length === 0) {return;}
 
         pendingGroupPrependAdjustRef.current = {
           previousHeight: groupContentHeightRef.current,
@@ -6635,7 +11057,7 @@ const FrontScreen = ({
         setGroupChatMessages((prev) => {
           const seen = new Set(prev.map((m: any, i: number) => getMsgKey(m, i)));
           const toPrepend = pageMessages.filter((m: any, i: number) => !seen.has(getMsgKey(m, i)));
-          if (toPrepend.length === 0) return prev;
+          if (toPrepend.length === 0) {return prev;}
           const next = [...toPrepend, ...prev];
           const nextOldest = Number((next[0] as any)?.id);
           groupOldestMessageIdRef.current = Number.isFinite(nextOldest) ? nextOldest : null;
@@ -6672,12 +11094,12 @@ const FrontScreen = ({
         const merged = Array.from(byKey.values()).sort((a: any, b: any) => {
           const ai = Number(a?.id);
           const bi = Number(b?.id);
-          if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) return ai - bi;
+          if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) {return ai - bi;}
           return String(a?.created_at ?? '').localeCompare(String(b?.created_at ?? ''));
         });
 
         const nextSig = buildSig(merged);
-        if (nextSig === groupChatLastSigRef.current) return prev;
+        if (nextSig === groupChatLastSigRef.current) {return prev;}
         groupChatLastSigRef.current = nextSig;
         return merged;
       });
@@ -6685,8 +11107,8 @@ const FrontScreen = ({
       console.error('Error fetching group messages:', e);
     } finally {
       // Hide initial loader (if any) after the first fetch attempt for the selected group.
-      if (fetchSeq !== groupChatFetchSeqRef.current) return;
-      if (selectedGroupIdRef.current !== groupId) return;
+      if (fetchSeq !== groupChatFetchSeqRef.current) {return;}
+      if (selectedGroupIdRef.current !== groupId) {return;}
       if (groupChatLoadingGroupIdRef.current === groupId) {
         setGroupChatLoadingGroupId(null);
       }
@@ -6694,15 +11116,15 @@ const FrontScreen = ({
   };
 
   const loadOlderGroupMessages = async () => {
-    if (isLoadingOlderGroupMessages) return;
-    if (!groupHasMoreOlderMessages) return;
+    if (isLoadingOlderGroupMessages) {return;}
+    if (!groupHasMoreOlderMessages) {return;}
 
     const beforeId = groupOldestMessageIdRef.current;
-    if (!beforeId || !Number.isFinite(beforeId)) return;
-    if (groupOldestFetchInFlightRef.current === beforeId) return;
+    if (!beforeId || !Number.isFinite(beforeId)) {return;}
+    if (groupOldestFetchInFlightRef.current === beforeId) {return;}
 
     const groupId = selectedGroup?.id;
-    if (!groupId) return;
+    if (!groupId) {return;}
 
     setIsLoadingOlderGroupMessages(true);
     groupOldestFetchInFlightRef.current = beforeId;
@@ -6715,7 +11137,7 @@ const FrontScreen = ({
   };
 
   const fetchGroupLimitedMembersIfOwner = async (groupId: string) => {
-    if (!authToken) return;
+    if (!authToken) {return;}
     if (!userEmail || !selectedGroup?.ownerEmail || userEmail !== selectedGroup.ownerEmail) {
       setGroupLimitedMemberEmails([]);
       return;
@@ -6725,7 +11147,7 @@ const FrontScreen = ({
       const resp = await fetch(`${API_URL}/api/groups/${groupId}/limited-members`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
-      if (!resp.ok) return;
+      if (!resp.ok) {return;}
       const data = await resp.json();
       if (Array.isArray(data)) {
         const cleaned = data.map((e: any) => String(e || '').trim()).filter(Boolean);
@@ -6739,9 +11161,9 @@ const FrontScreen = ({
   const toggleGroupMessageOptions = (messageIndex: number, memberEmail: string, username: string) => {
     const safeEmail = String(memberEmail || '').trim();
     const safeUsername = String(username || '').trim();
-    if (!safeEmail || !safeUsername) return;
+    if (!safeEmail || !safeUsername) {return;}
     setGroupMessageOptions(prev => {
-      if (prev && prev.messageIndex === messageIndex) return null;
+      if (prev && prev.messageIndex === messageIndex) {return null;}
       return { messageIndex, memberEmail: safeEmail, username: safeUsername };
     });
   };
@@ -6758,7 +11180,7 @@ const FrontScreen = ({
       }));
       return;
     }
-    if (!selectedGroup?.id) return;
+    if (!selectedGroup?.id) {return;}
 
     try {
       const resp = await fetch(`${API_URL}/api/groups/${selectedGroup.id}/limit`, {
@@ -6787,8 +11209,8 @@ const FrontScreen = ({
         en: `You restricted interactions from ${normalizeMentionUsername(username)}`,
         fr: `Vous avez limité les interactions de ${normalizeMentionUsername(username)}`,
         pt: `Você limitou as interações de ${normalizeMentionUsername(username)}`,
-        de: `Du hast die Interaktionen eingeschränkt von`,
-        it: `Hai limitato le interazioni di`,
+        de: 'Du hast die Interaktionen eingeschränkt von',
+        it: 'Hai limitato le interazioni di',
       }));
       if (selectedGroup?.id) {
         fetchGroupLimitedMembersIfOwner(selectedGroup.id);
@@ -6821,7 +11243,7 @@ const FrontScreen = ({
       }));
       return;
     }
-    if (!selectedGroup?.id) return;
+    if (!selectedGroup?.id) {return;}
 
     try {
       const resp = await fetch(`${API_URL}/api/groups/${selectedGroup.id}/unlimit`, {
@@ -6880,7 +11302,7 @@ const FrontScreen = ({
       }));
       return;
     }
-    if (!selectedGroup?.id) return;
+    if (!selectedGroup?.id) {return;}
 
     try {
       const finalReason = shouldBlock
@@ -6922,16 +11344,16 @@ const FrontScreen = ({
               en: `${normalizeMentionUsername(username)} has been removed and blocked`,
               fr: `${normalizeMentionUsername(username)} a été expulsé et bloqué`,
               pt: `${normalizeMentionUsername(username)} foi expulso e bloqueado`,
-              de: `wurde ausgeschlossen und blockiert`,
-              it: `è stato espulso e bloccato`,
+              de: 'wurde ausgeschlossen und blockiert',
+              it: 'è stato espulso e bloccato',
             })
           : localize({
               es: `${normalizeMentionUsername(username)} ha sido expulsado`,
               en: `${normalizeMentionUsername(username)} has been removed`,
               fr: `${normalizeMentionUsername(username)} a été expulsé`,
               pt: `${normalizeMentionUsername(username)} foi expulso`,
-              de: `wurde ausgeschlossen`,
-              it: `è stato espulso`,
+              de: 'wurde ausgeschlossen',
+              it: 'è stato espulso',
             })
       );
 
@@ -6951,14 +11373,14 @@ const FrontScreen = ({
       // - expel+block: show "Bloqueado"
       setSentGroupRequestStatusByTarget(prev => {
         const next: Record<string, 'pending' | 'accepted' | 'blocked'> = { ...prev };
-        if (!normalizedAt && !normalizedNoAt) return next;
+        if (!normalizedAt && !normalizedNoAt) {return next;}
 
         if (shouldBlock) {
-          if (normalizedAt) next[normalizedAt] = 'blocked';
-          if (normalizedNoAt) next[normalizedNoAt] = 'blocked';
+          if (normalizedAt) {next[normalizedAt] = 'blocked';}
+          if (normalizedNoAt) {next[normalizedNoAt] = 'blocked';}
         } else {
-          if (normalizedAt) delete (next as any)[normalizedAt];
-          if (normalizedNoAt) delete (next as any)[normalizedNoAt];
+          if (normalizedAt) {delete (next as any)[normalizedAt];}
+          if (normalizedNoAt) {delete (next as any)[normalizedNoAt];}
         }
         return next;
       });
@@ -6989,7 +11411,7 @@ const FrontScreen = ({
       }));
       return;
     }
-    if (!selectedGroup?.id) return;
+    if (!selectedGroup?.id) {return;}
 
     setPendingExpel({ memberEmail, username, shouldBlock: !!shouldBlock });
     setShowBlockReasonField(false);
@@ -7002,16 +11424,16 @@ const FrontScreen = ({
     targetPostId?: string,
     mode: 'latest' | 'poll' | 'older' = 'latest'
   ) => {
-    if (!authToken) return;
+    if (!authToken) {return;}
     const idToFetchRaw = targetPostId || (userPublication ? userPublication.id : null);
-    if (!idToFetchRaw) return;
+    if (!idToFetchRaw) {return;}
 
     const idToFetch = String(idToFetchRaw);
 
     let beforeId: number | null = null;
     if (mode === 'older') {
       beforeId = channelOldestMessageIdRef.current;
-      if (!beforeId || !Number.isFinite(beforeId)) return;
+      if (!beforeId || !Number.isFinite(beforeId)) {return;}
     }
 
     const fetchSeq = ++channelChatFetchSeqRef.current;
@@ -7028,15 +11450,15 @@ const FrontScreen = ({
 
       const response = await fetch(`${API_URL}/api/channels/messages/${idToFetch}?${params.toString()}`, {
         headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
+          'Authorization': `Bearer ${authToken}`,
+        },
       });
 
       // Ignore if a newer fetch started after this one.
-      if (fetchSeq !== channelChatFetchSeqRef.current) return;
+      if (fetchSeq !== channelChatFetchSeqRef.current) {return;}
 
       // Ignore if the user already switched to a different channel.
-      if (currentChannelPostIdRef.current !== idToFetch) return;
+      if (currentChannelPostIdRef.current !== idToFetch) {return;}
 
       if (response.ok) {
         const data = await response.json().catch(() => ([] as any));
@@ -7056,14 +11478,14 @@ const FrontScreen = ({
           return Array.from(byKey.values()).sort((a: any, b: any) => {
             const ai = Number(a?.id);
             const bi = Number(b?.id);
-            if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) return ai - bi;
+            if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) {return ai - bi;}
             return String(a?.created_at ?? '').localeCompare(String(b?.created_at ?? ''));
           });
         };
 
         if (mode === 'older') {
           setChannelHasMoreOlderMessages(hasMore);
-          if (pageMessages.length === 0) return;
+          if (pageMessages.length === 0) {return;}
 
           pendingChannelPrependAdjustRef.current = {
             previousHeight: channelContentHeightRef.current,
@@ -7073,7 +11495,7 @@ const FrontScreen = ({
           setChatMessages((prev) => {
             const seen = new Set(prev.map((m: any, i: number) => getMsgKey(m, i)));
             const toPrepend = pageMessages.filter((m: any, i: number) => !seen.has(getMsgKey(m, i)));
-            if (toPrepend.length === 0) return prev;
+            if (toPrepend.length === 0) {return prev;}
             const snapshot = resolveChannelChatStateSnapshot([...toPrepend, ...prev], {
               hasMoreOlderMessages: hasMore,
             });
@@ -7140,7 +11562,7 @@ const FrontScreen = ({
               oldestMessageId: snapshot.oldestMessageId,
               lastSig: snapshot.lastSig,
             });
-            if (snapshot.lastSig === channelChatLastSigRef.current) return prev;
+            if (snapshot.lastSig === channelChatLastSigRef.current) {return prev;}
             channelChatLastSigRef.current = snapshot.lastSig;
             return snapshot.messages;
           });
@@ -7178,7 +11600,7 @@ const FrontScreen = ({
             oldestMessageId: snapshot.oldestMessageId,
             lastSig: snapshot.lastSig,
           });
-          if (snapshot.lastSig === channelChatLastSigRef.current) return prev;
+          if (snapshot.lastSig === channelChatLastSigRef.current) {return prev;}
           channelChatLastSigRef.current = snapshot.lastSig;
           return snapshot.messages;
         });
@@ -7190,8 +11612,8 @@ const FrontScreen = ({
       console.error('Error fetching messages:', error);
     } finally {
       // Hide initial loader (if any) after the first fetch attempt for the selected joined channel.
-      if (fetchSeq !== channelChatFetchSeqRef.current) return;
-      if (currentChannelPostIdRef.current !== idToFetch) return;
+      if (fetchSeq !== channelChatFetchSeqRef.current) {return;}
+      if (currentChannelPostIdRef.current !== idToFetch) {return;}
       if (channelChatLoadingPostIdRef.current === idToFetch) {
         channelChatLoadingPostIdRef.current = null;
         setChannelChatLoadingPostId(null);
@@ -7201,12 +11623,12 @@ const FrontScreen = ({
   };
 
   const loadOlderChannelMessages = async () => {
-    if (isLoadingOlderChannelMessages) return;
-    if (!channelHasMoreOlderMessages) return;
+    if (isLoadingOlderChannelMessages) {return;}
+    if (!channelHasMoreOlderMessages) {return;}
 
     const beforeId = channelOldestMessageIdRef.current;
-    if (!beforeId || !Number.isFinite(beforeId)) return;
-    if (channelOldestFetchInFlightRef.current === beforeId) return;
+    if (!beforeId || !Number.isFinite(beforeId)) {return;}
+    if (channelOldestFetchInFlightRef.current === beforeId) {return;}
 
     const targetPostId = String(
       (selectedChannel as any)?.post_id ??
@@ -7215,7 +11637,7 @@ const FrontScreen = ({
       userPublication?.id ??
       ''
     );
-    if (!targetPostId) return;
+    if (!targetPostId) {return;}
 
     setIsLoadingOlderChannelMessages(true);
     channelOldestFetchInFlightRef.current = beforeId;
@@ -7226,6 +11648,117 @@ const FrontScreen = ({
       setIsLoadingOlderChannelMessages(false);
     }
   };
+
+  const handleCompleteChannelEventRewardTask = useCallback(async (messageId: number | string, taskIndex: number) => {
+    if (!authToken) {return;}
+
+    const activePostId = String(
+      (selectedChannel as any)?.post_id ??
+      (selectedChannel as any)?.postId ??
+      (selectedChannel as any)?.id ??
+      userPublication?.id ??
+      ''
+    ).trim();
+
+    if (!activePostId) {return;}
+
+    const actionKey = `${messageId}:${taskIndex}`;
+    if (completingChannelEventTaskKey === actionKey) {return;}
+
+    setCompletingChannelEventTaskKey(actionKey);
+    try {
+      const response = await fetch(`${API_URL}/api/channels/messages/${messageId}/tasks/${taskIndex}/complete`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        throw new Error(errorPayload?.error || localize({
+          es: 'No se pudo completar la tarea recompensada.',
+          en: 'The rewarded task could not be completed.',
+          fr: 'La tâche récompensée n’a pas pu être complétée.',
+          pt: 'Não foi possível concluir a tarefa recompensada.',
+          de: 'Die belohnte Aufgabe konnte nicht abgeschlossen werden.',
+          it: 'Non è stato possibile completare l\'attività ricompensata.',
+        }));
+      }
+
+      const responsePayload = await response.json().catch(() => ({} as any));
+      const resolvedReward = responsePayload?.reward && typeof responsePayload.reward === 'object'
+        ? responsePayload.reward
+        : null;
+
+      if (resolvedReward) {
+        const resolvedTaskIndex = Number(resolvedReward?.taskIndex ?? resolvedReward?.task_index);
+
+        if (Number.isFinite(resolvedTaskIndex)) {
+          setChatMessages(prev => {
+            let didUpdateMessage = false;
+            const normalizedMessageId = String(messageId);
+            const next = prev.map((message: any) => {
+              if (String(message?.id) !== normalizedMessageId) {return message;}
+
+              const currentRewardRows = Array.isArray(message?.channel_event_task_rewards)
+                ? message.channel_event_task_rewards
+                : [];
+              const rewardRowIndex = currentRewardRows.findIndex((item: any) => (
+                Number(item?.taskIndex ?? item?.task_index) === resolvedTaskIndex
+              ));
+              const nextRewardRow = {
+                ...resolvedReward,
+                taskIndex: resolvedTaskIndex,
+              };
+              const nextRewardRows = rewardRowIndex >= 0
+                ? currentRewardRows.map((item: any, index: number) => (
+                  index === rewardRowIndex ? { ...item, ...nextRewardRow } : item
+                ))
+                : [...currentRewardRows, nextRewardRow].sort((left: any, right: any) => (
+                  Number(left?.taskIndex ?? left?.task_index ?? 0) - Number(right?.taskIndex ?? right?.task_index ?? 0)
+                ));
+
+              didUpdateMessage = true;
+              return {
+                ...message,
+                channel_event_task_rewards: nextRewardRows,
+              };
+            });
+
+            if (!didUpdateMessage) {return prev;}
+
+            const snapshot = resolveChannelChatStateSnapshot(next, {
+              hasMoreOlderMessages: channelHasMoreOlderMessagesRef.current,
+            });
+            channelOldestMessageIdRef.current = snapshot.oldestMessageId;
+            setChannelHasMoreOlderMessages(snapshot.hasMoreOlderMessages);
+            channelChatLastSigRef.current = snapshot.lastSig;
+            cacheChannelChatState(activePostId, snapshot.messages, {
+              hasMoreOlderMessages: snapshot.hasMoreOlderMessages,
+              oldestMessageId: snapshot.oldestMessageId,
+              lastSig: snapshot.lastSig,
+            });
+            return snapshot.messages;
+          });
+        }
+      }
+
+      await fetchChannelMessages(activePostId, 'poll');
+      await refreshChannelEventWhiteKeysBalance().catch(() => {});
+    } catch (error: any) {
+      Alert.alert(errorTitle, error?.message || localize({
+        es: 'No se pudo completar la tarea recompensada.',
+        en: 'The rewarded task could not be completed.',
+        fr: 'La tâche récompensée n’a pas pu être complétée.',
+        pt: 'Não foi possível concluir a tarefa recompensada.',
+        de: 'Die belohnte Aufgabe konnte nicht abgeschlossen werden.',
+        it: 'Non è stato possibile completare l\'attività ricompensata.',
+      }));
+    } finally {
+      setCompletingChannelEventTaskKey(current => (current === actionKey ? null : current));
+    }
+  }, [authToken, cacheChannelChatState, completingChannelEventTaskKey, errorTitle, fetchChannelMessages, localize, refreshChannelEventWhiteKeysBalance, resolveChannelChatStateSnapshot, selectedChannel, userPublication]);
 
   useEffect(() => {
     if (authToken) {
@@ -7250,7 +11783,7 @@ const FrontScreen = ({
     (async () => {
       try {
         const raw = await AsyncStorage.getItem(joinedChannelThreadReadsStorageKey);
-        if (cancelled) return;
+        if (cancelled) {return;}
 
         if (!raw) {
           setJoinedChannelLastSeenReplySortByPostId({});
@@ -7261,8 +11794,8 @@ const FrontScreen = ({
         const next: Record<string, number> = {};
         Object.entries(parsed ?? {}).forEach(([postId, value]) => {
           const numericValue = Number(value);
-          if (!postId) return;
-          if (!Number.isFinite(numericValue) || numericValue <= 0) return;
+          if (!postId) {return;}
+          if (!Number.isFinite(numericValue) || numericValue <= 0) {return;}
           next[String(postId)] = numericValue;
         });
         setJoinedChannelLastSeenReplySortByPostId(next);
@@ -7279,9 +11812,9 @@ const FrontScreen = ({
   }, [joinedChannelThreadReadsStorageKey, userEmail]);
 
   useEffect(() => {
-    if (!userEmail) return;
+    if (!userEmail) {return;}
     const AsyncStorage = getAsyncStorageSafe();
-    if (!AsyncStorage) return;
+    if (!AsyncStorage) {return;}
 
     AsyncStorage.setItem(
       joinedChannelThreadReadsStorageKey,
@@ -7325,9 +11858,9 @@ const FrontScreen = ({
 
   useEffect(() => {
     // Keep host-side request status up to date when viewing "Canal"
-    if (activeBottomTab !== 'chat') return;
-    if (chatView !== 'channel') return;
-    if (selectedChannel) return;
+    if (activeBottomTab !== 'chat') {return;}
+    if (chatView !== 'channel') {return;}
+    if (selectedChannel) {return;}
 
     if (userEmail && channelOwnerEmail && userEmail === channelOwnerEmail) {
       fetchSentGroupRequests();
@@ -7352,7 +11885,7 @@ const FrontScreen = ({
   }, [activeBottomTab, chatView, channelTab, userPublication, selectedChannel]);
 
   useEffect(() => {
-    if (authToken) return;
+    if (authToken) {return;}
     channelChatStateCacheRef.current = {};
     resetChannelChatPaginationState(true);
     setChannelInteractions([]);
@@ -7361,11 +11894,21 @@ const FrontScreen = ({
     resetGroupChatPaginationState(true);
     setShowGroupScrollToLatest(false);
     setIsGroupNearBottom(true);
-  }, [authToken]);
+    resetHypePaginationState();
+  }, [authToken, resetHypePaginationState]);
+
+  useEffect(() => {
+    if (activeBottomTab === 'hype') {return;}
+    resetHypePaginationState();
+  }, [activeBottomTab, resetHypePaginationState]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') return;
+      const isActive = nextState === 'active';
+      setIsHypeAppActive(isActive);
+      if (isActive) {return;}
+
+      resetHypePaginationState();
       resetChannelChatPaginationState(true);
       setShowChannelScrollToLatest(false);
       setIsChannelNearBottom(true);
@@ -7377,7 +11920,7 @@ const FrontScreen = ({
     return () => {
       sub.remove();
     };
-  }, []);
+  }, [resetHypePaginationState]);
 
   useEffect(() => {
     if (activeBottomTab === 'chat' && chatView === 'groupChat' && selectedGroup?.id) {
@@ -7458,12 +12001,6 @@ const FrontScreen = ({
     };
   }, [activeBottomTab, chatView, channelTab, (selectedChannel as any)?.post_id, (selectedChannel as any)?.postId, (selectedChannel as any)?.id, userPublication?.id, authToken, isChannelNearBottom]);
 
-  useEffect(() => {
-    if (activeBottomTab === 'notifications' && authToken) {
-      fetchNotifications();
-    }
-  }, [activeBottomTab, authToken]);
-
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showExpelModal, setShowExpelModal] = useState(false);
   const [showLeaveBlockModal, setShowLeaveBlockModal] = useState(false);
@@ -7506,7 +12043,7 @@ const FrontScreen = ({
 
   const openPublicationBlockModal = (pub: Publication) => {
     const targetEmail = String(pub?.user?.email || '').trim();
-    if (!targetEmail) return;
+    if (!targetEmail) {return;}
 
     setActivePublicationOptionsId(null);
     setPendingPublicationBlock({
@@ -7519,7 +12056,7 @@ const FrontScreen = ({
 
   const openPublicationReportModal = (pub: Publication) => {
     const targetEmail = String(pub?.user?.email || '').trim();
-    if (!targetEmail) return;
+    if (!targetEmail) {return;}
 
     setActivePublicationOptionsId(null);
     setPendingPublicationReport({
@@ -7555,7 +12092,7 @@ const FrontScreen = ({
     }
 
     const postId = getJoinedChannelPostId(channel);
-    if (!postId) return;
+    if (!postId) {return;}
 
     setActiveJoinedChannelOptionsKey(null);
     const channelKey = getJoinedChannelKey(channel);
@@ -7619,7 +12156,7 @@ const FrontScreen = ({
     }
 
     const publisherEmail = getJoinedChannelPublisherEmail(channel);
-    if (!publisherEmail) return;
+    if (!publisherEmail) {return;}
 
     setActiveJoinedChannelOptionsKey(null);
 
@@ -7649,10 +12186,10 @@ const FrontScreen = ({
 
   const reportJoinedChannel = useCallback((channel: any) => {
     const publisherEmail = getJoinedChannelPublisherEmail(channel);
-    if (!publisherEmail) return;
+    if (!publisherEmail) {return;}
 
     const postId = getJoinedChannelPostId(channel);
-    if (!postId) return;
+    if (!postId) {return;}
 
     setActiveJoinedChannelOptionsKey(null);
     openPublicationReportModal({
@@ -7673,6 +12210,7 @@ const FrontScreen = ({
   const [expandedProfileTexts, setExpandedProfileTexts] = useState<Record<string, boolean>>({});
   const [homeCarouselLoadingVisibleByPubId, setHomeCarouselLoadingVisibleByPubId] = useState<Record<string, boolean>>({});
   const homeCarouselHideOverlayTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const reconciledHomeIntimidadesProgressSigsRef = useRef<Record<string, 1>>({});
 
   useEffect(() => {
     return () => {
@@ -7684,6 +12222,10 @@ const FrontScreen = ({
     };
   }, []);
 
+  useEffect(() => {
+    reconciledHomeIntimidadesProgressSigsRef.current = {};
+  }, [userEmail]);
+
   // Load persisted unlocks for the current user (so the Keitin panel stays open after restart).
   useEffect(() => {
     let cancelled = false;
@@ -7691,14 +12233,14 @@ const FrontScreen = ({
     (async () => {
       const AsyncStorage = getAsyncStorageSafe();
       if (!AsyncStorage) {
-        if (!cancelled) setHomeIntimidadesUnlockSigs({});
+        if (!cancelled) {setHomeIntimidadesUnlockSigs({});}
         return;
       }
 
       try {
         const key = makeHomeIntimidadesUnlockStorageKey(userEmail);
         const raw = await AsyncStorage.getItem(key);
-        if (cancelled) return;
+        if (cancelled) {return;}
 
         const parsed = raw ? JSON.parse(raw) : {};
         if (parsed && typeof parsed === 'object') {
@@ -7707,7 +12249,7 @@ const FrontScreen = ({
           setHomeIntimidadesUnlockSigs({});
         }
       } catch {
-        if (!cancelled) setHomeIntimidadesUnlockSigs({});
+        if (!cancelled) {setHomeIntimidadesUnlockSigs({});}
       }
     })();
 
@@ -7716,48 +12258,15 @@ const FrontScreen = ({
     };
   }, [userEmail]);
 
-  // When a rewarded ad is earned for a publication, persist its unlock signature.
-  useEffect(() => {
-    if (!pendingHomeIntimidadesUnlockPubId) return;
-
-    const pubIdStr = String(pendingHomeIntimidadesUnlockPubId || '').trim();
-    if (!pubIdStr) {
-      setPendingHomeIntimidadesUnlockPubId(null);
-      return;
-    }
-
-    const pub = publications.find(p => String(p?.id) === pubIdStr);
-    const sig = pub ? makeHomeIntimidadesUnlockSig(pub.id, pub.createdAt) : '';
-    if (!sig) {
-      setPendingHomeIntimidadesUnlockPubId(null);
-      return;
-    }
-
-    setHomeIntimidadesUnlockSigs(prev => {
-      if (prev[sig] === 1) return prev;
-      const next = { ...prev, [sig]: 1 as const };
-
-      const AsyncStorage = getAsyncStorageSafe();
-      if (AsyncStorage) {
-        const key = makeHomeIntimidadesUnlockStorageKey(userEmail);
-        AsyncStorage.setItem(key, JSON.stringify(next)).catch(() => { });
-      }
-
-      return next;
-    });
-
-    setPendingHomeIntimidadesUnlockPubId(null);
-  }, [pendingHomeIntimidadesUnlockPubId, publications, userEmail]);
-
   // Sync persisted unlocks into runtime visibility state.
   // Also reset visibility if the same publication id is republished with a new createdAt.
   useEffect(() => {
-    if (!publications.length) return;
+    if (!publications.length) {return;}
 
     const presentIds = new Set(publications.map(p => String(p?.id ?? '')));
     const sigById = homeIntimidadesSigByPubIdRef.current;
     Object.keys(sigById).forEach((id) => {
-      if (!presentIds.has(id)) delete sigById[id];
+      if (!presentIds.has(id)) {delete sigById[id];}
     });
 
     setIntimidadesVisible(prev => {
@@ -7766,7 +12275,7 @@ const FrontScreen = ({
 
       for (const pub of publications) {
         const id = String(pub?.id ?? '').trim();
-        if (!id) continue;
+        if (!id) {continue;}
 
         const sig = makeHomeIntimidadesUnlockSig(pub.id, pub.createdAt);
         const prevSig = sigById[id];
@@ -7793,6 +12302,27 @@ const FrontScreen = ({
     });
   }, [publications, homeIntimidadesUnlockSigs]);
 
+  useEffect(() => {
+    if (!publications.length) {return;}
+
+    const unlockedSignatures = publications
+      .map((pub) => makeHomeIntimidadesUnlockSig(pub?.id, pub?.createdAt))
+      .filter((sig) => !!sig && homeIntimidadesUnlockSigs[sig] === 1);
+
+    unlockedSignatures.forEach((sig) => {
+      if (!sig || reconciledHomeIntimidadesProgressSigsRef.current[sig] === 1) {return;}
+
+      void recordHomeIntimidadesUnlock({
+        email: userEmail,
+        token: authToken,
+      }, sig)
+        .then(() => {
+          reconciledHomeIntimidadesProgressSigsRef.current[sig] = 1;
+        })
+        .catch(() => {});
+    });
+  }, [authToken, publications, homeIntimidadesUnlockSigs, userEmail]);
+
   // Home: show/hide profile rings overlay per publication (default: hidden)
   const [homeProfileRingsVisibleByPostId, setHomeProfileRingsVisibleByPostId] = useState<Record<string, boolean>>({});
 
@@ -7801,15 +12331,15 @@ const FrontScreen = ({
 
   const setHomePresentationImageLayout = useCallback((pubId: string | number, imageIndex: number, width: number, height: number) => {
     const key = String(pubId || '');
-    if (!key) return;
+    if (!key) {return;}
     const idx = Number(imageIndex);
-    if (!Number.isFinite(idx) || idx < 0) return;
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+    if (!Number.isFinite(idx) || idx < 0) {return;}
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {return;}
 
     setHomePresentationImageLayouts(prev => {
       const current = prev[key] || {};
       const existing = current[idx];
-      if (existing && existing.width === width && existing.height === height) return prev;
+      if (existing && existing.width === width && existing.height === height) {return prev;}
       return {
         ...prev,
         [key]: {
@@ -7829,13 +12359,13 @@ const FrontScreen = ({
 
   const markHomePresentationImageLoaded = useCallback((pubId: string | number, imageIndex: number) => {
     const key = String(pubId || '');
-    if (!key) return;
+    if (!key) {return;}
     const idx = Number(imageIndex);
-    if (!Number.isFinite(idx) || idx < 0) return;
+    if (!Number.isFinite(idx) || idx < 0) {return;}
 
     setHomePresentationImagesLoaded(prev => {
       const current = prev[key] || {};
-      if (current[idx]) return prev;
+      if (current[idx]) {return prev;}
       return {
         ...prev,
         [key]: {
@@ -7853,12 +12383,12 @@ const FrontScreen = ({
     imagesCount: number
   ) => {
     const key = String(pubId || '');
-    if (!key) return;
+    if (!key) {return;}
     const total = Math.max(0, Number(imagesCount) || 0);
     if (total <= 1) {
       homePresentationActiveIndexRef.current[key] = 0;
       setActivePresentationIndices(prev => {
-        if ((prev[key] ?? 0) === 0) return prev;
+        if ((prev[key] ?? 0) === 0) {return prev;}
         return { ...prev, [key]: 0 };
       });
       return;
@@ -7868,22 +12398,22 @@ const FrontScreen = ({
     const x = Math.max(0, Number(contentOffsetX) || 0);
     const nextIndex = Math.min(total - 1, Math.max(0, Math.round(x / w)));
 
-    if (homePresentationActiveIndexRef.current[key] === nextIndex) return;
+    if (homePresentationActiveIndexRef.current[key] === nextIndex) {return;}
     homePresentationActiveIndexRef.current[key] = nextIndex;
 
     setActivePresentationIndices(prev => {
-      if ((prev[key] ?? 0) === nextIndex) return prev;
+      if ((prev[key] ?? 0) === nextIndex) {return prev;}
       return { ...prev, [key]: nextIndex };
     });
   }, []);
 
-  const activeHomePublication = activeBottomTab === 'home'
+  const activeHomePublication = isHomeFeedTabActive
     ? publications?.[currentPostIndex] ?? null
     : null;
 
   const activeHomePresentationImageSig = useMemo(() => {
     const pub = activeHomePublication;
-    if (!pub || !Array.isArray(pub.presentation?.images) || pub.presentation.images.length === 0) return '';
+    if (!pub || !Array.isArray(pub.presentation?.images) || pub.presentation.images.length === 0) {return '';}
 
     const imageParts = pub.presentation.images.map((img: any, index: number) => {
       const rawUri = String(img?.uri || '').trim();
@@ -7896,29 +12426,29 @@ const FrontScreen = ({
 
   const isActiveHomePublicationSwipeReady = useMemo(() => {
     const pub = activeHomePublication;
-    if (!pub) return false;
+    if (!pub) {return false;}
 
     const images = Array.isArray(pub.presentation?.images) ? pub.presentation.images : [];
-    if (images.length === 0) return true;
+    if (images.length === 0) {return true;}
 
     const pubId = String(pub.id || '');
-    if (!pubId) return true;
+    if (!pubId) {return true;}
 
     return homePresentationImagesLoaded[pubId]?.[0] === true;
   }, [activeHomePublication, homePresentationImagesLoaded]);
 
   const shouldShowHomePublicationSwipeHint =
-    activeBottomTab === 'home' &&
+    isHomeFeedTabActive &&
     isActiveHomePublicationSwipeReady &&
     isHomePublicationAtTop &&
     publications.length > 1;
 
   const advanceHomePublicationFromTopGesture = useCallback(() => {
-    if (homePagerTransitionInFlightRef.current) return;
-    if (!shouldShowHomePublicationSwipeHint) return;
+    if (homePagerTransitionInFlightRef.current) {return;}
+    if (!shouldShowHomePublicationSwipeHint) {return;}
 
     const nextIndex = getHomePagerNeighborIndices(currentPostIndex, publications.length).right;
-    if (nextIndex === currentPostIndex) return;
+    if (nextIndex === currentPostIndex) {return;}
 
     homePagerTransitionInFlightRef.current = true;
     if (homePublicationSwipeLockTimeoutRef.current) {
@@ -7934,7 +12464,7 @@ const FrontScreen = ({
     if (leavingPublication) {
       const leavingId = String(leavingPublication.id);
       setHomeProfileRingsVisibleByPostId(prev => {
-        if (prev[leavingId] !== true) return prev;
+        if (prev[leavingId] !== true) {return prev;}
         return { ...prev, [leavingId]: false };
       });
     }
@@ -8028,24 +12558,24 @@ const FrontScreen = ({
   ]);
 
   const handleHomePublicationRefreshTrigger = useCallback(() => {
-    if (activeBottomTab !== 'home' || publications.length <= 1) return;
+    if (!isHomeFeedTabActive || publications.length <= 1) {return;}
     if (homePagerTransitionInFlightRef.current) {
       homePublicationAdvanceQueuedRef.current = true;
       return;
     }
-    if (!shouldShowHomePublicationSwipeHint) return;
+    if (!shouldShowHomePublicationSwipeHint) {return;}
     advanceHomePublicationFromTopGesture();
-  }, [activeBottomTab, advanceHomePublicationFromTopGesture, publications.length, shouldShowHomePublicationSwipeHint]);
+  }, [advanceHomePublicationFromTopGesture, isHomeFeedTabActive, publications.length, shouldShowHomePublicationSwipeHint]);
 
   useEffect(() => {
-    if (!homePublicationAdvanceQueuedRef.current) return;
-    if (homePagerTransitionInFlightRef.current) return;
-    if (!shouldShowHomePublicationSwipeHint) return;
+    if (!homePublicationAdvanceQueuedRef.current) {return;}
+    if (homePagerTransitionInFlightRef.current) {return;}
+    if (!shouldShowHomePublicationSwipeHint) {return;}
 
     const queuedAdvanceFrame = requestAnimationFrame(() => {
-      if (!homePublicationAdvanceQueuedRef.current) return;
-      if (homePagerTransitionInFlightRef.current) return;
-      if (!shouldShowHomePublicationSwipeHint) return;
+      if (!homePublicationAdvanceQueuedRef.current) {return;}
+      if (homePagerTransitionInFlightRef.current) {return;}
+      if (!shouldShowHomePublicationSwipeHint) {return;}
       homePublicationAdvanceQueuedRef.current = false;
       advanceHomePublicationFromTopGesture();
     });
@@ -8082,7 +12612,7 @@ const FrontScreen = ({
     const x = Math.max(0, Number(contentOffsetX) || 0);
     const nextIndex = Math.min(total - 1, Math.max(0, Math.round(x / w)));
 
-    if (profilePresentationActiveIndexRef.current === nextIndex) return;
+    if (profilePresentationActiveIndexRef.current === nextIndex) {return;}
     profilePresentationActiveIndexRef.current = nextIndex;
     setActiveProfileImageIndex(prev => (prev === nextIndex ? prev : nextIndex));
   }, []);
@@ -8103,26 +12633,26 @@ const FrontScreen = ({
     const x = Math.max(0, Number(contentOffsetX) || 0);
     const nextIndex = Math.min(total - 1, Math.max(0, Math.round(x / w)));
 
-    if (editablePresentationActiveIndexRef.current === nextIndex) return;
+    if (editablePresentationActiveIndexRef.current === nextIndex) {return;}
     editablePresentationActiveIndexRef.current = nextIndex;
     setActiveCarouselImageIndex(prev => (prev === nextIndex ? prev : nextIndex));
   }, []);
 
   const markProfilePresentationImageLoaded = useCallback((imageIndex: number) => {
     const idx = Number(imageIndex);
-    if (!Number.isFinite(idx) || idx < 0) return;
+    if (!Number.isFinite(idx) || idx < 0) {return;}
     setProfilePresentationImagesLoaded(prev => {
-      if (prev[idx]) return prev;
+      if (prev[idx]) {return prev;}
       return { ...prev, [idx]: true };
     });
   }, []);
 
   const profilePresentationLoadedCount = useMemo(() => {
     const total = profilePresentation?.images?.length ?? 0;
-    if (total <= 0) return 0;
+    if (total <= 0) {return 0;}
     let count = 0;
     for (let i = 0; i < total; i += 1) {
-      if (profilePresentationImagesLoaded[i]) count += 1;
+      if (profilePresentationImagesLoaded[i]) {count += 1;}
     }
     return count;
   }, [profilePresentation?.images, profilePresentationImagesLoaded]);
@@ -8152,16 +12682,16 @@ const FrontScreen = ({
   }, [activeBottomTab, profileView, profilePresentation?.images?.length]);
 
   useEffect(() => {
-    if (activeBottomTab !== 'profile') return;
-    if (profileView !== 'profile') return;
-    if (!profilePresentation?.images || profilePresentation.images.length === 0) return;
+    if (activeBottomTab !== 'profile') {return;}
+    if (profileView !== 'profile') {return;}
+    if (!profilePresentation?.images || profilePresentation.images.length === 0) {return;}
 
     const uris = profilePresentation.images
       .map(img => getServerResourceUrl(String((img as any)?.uri || '').trim()))
       .filter(Boolean);
 
     const sig = uris.join('|');
-    if (profilePresentationPrefetchSigRef.current === sig) return;
+    if (profilePresentationPrefetchSigRef.current === sig) {return;}
     profilePresentationPrefetchSigRef.current = sig;
     profileCarouselRepaintAfterLoadSigRef.current = '';
 
@@ -8187,15 +12717,15 @@ const FrontScreen = ({
   }, [activeBottomTab, profileView, profilePresentation, markProfilePresentationImageLoaded]);
 
   useEffect(() => {
-    if (activeBottomTab !== 'profile') return;
-    if (profileView !== 'profile') return;
-    if (!profilePresentation?.images || profilePresentation.images.length === 0) return;
+    if (activeBottomTab !== 'profile') {return;}
+    if (profileView !== 'profile') {return;}
+    if (!profilePresentation?.images || profilePresentation.images.length === 0) {return;}
 
     const total = profilePresentation.images.length;
-    if (profilePresentationLoadedCount < total) return;
+    if (profilePresentationLoadedCount < total) {return;}
 
     const sig = `${profilePresentation.images.map((img: any) => String(img?.uri || '')).join('|')}::${total}`;
-    if (profileCarouselRepaintAfterLoadSigRef.current === sig) return;
+    if (profileCarouselRepaintAfterLoadSigRef.current === sig) {return;}
     profileCarouselRepaintAfterLoadSigRef.current = sig;
 
     requestAnimationFrame(() => {
@@ -8205,29 +12735,29 @@ const FrontScreen = ({
   }, [activeBottomTab, profileView, profilePresentation, profilePresentationLoadedCount]);
 
   useEffect(() => {
-    if (activeBottomTab !== 'home') return;
+    if (!isHomeFeedTabActive) {return;}
 
     const pub = activeHomePublication;
-    if (!pub || !pub.presentation?.images || pub.presentation.images.length === 0) return;
+    if (!pub || !pub.presentation?.images || pub.presentation.images.length === 0) {return;}
 
     const pubId = String(pub.id || '');
-    if (!pubId) return;
+    if (!pubId) {return;}
 
     const uris = pub.presentation.images
       .map(img => getServerResourceUrl(String(img?.uri || '')))
       .filter(u => /^https?:\/\//i.test(u));
 
-    if (uris.length === 0) return;
+    if (uris.length === 0) {return;}
 
     const sig = activeHomePresentationImageSig;
-    if (!sig) return;
-    if (homePresentationPrefetchSigRef.current === sig) return;
+    if (!sig) {return;}
+    if (homePresentationPrefetchSigRef.current === sig) {return;}
     homePresentationPrefetchSigRef.current = sig;
 
     if (homePresentationImageSigByPubIdRef.current[pubId] !== sig) {
       homePresentationImageSigByPubIdRef.current[pubId] = sig;
       setHomePresentationImagesLoaded(prev => {
-        if (!prev[pubId] || Object.keys(prev[pubId]).length === 0) return prev;
+        if (!prev[pubId] || Object.keys(prev[pubId]).length === 0) {return prev;}
         return {
           ...prev,
           [pubId]: {},
@@ -8247,22 +12777,22 @@ const FrontScreen = ({
         // ignore
       }
     });
-  }, [activeBottomTab, activeHomePublication, activeHomePresentationImageSig]);
+  }, [activeHomePresentationImageSig, activeHomePublication, isHomeFeedTabActive]);
 
   useEffect(() => {
-    if (activeBottomTab !== 'home') return;
+    if (!isHomeFeedTabActive) {return;}
 
     const pub = activeHomePublication;
-    if (!pub || !pub.presentation?.images || pub.presentation.images.length === 0) return;
+    if (!pub || !pub.presentation?.images || pub.presentation.images.length === 0) {return;}
 
     const pubId = String(pub.id || '');
-    if (!pubId) return;
+    if (!pubId) {return;}
 
     const total = pub.presentation.images.length;
     const loadedMap = homePresentationImagesLoaded[pubId] || {};
     let loadedCount = 0;
     for (let i = 0; i < total; i += 1) {
-      if (loadedMap[i]) loadedCount += 1;
+      if (loadedMap[i]) {loadedCount += 1;}
     }
 
     const existingTimer = homeCarouselHideOverlayTimersRef.current[pubId];
@@ -8275,8 +12805,8 @@ const FrontScreen = ({
       return;
     }
 
-    if (homeCarouselLoadingVisibleByPubId[pubId] === false) return;
-    if (existingTimer) return;
+    if (homeCarouselLoadingVisibleByPubId[pubId] === false) {return;}
+    if (existingTimer) {return;}
 
     homeCarouselHideOverlayTimersRef.current[pubId] = setTimeout(() => {
       InteractionManager.runAfterInteractions(() => {
@@ -8287,7 +12817,7 @@ const FrontScreen = ({
 
       delete homeCarouselHideOverlayTimersRef.current[pubId];
     }, 80);
-  }, [activeBottomTab, activeHomePublication, activeHomePresentationImageSig, homePresentationImagesLoaded, homeCarouselLoadingVisibleByPubId]);
+  }, [activeHomePresentationImageSig, activeHomePublication, homeCarouselLoadingVisibleByPubId, homePresentationImagesLoaded, isHomeFeedTabActive]);
 
   const publicationAnimations = useRef<Record<string, { scale: Animated.Value, opacity: Animated.Value }>>({});
   const publicationLastTaps = useRef<Record<string, number>>({});
@@ -8300,9 +12830,9 @@ const FrontScreen = ({
     reactions: { selected: string[], counts: Record<string, number>, userReaction: string | null },
     nextEmoji: string
   ) => {
-    if (!nextEmoji) return;
-    if (!reactions.selected.includes(nextEmoji)) return;
-    if (reactions.userReaction === nextEmoji) return;
+    if (!nextEmoji) {return;}
+    if (!reactions.selected.includes(nextEmoji)) {return;}
+    if (reactions.userReaction === nextEmoji) {return;}
 
     setPublications(prev => prev.map(p => {
       if (p.id === pubId) {
@@ -8316,8 +12846,8 @@ const FrontScreen = ({
           reactions: {
             ...p.reactions,
             counts: newCounts,
-            userReaction: nextEmoji
-          }
+            userReaction: nextEmoji,
+          },
         };
       }
       return p;
@@ -8329,19 +12859,19 @@ const FrontScreen = ({
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`
+          'Authorization': `Bearer ${authToken}`,
         },
         body: JSON.stringify({
           emoji: nextEmoji,
-          previousEmoji: reactions.userReaction
-        })
+          previousEmoji: reactions.userReaction,
+        }),
       }).catch(err => console.error('Error updating reaction', err));
     }
 
     if (!publicationAnimations.current[pubId]) {
       publicationAnimations.current[pubId] = {
         scale: new Animated.Value(0),
-        opacity: new Animated.Value(0)
+        opacity: new Animated.Value(0),
       };
     }
 
@@ -8349,7 +12879,7 @@ const FrontScreen = ({
 
     setPublicationDoubleTapState(prev => ({
       ...prev,
-      [pubId]: { visible: true, emoji: nextEmoji }
+      [pubId]: { visible: true, emoji: nextEmoji },
     }));
 
     anims.scale.setValue(0);
@@ -8370,7 +12900,7 @@ const FrontScreen = ({
     ]).start(() => {
       setPublicationDoubleTapState(prev => ({
         ...prev,
-        [pubId]: { ...prev[pubId], visible: false }
+        [pubId]: { ...prev[pubId], visible: false },
       }));
     });
   };
@@ -8482,6 +13012,10 @@ const FrontScreen = ({
 
     setMyPublication(newPublication);
     setActiveBottomTab('home');
+    void recordProfilePublishGoalCompletion({
+      email: userEmail,
+      token: authToken,
+    }).catch(() => {});
 
     if (authToken) {
       try {
@@ -8489,7 +13023,7 @@ const FrontScreen = ({
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${authToken}`
+            'Authorization': `Bearer ${authToken}`,
           },
           body: JSON.stringify({
             presentation: presentationToPublish,
@@ -8497,9 +13031,9 @@ const FrontScreen = ({
             reactions: {
               selected: selectedReactions,
               counts: reactionCounts,
-              userReaction: null
-            }
-          })
+              userReaction: null,
+            },
+          }),
         });
 
         if (response.ok) {
@@ -8560,10 +13094,9 @@ const FrontScreen = ({
       setActiveBottomTab('profile');
       setShowDeleteModal(false);
 
-      // Remove any pending join-request notifications locally and refresh from server.
-      setNotifications(prev => prev.filter(n => !(n.type === 'group_join_request' && n.status === 'pending')));
+      // Refresh notification counters after post removal affects pending requests.
       if (authToken) {
-        fetchNotifications().catch(() => { });
+        onNotificationsChanged?.();
         fetchSentGroupRequests().catch(() => { });
       }
     }
@@ -8579,25 +13112,25 @@ const FrontScreen = ({
         const response = await fetch(`${API_URL}/api/posts/${postToDelete.id}`, {
           method: 'DELETE',
           headers: {
-            'Authorization': `Bearer ${authToken}`
-          }
+            'Authorization': `Bearer ${authToken}`,
+          },
         });
 
-        if (response.ok) return;
+        if (response.ok) {return;}
 
         // If server already removed it (e.g., background cleanup), treat as success.
-        if (response.status === 404) return;
+        if (response.status === 404) {return;}
 
         if (source === 'manual') {
           console.error('Error deleting post:', await response.text());
-          Alert.alert("Advertencia", "Se elimin f3 localmente pero hubo un error en el servidor.");
+          Alert.alert('Advertencia', 'Se elimin f3 localmente pero hubo un error en el servidor.');
         } else {
           // Avoid noisy errors on auto-expire; local state is already updated.
           console.warn('Auto-expire delete failed:', await response.text());
         }
       } catch (error) {
         console.error('Error deleting post:', error);
-        Alert.alert("Advertencia", "Se elimin f3 localmente pero hubo un error de conexi f3n.");
+        Alert.alert('Advertencia', 'Se elimin f3 localmente pero hubo un error de conexi f3n.');
       }
     } else {
       // Avisos deshabilitados a petición: no mostrar mensaje.
@@ -8782,22 +13315,6 @@ const FrontScreen = ({
   const hasOnlyRemoteCarouselImages = !authToken || carouselImages.every(img => String(img.uri || '').startsWith('http'));
   const canApplyPresentation = hasPresentationImage && titleReady && textReady && !hasUploadingCarouselImages && hasOnlyRemoteCarouselImages;
 
-  const SOCIAL_ICONS = {
-    facebook: require('../../assets/images/facebook.png'),
-    instagram: require('../../assets/images/instagram.png'),
-    onlyfans: require('../../assets/images/onlyfans.png'),
-    pinterest: require('../../assets/images/pinterest.png'),
-    telegram: require('../../assets/images/telegram.png'),
-    tiktok: require('../../assets/images/tiktok.png'),
-    twitter: require('../../assets/images/x_twitter.png'),
-    youtube: require('../../assets/images/youtube.png'),
-    discord: require('../../assets/images/discord.png'),
-    threads: require('../../assets/images/threads.png'),
-    linkedin: require('../../assets/images/linkedin.png'),
-    kick: require('../../assets/images/kick.png'),
-    twitch: require('../../assets/images/twitch.png'),
-  };
-
   const [showSocialPanel, setShowSocialPanel] = useState(false);
   const [socialPanelAnimation] = useState(new Animated.Value(-SOCIAL_PANEL_HEIGHT));
   const [selectedSocialNetwork, setSelectedSocialNetwork] = useState<string | null>(null);
@@ -8816,7 +13333,7 @@ const FrontScreen = ({
       }, 3000);
     }
     return () => {
-      if (timer) clearTimeout(timer);
+      if (timer) {clearTimeout(timer);}
     };
   }, [showLinkedSocials]);
 
@@ -8828,6 +13345,16 @@ const FrontScreen = ({
 
   const fetchHomePosts = async (opts?: { preservePosition?: boolean; showLoader?: boolean }) => {
     const shouldShowLoader = opts?.showLoader ?? publications.length === 0;
+    const requestSeq = homePostsFetchSeqRef.current + 1;
+    homePostsFetchSeqRef.current = requestSeq;
+
+    if (homePostsAbortControllerRef.current) {
+      homePostsAbortControllerRef.current.abort();
+      homePostsAbortControllerRef.current = null;
+    }
+
+    const abortController = typeof AbortController === 'function' ? new AbortController() : null;
+    homePostsAbortControllerRef.current = abortController;
 
     if (shouldShowLoader) {
       homeLoaderStartedAtRef.current = Date.now();
@@ -8837,10 +13364,15 @@ const FrontScreen = ({
     try {
       const headers: Record<string, string> = {};
       if (authToken) {
-        headers['Authorization'] = `Bearer ${authToken}`;
+        headers.Authorization = `Bearer ${authToken}`;
       }
 
-      const response = await fetch(`${API_URL}/api/posts`, { headers });
+      const response = await fetch(`${API_URL}/api/posts`, {
+        headers,
+        signal: abortController?.signal,
+      });
+
+      if (homePostsFetchSeqRef.current !== requestSeq) {return;}
 
       if (!response.ok) {
         console.error('Error fetching posts:', response.status);
@@ -8848,6 +13380,7 @@ const FrontScreen = ({
       }
 
       const data = (await response.json()) as Publication[];
+      if (homePostsFetchSeqRef.current !== requestSeq) {return;}
 
       if (userEmail) {
         const myPost = data.find((p: Publication) => p.user.email === userEmail);
@@ -8888,9 +13421,15 @@ const FrontScreen = ({
       setPublications(orderedPublications);
       setCurrentPostIndex(0);
       seenPublicationIdsRef.current = new Set(orderedPublications[0]?.id != null ? [String(orderedPublications[0].id)] : []);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {return;}
       console.error('Error fetching posts:', error);
     } finally {
+      if (homePostsAbortControllerRef.current === abortController) {
+        homePostsAbortControllerRef.current = null;
+      }
+      if (homePostsFetchSeqRef.current !== requestSeq) {return;}
+
       setHasHomePostsLoadedOnce(true);
       if (shouldShowLoader) {
         const elapsed = Date.now() - (homeLoaderStartedAtRef.current || Date.now());
@@ -8904,7 +13443,16 @@ const FrontScreen = ({
   };
 
   useEffect(() => {
-    if (!authToken) return;
+    return () => {
+      if (homePostsAbortControllerRef.current) {
+        homePostsAbortControllerRef.current.abort();
+        homePostsAbortControllerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!authToken) {return;}
     setHasHomePostsLoadedOnce(false);
     fetchHomePosts({ showLoader: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -8917,12 +13465,12 @@ const FrontScreen = ({
       return;
     }
 
-    if (activeBottomTab !== 'home') return;
-    if (!authToken) return;
+    if (!isHomeFeedTabActive) {return;}
+    if (!authToken) {return;}
 
     fetchHomePosts({ preservePosition: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeBottomTab, homeRefreshCounter]);
+  }, [activeBottomTab, authToken, homeRefreshCounter, isHomeFeedTabActive]);
 
   useEffect(() => {
     const shouldAnimate = isHomePostsLoading || !hasHomePostsLoadedOnce;
@@ -9012,7 +13560,7 @@ const FrontScreen = ({
         homePostsPollingTimerRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [activeBottomTab, authToken]);
 
   // Cargar perfil editado (borrador) al iniciar
@@ -9022,8 +13570,8 @@ const FrontScreen = ({
         try {
           const response = await fetch(`${API_URL}/api/edit-profile`, {
             headers: {
-              'Authorization': `Bearer ${authToken}`
-            }
+              'Authorization': `Bearer ${authToken}`,
+            },
           });
           if (response.ok) {
             const data = await response.json();
@@ -9058,7 +13606,7 @@ const FrontScreen = ({
       const reactionsToSave = newReactions || {
         selected: selectedReactions,
         counts: reactionCounts,
-        userReaction: currentUserReaction
+        userReaction: currentUserReaction,
       };
 
       try {
@@ -9066,13 +13614,13 @@ const FrontScreen = ({
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${authToken}`
+            'Authorization': `Bearer ${authToken}`,
           },
           body: JSON.stringify({
             presentation: newPresentation || {},
             intimidades: newIntimidades,
-            reactions: reactionsToSave
-          })
+            reactions: reactionsToSave,
+          }),
         });
         return resp;
       } catch (error) {
@@ -9085,25 +13633,25 @@ const FrontScreen = ({
   };
 
   const getIntimidadDraftImageUrls = (item: Intimidad | null | undefined): string[] => {
-    if (!item) return [];
+    if (!item) {return [];}
 
     const urls: string[] = [];
 
     if (item.type === 'image') {
       const u = String((item as any).content || '').trim();
-      if (u) urls.push(u);
+      if (u) {urls.push(u);}
     }
 
     const quizUri = (item as any)?.quizData?.imageUri;
     if (quizUri) {
       const u = String(quizUri).trim();
-      if (u) urls.push(u);
+      if (u) {urls.push(u);}
     }
 
     const surveyUri = (item as any)?.surveyData?.imageUri;
     if (surveyUri) {
       const u = String(surveyUri).trim();
-      if (u) urls.push(u);
+      if (u) {urls.push(u);}
     }
 
     return urls;
@@ -9120,16 +13668,16 @@ const FrontScreen = ({
   };
 
   const getPresentationDraftImageUrls = (presentation: PresentationContent | null | undefined): string[] => {
-    if (!presentation) return [];
+    if (!presentation) {return [];}
     const imgs = (presentation as any)?.images;
-    if (!Array.isArray(imgs)) return [];
+    if (!Array.isArray(imgs)) {return [];}
     return imgs
       .map((img: any) => String(img?.uri || '').trim())
       .filter((u: string) => !!u);
   };
 
   const validateSocialLink = (platform: string, link: string): boolean => {
-    if (!link.trim()) return true; // Allow empty
+    if (!link.trim()) {return true;} // Allow empty
 
     const validators: Record<string, RegExp> = {
       facebook: /^https?:\/\/(www\.)?(facebook|fb)\.com\/.+/i,
@@ -9218,7 +13766,7 @@ const FrontScreen = ({
         try {
           await updateSocialNetworks({
             token: authToken,
-            socialNetworks: networksForBackend
+            socialNetworks: networksForBackend,
           });
           console.log('✅ Redes sociales actualizadas en servidor');
         } catch (error) {
@@ -9244,7 +13792,7 @@ const FrontScreen = ({
       try {
         await updateSocialNetworks({
           token: authToken,
-          socialNetworks: networksForBackend
+          socialNetworks: networksForBackend,
         });
         console.log('✅ Redes sociales actualizadas en servidor (desvinculación)');
       } catch (error) {
@@ -9274,7 +13822,7 @@ const FrontScreen = ({
   });
 
   const withClientId = (img: CarouselImageData): CarouselImageData => {
-    if (img.clientId) return img;
+    if (img.clientId) {return img;}
     return { ...img, clientId: `${Date.now()}-${Math.random().toString(16).slice(2)}` };
   };
 
@@ -9316,7 +13864,7 @@ const FrontScreen = ({
           ? [editedCarouselImages[0]?.uri ?? carouselImages[editingCarouselImageIndex].uri]
           : [editedCarouselImages[0]?.uri ?? editingCarouselImageUri]),
         // Añadir las imágenes adicionales que se hayan seleccionado en este flujo
-        ...pendingCarouselImages.slice(1).map((uri, idx) => editedCarouselImages[idx + 1]?.uri ?? uri)
+        ...pendingCarouselImages.slice(1).map((uri, idx) => editedCarouselImages[idx + 1]?.uri ?? uri),
       ]
       : [];
 
@@ -9509,7 +14057,7 @@ const FrontScreen = ({
         try {
           const response = await updateProfilePhoto({
             token: authToken,
-            photoUri: croppedImage.uri
+            photoUri: croppedImage.uri,
           });
 
           if (response && response.profile_photo_uri) {
@@ -9716,20 +14264,20 @@ const FrontScreen = ({
       const needsUpload = (uri: string) => !!(shouldUpload && uri && !uri.startsWith('http'));
 
       const queueUploads = async (items: CarouselImageData[]) => {
-        if (!authToken) return;
+        if (!authToken) {return;}
         for (const item of items) {
-          if (!item.clientId) continue;
-          if (!item.isUploading) continue;
+          if (!item.clientId) {continue;}
+          if (!item.isUploading) {continue;}
           try {
             const url = await uploadImage(item.uri, authToken);
             setCarouselImages(prev => prev.map(img => {
-              if (img.clientId !== item.clientId) return img;
+              if (img.clientId !== item.clientId) {return img;}
               return { ...img, uri: url, isUploading: false };
             }));
           } catch (e) {
             console.error('Failed to upload carousel image', e);
             setCarouselImages(prev => prev.map(img => {
-              if (img.clientId !== item.clientId) return img;
+              if (img.clientId !== item.clientId) {return img;}
               return { ...img, isUploading: false };
             }));
           }
@@ -9844,9 +14392,9 @@ const FrontScreen = ({
     setCarouselImages(newImages);
 
     const nextActiveIndex = (() => {
-      if (newImages.length === 0) return 0;
-      if (index < activeCarouselImageIndex) return Math.max(0, activeCarouselImageIndex - 1);
-      if (activeCarouselImageIndex >= newImages.length) return newImages.length - 1;
+      if (newImages.length === 0) {return 0;}
+      if (index < activeCarouselImageIndex) {return Math.max(0, activeCarouselImageIndex - 1);}
+      if (activeCarouselImageIndex >= newImages.length) {return newImages.length - 1;}
       return activeCarouselImageIndex;
     })();
     setActiveCarouselImageIndex(nextActiveIndex);
@@ -9874,9 +14422,9 @@ const FrontScreen = ({
 
     // Keep active index in range (and stable when deleting items before it)
     const nextActiveIndex = (() => {
-      if (newIntimidades.length === 0) return 0;
-      if (index < activeIntimidadIndex) return Math.max(0, activeIntimidadIndex - 1);
-      if (activeIntimidadIndex >= newIntimidades.length) return newIntimidades.length - 1;
+      if (newIntimidades.length === 0) {return 0;}
+      if (index < activeIntimidadIndex) {return Math.max(0, activeIntimidadIndex - 1);}
+      if (activeIntimidadIndex >= newIntimidades.length) {return newIntimidades.length - 1;}
       return activeIntimidadIndex;
     })();
     setActiveIntimidadIndex(nextActiveIndex);
@@ -9911,7 +14459,7 @@ const FrontScreen = ({
       return;
     }
 
-    if (isDeletingGroup) return;
+    if (isDeletingGroup) {return;}
     setIsDeletingGroup(true);
     try {
       const resp = await fetch(`${API_URL}/api/groups/${pendingDeleteGroup.id}`, {
@@ -10060,7 +14608,7 @@ const FrontScreen = ({
         setTempQuizImage({
           uri: image.path,
           cropData: { x: 0, y: 0, width: 0, height: 0, scale: 1 },
-          aspectRatio: '3:4'
+          aspectRatio: '3:4',
         });
         setShowQuizImageEditor(true);
         // Si seleccionamos imagen, limpiamos el modo texto si estaba activo
@@ -10085,7 +14633,7 @@ const FrontScreen = ({
     setTempQuizImage({
       uri: croppedImage.uri,
       cropData: { x: 0, y: 0, width: 0, height: 0, scale: 1 },
-      aspectRatio: '3:4'
+      aspectRatio: '3:4',
     });
   };
 
@@ -10144,12 +14692,12 @@ const FrontScreen = ({
 
       if (image && image.path) {
         setEditingIntimidadesImageUri(image.path);
-        // Inicializamos el temp con la imagen sin recortar por si acaso, 
+        // Inicializamos el temp con la imagen sin recortar por si acaso,
         // aunque el editor debería llamar a onTempSave al iniciar o recortar
         setTempIntimidadesImage({
           uri: image.path,
           cropData: { x: 0, y: 0, width: 0, height: 0, scale: 1 },
-          aspectRatio: '3:4'
+          aspectRatio: '3:4',
         });
         setShowIntimidadesImageEditor(true);
       }
@@ -10172,7 +14720,7 @@ const FrontScreen = ({
     setTempIntimidadesImage({
       uri: croppedImage.uri,
       cropData: { x: 0, y: 0, width: 0, height: 0, scale: 1 },
-      aspectRatio: '3:4'
+      aspectRatio: '3:4',
     });
   };
 
@@ -10233,7 +14781,7 @@ const FrontScreen = ({
         setTempSurveyImage({
           uri: image.path,
           cropData: { x: 0, y: 0, width: 0, height: 0, scale: 1 },
-          aspectRatio: '3:4'
+          aspectRatio: '3:4',
         });
         setShowSurveyImageEditor(true);
         setShowSurveyTextInput(false);
@@ -10257,7 +14805,7 @@ const FrontScreen = ({
     setTempSurveyImage({
       uri: croppedImage.uri,
       cropData: { x: 0, y: 0, width: 0, height: 0, scale: 1 },
-      aspectRatio: '3:4'
+      aspectRatio: '3:4',
     });
   };
 
@@ -10296,96 +14844,482 @@ const FrontScreen = ({
     setShowExtraOptions2(false);
   };
 
-  if (showPhotoEditor && selectedImageUri) {
-    return (
-      <ProfilePhotoEdit
-        imageUri={selectedImageUri}
-        onBack={handleCancelPhotoEdit}
-        onSave={handleSaveProfilePhoto}
-      />
-    );
-  }
+  const homeActivePublicationActionRefs = useRef({
+    applyPublicationReaction,
+    handleEnterChannel,
+    handlePublicationDoubleTap,
+    markHomeSwipeTutorialSeen,
+    openExternalLink,
+    openPublicationBlockModal,
+    openPublicationReportModal,
+    showRewardedToRevealIntimidades,
+    togglePublicationOptions,
+  });
 
-  if (showQuizImageEditor && editingQuizImageUri) {
-    return (
-      <CarouselImageEditor
-        imageUri={editingQuizImageUri}
-        onBack={handleCancelQuizEdit}
-        onSave={handleApplyQuizImage}
-        currentIndex={0}
-        totalImages={1}
-        thumbnails={[]}
-        onSelectImage={() => { }}
-        onTempSave={handleTempQuizEdit}
-        activeImageIndex={0}
-        initialAspectRatio={'3:4'}
-        allowAddMore={false}
-      />
-    );
-  }
+  useEffect(() => {
+    homeActivePublicationActionRefs.current = {
+      applyPublicationReaction,
+      handleEnterChannel,
+      handlePublicationDoubleTap,
+      markHomeSwipeTutorialSeen,
+      openExternalLink,
+      openPublicationBlockModal,
+      openPublicationReportModal,
+      showRewardedToRevealIntimidades,
+      togglePublicationOptions,
+    };
+  }, [
+    applyPublicationReaction,
+    handleEnterChannel,
+    handlePublicationDoubleTap,
+    markHomeSwipeTutorialSeen,
+    openExternalLink,
+    openPublicationBlockModal,
+    openPublicationReportModal,
+    showRewardedToRevealIntimidades,
+    togglePublicationOptions,
+  ]);
 
-  if (showIntimidadesImageEditor && editingIntimidadesImageUri) {
-    return (
-      <CarouselImageEditor
-        imageUri={editingIntimidadesImageUri}
-        onBack={handleCancelIntimidadesEdit}
-        onSave={handleApplyIntimidadesImage}
-        currentIndex={0}
-        totalImages={1}
-        thumbnails={[]}
-        onSelectImage={() => { }}
-        onTempSave={handleTempIntimidadesEdit}
-        activeImageIndex={0}
-        initialAspectRatio={'3:4'}
-        allowAddMore={false}
-      />
-    );
-  }
+  const getPublicationReactionAnimationState = useCallback((pubId: string | number) => {
+    const key = String(pubId ?? '').trim();
+    if (!key) {
+      return {
+        scale: new Animated.Value(0),
+        opacity: new Animated.Value(0),
+      };
+    }
 
-  if (showSurveyImageEditor && editingSurveyImageUri) {
-    return (
-      <CarouselImageEditor
-        imageUri={editingSurveyImageUri}
-        onBack={handleCancelSurveyEdit}
-        onSave={handleApplySurveyImage}
-        currentIndex={0}
-        totalImages={1}
-        thumbnails={[]}
-        onSelectImage={() => { }}
-        onTempSave={handleTempSurveyEdit}
-        activeImageIndex={0}
-        initialAspectRatio={'3:4'}
-        allowAddMore={false}
-      />
-    );
-  }
+    if (!publicationAnimations.current[key]) {
+      publicationAnimations.current[key] = {
+        scale: new Animated.Value(0),
+        opacity: new Animated.Value(0),
+      };
+    }
 
-  if (showCarouselImageEditor && editingCarouselImageUri) {
-    const existingAspectRatio = isEditingExistingCarouselImage && editingCarouselImageIndex !== null
-      ? carouselImages[editingCarouselImageIndex]?.aspectRatio
-      : undefined;
-    const currentEditorAspectRatio = editedCarouselImages[currentEditingImageIndex]?.aspectRatio
-      ?? existingAspectRatio
-      ?? '3:4';
+    return publicationAnimations.current[key];
+  }, [publicationAnimations]);
 
-    return (
-      <CarouselImageEditor
-        imageUri={editingCarouselImageUri}
-        onBack={handleCancelCarouselEdit}
-        onSave={handleConfirmCarouselEdits}
-        currentIndex={currentImagePosition}
-        totalImages={totalImagesToEdit}
-        thumbnails={editorThumbnails}
-        onSelectImage={handleSelectPendingImageForEditing}
-        onTempSave={handleTempCarouselEdit}
-        activeImageIndex={currentEditingImageIndex}
-        initialAspectRatio={currentEditorAspectRatio}
-        onAddImage={handleAddMoreImages}
-        allowAddMore={currentTotalImages < 3}
-        onRemoveImage={handleRemoveImageFromEditor}
-      />
-    );
-  }
+  const handleHomePublicationScrollPositionChange = useCallback((offsetY: number) => {
+    const nextY = Math.max(0, Number(offsetY) || 0);
+    homePublicationScrollYRef.current = nextY;
+
+    const nextAtTop = nextY <= 6;
+    setIsHomePublicationAtTop(prev => (prev === nextAtTop ? prev : nextAtTop));
+  }, []);
+
+  const handleOpenHomePublicationAvatar = useCallback((profilePhotoUri?: string | null) => {
+    const safeUri = String(profilePhotoUri || '').trim();
+    if (!safeUri) {return;}
+    setFullScreenAvatarUri(getServerResourceUrl(safeUri));
+  }, []);
+
+  const handleSetHomePublicationCarouselGestureActive = useCallback((active: boolean) => {
+    isHomeCarouselGestureActiveRef.current = active;
+    setIsHomeMainScrollEnabled(prev => (prev === true ? prev : true));
+  }, []);
+
+  const handleDismissHomeSwipeTutorial = useCallback(() => {
+    homeActivePublicationActionRefs.current.markHomeSwipeTutorialSeen();
+  }, []);
+
+  const handleEnterHomePublicationChannel = useCallback((publication: Publication) => {
+    void homeActivePublicationActionRefs.current.handleEnterChannel(publication);
+  }, []);
+
+  const handleOpenHomePublicationLink = useCallback((url: string) => {
+    void homeActivePublicationActionRefs.current.openExternalLink(url);
+  }, []);
+
+  const handleToggleHomePublicationOptions = useCallback((pubId: string | number) => {
+    homeActivePublicationActionRefs.current.togglePublicationOptions(pubId);
+  }, []);
+
+  const handleOpenHomePublicationReport = useCallback((publication: Publication) => {
+    homeActivePublicationActionRefs.current.openPublicationReportModal(publication);
+  }, []);
+
+  const handleOpenHomePublicationBlock = useCallback((publication: Publication) => {
+    homeActivePublicationActionRefs.current.openPublicationBlockModal(publication);
+  }, []);
+
+  const handleApplyHomePublicationReaction = useCallback((
+    pubId: string,
+    reactions: Publication['reactions'],
+    emoji: string,
+  ) => {
+    homeActivePublicationActionRefs.current.applyPublicationReaction(pubId, reactions, emoji);
+  }, []);
+
+  const handleHomePublicationDoubleTap = useCallback((pubId: string, reactions: Publication['reactions']) => {
+    homeActivePublicationActionRefs.current.handlePublicationDoubleTap(pubId, reactions);
+  }, []);
+
+  const handleOpenHomePublicationRing = useCallback((pubId: string | number, ring: ProfileRingPoint) => {
+    const key = String(pubId ?? '').trim();
+    if (!key) {return;}
+    homeRingTapSuppressUntilRef.current[key] = Date.now() + 350;
+    openHomeProfileRingViewerPanelFromRing(ring);
+  }, [openHomeProfileRingViewerPanelFromRing]);
+
+  const handleToggleHomePublicationExpandedText = useCallback((pubId: string | number) => {
+    const key = String(pubId ?? '').trim();
+    if (!key) {return;}
+
+    setExpandedProfileTexts(prev => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  }, []);
+
+  const handleToggleHomePublicationOverlay = useCallback((pubId: string | number) => {
+    const key = String(pubId ?? '').trim();
+    if (!key) {return;}
+
+    setPresentationOverlayVisible(prev => {
+      const isVisible = prev[key] !== false;
+      return {
+        ...prev,
+        [key]: !isVisible,
+      };
+    });
+  }, []);
+
+  const handleExpireHomePublication = useCallback((pubId: string | number) => {
+    const key = String(pubId ?? '').trim();
+    if (!key) {return;}
+
+    setPublications(prev => prev.filter(publication => String(publication.id) !== key));
+  }, []);
+
+  const handleHomePublicationIntimidadesButtonPress = useCallback((pubId: string | number, intimidadesLength: number) => {
+    const key = String(pubId ?? '').trim();
+    if (!key || intimidadesLength <= 0) {return;}
+
+    if (!intimidadesVisible[key]) {
+      void homeActivePublicationActionRefs.current.showRewardedToRevealIntimidades(key);
+      return;
+    }
+
+    if (intimidadesLength > 1) {
+      setActiveIntimidadIndices(prev => ({
+        ...prev,
+        [key]: ((prev[key] || 0) + 1) % intimidadesLength,
+      }));
+    }
+  }, [intimidadesVisible]);
+
+  const handleHomePublicationQuizVote = useCallback((pubId: string | number, intimidadIndex: number, optionKey: QuizOptionKey) => {
+    const publicationId = String(pubId ?? '').trim();
+    const targetIndex = Number(intimidadIndex);
+    if (!publicationId || !Number.isFinite(targetIndex) || targetIndex < 0) {return;}
+
+    let shouldPersist = false;
+
+    setPublications(prev => prev.map(publication => {
+      if (String(publication.id) !== publicationId) {return publication;}
+
+      const nextIntimidades = [...publication.intimidades];
+      const targetIntimidad = nextIntimidades[targetIndex];
+      if (!targetIntimidad?.quizData || targetIntimidad.quizData.userSelection) {return publication;}
+
+      const existingQuizData = targetIntimidad.quizData;
+      const currentStats = existingQuizData.stats || { a: 0, b: 0, c: 0, d: 0 };
+      const nextStats = {
+        ...currentStats,
+        [optionKey]: (currentStats[optionKey] || 0) + 1,
+      };
+
+      nextIntimidades[targetIndex] = {
+        ...targetIntimidad,
+        quizData: {
+          ...existingQuizData,
+          userSelection: optionKey,
+          stats: nextStats,
+        },
+      };
+
+      shouldPersist = true;
+      return {
+        ...publication,
+        intimidades: nextIntimidades,
+      };
+    }));
+
+    if (!shouldPersist || !authToken) {return;}
+
+    fetch(`${API_URL}/api/posts/${publicationId}/vote`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        intimidadIndex: targetIndex,
+        optionKey,
+      }),
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (!data?.success) {return;}
+
+        setPublications(prev => prev.map(publication => {
+          if (String(publication.id) !== publicationId) {return publication;}
+
+          const nextIntimidades = [...publication.intimidades];
+          const targetIntimidad = nextIntimidades[targetIndex];
+          if (!targetIntimidad?.quizData) {return publication;}
+
+          const nextStats = { a: 0, b: 0, c: 0, d: 0 };
+          Object.keys(data.counts || {}).forEach((key) => {
+            if (key === 'a' || key === 'b' || key === 'c' || key === 'd') {
+              nextStats[key] = data.counts[key];
+            }
+          });
+
+          nextIntimidades[targetIndex] = {
+            ...targetIntimidad,
+            quizData: {
+              ...targetIntimidad.quizData,
+              userSelection: optionKey,
+              stats: nextStats,
+            },
+          };
+
+          return {
+            ...publication,
+            intimidades: nextIntimidades,
+          };
+        }));
+      })
+      .catch(err => console.error('Error voting:', err));
+  }, [API_URL, authToken]);
+
+  const handleHomePublicationSurveyVote = useCallback((pubId: string | number, intimidadIndex: number, optionIndex: number) => {
+    const publicationId = String(pubId ?? '').trim();
+    const targetIndex = Number(intimidadIndex);
+    const selectedOptionIndex = Number(optionIndex);
+    if (!publicationId || !Number.isFinite(targetIndex) || targetIndex < 0 || !Number.isFinite(selectedOptionIndex) || selectedOptionIndex < 0) {return;}
+
+    let shouldPersist = false;
+
+    setPublications(prev => prev.map(publication => {
+      if (String(publication.id) !== publicationId) {return publication;}
+
+      const nextIntimidades = [...publication.intimidades];
+      const targetIntimidad = nextIntimidades[targetIndex];
+      if (!targetIntimidad?.surveyData || targetIntimidad.surveyData.userSelection !== null && targetIntimidad.surveyData.userSelection !== undefined) {
+        return publication;
+      }
+
+      const existingSurveyData = targetIntimidad.surveyData;
+      const currentStats = existingSurveyData.stats || new Array(existingSurveyData.options.length).fill(0);
+      const nextStats = [...currentStats];
+      nextStats[selectedOptionIndex] = (nextStats[selectedOptionIndex] || 0) + 1;
+
+      nextIntimidades[targetIndex] = {
+        ...targetIntimidad,
+        surveyData: {
+          ...existingSurveyData,
+          userSelection: selectedOptionIndex,
+          stats: nextStats,
+        },
+      };
+
+      shouldPersist = true;
+      return {
+        ...publication,
+        intimidades: nextIntimidades,
+      };
+    }));
+
+    if (!shouldPersist || !authToken) {return;}
+
+    fetch(`${API_URL}/api/posts/${publicationId}/vote`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        intimidadIndex: targetIndex,
+        optionKey: selectedOptionIndex.toString(),
+      }),
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (!data?.success) {return;}
+
+        setPublications(prev => prev.map(publication => {
+          if (String(publication.id) !== publicationId) {return publication;}
+
+          const nextIntimidades = [...publication.intimidades];
+          const targetIntimidad = nextIntimidades[targetIndex];
+          if (!targetIntimidad?.surveyData) {return publication;}
+
+          const optionsCount = targetIntimidad.surveyData.options.length;
+          const nextStats = new Array(optionsCount).fill(0);
+          Object.keys(data.counts || {}).forEach((key) => {
+            const idx = parseInt(key, 10);
+            if (!Number.isNaN(idx) && idx < optionsCount) {
+              nextStats[idx] = data.counts[key];
+            }
+          });
+
+          nextIntimidades[targetIndex] = {
+            ...targetIntimidad,
+            surveyData: {
+              ...targetIntimidad.surveyData,
+              stats: nextStats,
+            },
+          };
+
+          return {
+            ...publication,
+            intimidades: nextIntimidades,
+          };
+        }));
+      })
+      .catch(err => console.error('Error voting:', err));
+  }, [API_URL, authToken]);
+
+  const activeHomePublicationId = activeHomePublication ? String(activeHomePublication.id ?? '').trim() : '';
+
+  const activeHomePublicationSocials = useMemo(() => {
+    if (!activeHomePublication || !Array.isArray(activeHomePublication.user.socialNetworks)) {
+      return EMPTY_HOME_RENDERABLE_PUBLICATION_SOCIALS;
+    }
+
+    const nextSocials = activeHomePublication.user.socialNetworks.reduce<HomeRenderablePublicationSocial[]>((acc, socialNetwork, index) => {
+      const key = normalizeHomePublicationSocialIconKey(socialNetwork?.id);
+      const link = String(socialNetwork?.link || '').trim();
+      const iconSource = SOCIAL_ICONS[key as keyof typeof SOCIAL_ICONS];
+      if (!key || !link || !iconSource) {return acc;}
+
+      acc.push({
+        key: `${key}-${index}`,
+        link,
+        iconSource,
+      });
+
+      return acc;
+    }, []);
+
+    return nextSocials.length > 0 ? nextSocials : EMPTY_HOME_RENDERABLE_PUBLICATION_SOCIALS;
+  }, [activeHomePublication]);
+
+  const isActiveHomePublicationJoined = useMemo(() => {
+    if (!activeHomePublicationId) {return false;}
+    return myChannels.some(channel => String(channel?.post_id ?? channel?.postId ?? channel?.id) === activeHomePublicationId);
+  }, [activeHomePublicationId, myChannels]);
+
+  const activeHomePublicationAnimations = useMemo(() => ({
+    homeSwipeTutorialAnim,
+    homePullConfirmAnim,
+    publicationTransitionOpacity,
+    publicationTransitionTranslateY,
+    publicationTransitionVeilOpacity,
+    homeRingIconPulseAnim,
+  }), [
+    homePullConfirmAnim,
+    homeRingIconPulseAnim,
+    homeSwipeTutorialAnim,
+    publicationTransitionOpacity,
+    publicationTransitionTranslateY,
+    publicationTransitionVeilOpacity,
+  ]);
+
+  const activeHomePublicationHandlers = useMemo(() => ({
+    onRequestRefresh: handleHomePublicationRefreshTrigger,
+    onScrollPositionChange: handleHomePublicationScrollPositionChange,
+    onDismissSwipeTutorial: handleDismissHomeSwipeTutorial,
+    onOpenAvatar: handleOpenHomePublicationAvatar,
+    onSetCarouselGestureActive: handleSetHomePublicationCarouselGestureActive,
+    onEnterChannel: handleEnterHomePublicationChannel,
+    onOpenExternalLink: handleOpenHomePublicationLink,
+    onTogglePublicationOptions: handleToggleHomePublicationOptions,
+    onOpenPublicationReport: handleOpenHomePublicationReport,
+    onOpenPublicationBlock: handleOpenHomePublicationBlock,
+    onUpdatePresentationActiveIndexFromScroll: updateHomePresentationActiveIndexFromScroll,
+    onSetPresentationImageLayout: setHomePresentationImageLayout,
+    onMarkPresentationImageLoaded: markHomePresentationImageLoaded,
+    onPublicationDoubleTap: handleHomePublicationDoubleTap,
+    onOpenHomeProfileRing: handleOpenHomePublicationRing,
+    onToggleExpandedText: handleToggleHomePublicationExpandedText,
+    onTogglePresentationOverlay: handleToggleHomePublicationOverlay,
+    onToggleHomeProfileRingsVisible: toggleHomeProfileRingsVisible,
+    onExpirePublication: handleExpireHomePublication,
+    onApplyPublicationReaction: handleApplyHomePublicationReaction,
+    onPressIntimidadesButton: handleHomePublicationIntimidadesButtonPress,
+    onVoteQuizOption: handleHomePublicationQuizVote,
+    onVoteSurveyOption: handleHomePublicationSurveyVote,
+  }), [
+    handleApplyHomePublicationReaction,
+    handleDismissHomeSwipeTutorial,
+    handleEnterHomePublicationChannel,
+    handleExpireHomePublication,
+    handleHomePublicationDoubleTap,
+    handleHomePublicationIntimidadesButtonPress,
+    handleHomePublicationQuizVote,
+    handleHomePublicationRefreshTrigger,
+    handleHomePublicationScrollPositionChange,
+    handleHomePublicationSurveyVote,
+    handleOpenHomePublicationAvatar,
+    handleOpenHomePublicationBlock,
+    handleOpenHomePublicationLink,
+    handleOpenHomePublicationReport,
+    handleOpenHomePublicationRing,
+    handleSetHomePublicationCarouselGestureActive,
+    handleToggleHomePublicationExpandedText,
+    handleToggleHomePublicationOptions,
+    handleToggleHomePublicationOverlay,
+    markHomePresentationImageLoaded,
+    setHomePresentationImageLayout,
+    toggleHomeProfileRingsVisible,
+    updateHomePresentationActiveIndexFromScroll,
+  ]);
+
+  const activeHomePublicationCopy = useMemo(() => ({
+    blockText: t('common.block' as TranslationKey),
+    channelLabelText: t('front.channelLabel' as TranslationKey),
+    homeSwipeTutorialHintText: t('front.homeSwipeTutorialHint' as TranslationKey),
+    loadingImagesText: t('front.loadingImages' as TranslationKey),
+    reportText: t('common.report' as TranslationKey),
+  }), [t]);
+
+  const activeHomePublicationAnimationState = activeHomePublication
+    ? getPublicationReactionAnimationState(activeHomePublication.id)
+    : null;
+
+  const activeHomePublicationCard = activeHomePublication && activeHomePublicationAnimationState ? (
+    <HomeActivePublicationCard
+      publication={activeHomePublication}
+      activeIntimidadIndex={activeHomePublicationId ? activeIntimidadIndices[activeHomePublicationId] || 0 : 0}
+      animations={activeHomePublicationAnimations}
+      bottomNavHeight={bottomNavHeight}
+      canDismissSwipeTutorial={hasSeenHomeSwipeTutorial === false}
+      categoryLabel={activeHomePublication.presentation.category && activeHomePublication.presentation.category !== 'Sin categoría'
+        ? getCategoryLabel(activeHomePublication.presentation.category)
+        : ''}
+      copy={activeHomePublicationCopy}
+      handlers={activeHomePublicationHandlers}
+      homeCarouselLoadedMap={activeHomePublicationId ? homePresentationImagesLoaded[activeHomePublicationId] || EMPTY_HOME_CAROUSEL_LOADED_MAP : EMPTY_HOME_CAROUSEL_LOADED_MAP}
+      isHomeCarouselLoadingVisible={activeHomePublicationId ? homeCarouselLoadingVisibleByPubId[activeHomePublicationId] !== false : false}
+      isIntimidadesVisible={activeHomePublicationId ? intimidadesVisible[activeHomePublicationId] === true : false}
+      isJoined={isActiveHomePublicationJoined}
+      isOptionsMenuOpen={activePublicationOptionsId != null && String(activePublicationOptionsId) === activeHomePublicationId}
+      isOverlayVisible={activeHomePublicationId ? presentationOverlayVisible[activeHomePublicationId] !== false : true}
+      isTextExpanded={activeHomePublicationId ? expandedProfileTexts[activeHomePublicationId] === true : false}
+      presentationDotsRefsMap={presentationDotsRefsMap}
+      presentationImageLayouts={activeHomePublicationId ? homePresentationImageLayouts[activeHomePublicationId] || EMPTY_HOME_PRESENTATION_IMAGE_LAYOUTS : EMPTY_HOME_PRESENTATION_IMAGE_LAYOUTS}
+      pubAnimations={activeHomePublicationAnimationState}
+      pubDoubleTap={activeHomePublicationId ? publicationDoubleTapState[activeHomePublicationId] || EMPTY_HOME_PUBLICATION_DOUBLE_TAP_STATE : EMPTY_HOME_PUBLICATION_DOUBLE_TAP_STATE}
+      renderablePublicationSocials={activeHomePublicationSocials}
+      ringsVisible={activeHomePublicationId ? homeProfileRingsVisibleByPostId[activeHomePublicationId] === true : false}
+      shouldShowHomePublicationSwipeHint={shouldShowHomePublicationSwipeHint}
+      shouldShowHomeSwipeTutorial={shouldShowHomeSwipeTutorial}
+      socialNetworksCountLabel={formatSocialNetworksCount(activeHomePublication.user.socialNetworks.length)}
+    />
+  ) : null;
 
   const trimmedProfileTitle = profilePresentation?.title?.trim() ?? '';
   const trimmedProfileText = profilePresentation?.text?.trim() ?? '';
@@ -10400,6 +15334,10 @@ const FrontScreen = ({
   const profileTextPreview = isProfileTextExpanded || !hasProfileTextOverflow
     ? trimmedProfileText
     : trimmedProfileText.slice(0, PROFILE_TEXT_PREVIEW_LIMIT);
+  const localizedProfileNationality = useMemo(
+    () => getLocalizedNationalityName(nationality || '', language),
+    [language, nationality],
+  );
 
   return (
     <View style={styles.container}>
@@ -10439,7 +15377,7 @@ const FrontScreen = ({
         </Modal>
       )}
       {/* Header superior izquierdo - Perfil */}
-      {activeBottomTab !== 'notifications' && activeBottomTab !== 'home' && activeBottomTab !== 'chat' && (
+      {!isHomeFeedTabActive && activeBottomTab !== 'chat' && activeBottomTab !== 'hype' && (
         <View
           style={{
             position: 'absolute',
@@ -10494,7 +15432,25 @@ const FrontScreen = ({
 
             {activeBottomTab === 'profile' && profileView === 'profile' && unreadNotificationsCount > 0 && (
               <View pointerEvents="none" style={styles.unreadCountBadge}>
-                <Text style={styles.unreadCountBadgeText}>{unreadNotificationsCount}</Text>
+                <Svg width={20} height={20} style={styles.unreadCountBadgeBorder} viewBox="0 0 20 20">
+                  <Defs>
+                    <LinearGradient id="profile_unread_badge_grad" x1="0" y1="0" x2="1" y2="1">
+                      <Stop offset="0" stopColor="#ff7a00" stopOpacity="1" />
+                      <Stop offset="1" stopColor="#ffe040" stopOpacity="1" />
+                    </LinearGradient>
+                  </Defs>
+                  <Circle
+                    cx="10"
+                    cy="10"
+                    r="9"
+                    fill="none"
+                    stroke="url(#profile_unread_badge_grad)"
+                    strokeWidth="1.5"
+                  />
+                </Svg>
+                <View style={styles.unreadCountBadgeBackground}>
+                  <Text style={styles.unreadCountBadgeText}>{unreadNotificationsCount}</Text>
+                </View>
               </View>
             )}
           </View>
@@ -10566,7 +15522,7 @@ const FrontScreen = ({
                 activeOpacity={0.7}
                 style={[
                   styles.socialIconContainer,
-                  selectedSocialNetwork === key && styles.socialIconSelected
+                  selectedSocialNetwork === key && styles.socialIconSelected,
                 ]}
               >
                 <Image source={source} style={styles.socialIcon} />
@@ -10590,7 +15546,7 @@ const FrontScreen = ({
             style={[
               styles.socialPanelInput,
               !selectedSocialNetwork && styles.socialPanelInputDisabled,
-              linkError ? styles.socialPanelInputError : null
+              linkError ? styles.socialPanelInputError : null,
             ]}
             placeholder={selectedSocialNetwork ? t('front.link' as TranslationKey) : t('front.selectSocialNetwork' as TranslationKey)}
             placeholderTextColor="rgba(255, 255, 255, 0.3)"
@@ -10611,7 +15567,7 @@ const FrontScreen = ({
         <TouchableOpacity
           style={[
             styles.linkButton,
-            (!selectedSocialNetwork || !socialLink || !!linkError) && styles.linkButtonDisabled
+            (!selectedSocialNetwork || !socialLink || !!linkError) && styles.linkButtonDisabled,
           ]}
           onPress={handleLinkSocialNetwork}
           disabled={!selectedSocialNetwork || !socialLink || !!linkError}
@@ -10619,7 +15575,7 @@ const FrontScreen = ({
         >
           <Text style={[
             styles.linkButtonText,
-            (!selectedSocialNetwork || !socialLink || !!linkError) && styles.linkButtonTextDisabled
+            (!selectedSocialNetwork || !socialLink || !!linkError) && styles.linkButtonTextDisabled,
           ]}>
             {t('common.apply' as TranslationKey)}
           </Text>
@@ -10656,17 +15612,12 @@ const FrontScreen = ({
           showsVerticalScrollIndicator={false}
         >
           {REACTION_EMOJIS.map((emoji, index) => (
-            <TouchableOpacity
+            <ReactionEmojiButton
               key={index}
-              style={[
-                styles.reactionItem,
-                selectedReactions.includes(emoji) && styles.reactionItemSelected
-              ]}
-              onPress={() => handleReactionSelect(emoji)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.reactionEmoji}>{emoji}</Text>
-            </TouchableOpacity>
+              emoji={emoji}
+              selected={selectedReactions.includes(emoji)}
+              onPress={handleReactionSelect}
+            />
           ))}
         </ScrollView>
       </Animated.View>
@@ -10720,7 +15671,9 @@ const FrontScreen = ({
         <View style={styles.profileRingLocationModalOverlay}>
           <View style={styles.profileRingLocationModalCard}>
             <View style={styles.profileRingLocationModalHeader}>
-              <Text style={styles.profileRingLocationModalTitle}>Selecciona una ubicación</Text>
+              <Text style={styles.profileRingLocationModalTitle}>
+                {activeLocationPickerTarget === 'channelEvent' ? 'Selecciona la ubicación del evento' : 'Selecciona una ubicación'}
+              </Text>
               <TouchableOpacity onPress={closeProfileRingLocationPicker} hitSlop={10}>
                 <MaterialIcons name="close" size={22} color="#FFFFFF" />
               </TouchableOpacity>
@@ -10873,7 +15826,7 @@ const FrontScreen = ({
 
       {/* Header superior derecho - Descubre (visible cuando Home está activo) */}
       {
-        activeBottomTab === 'home' && false && (
+        isHomeFeedTabActive && false && (
           <View
             style={{
               position: 'absolute',
@@ -10926,7 +15879,7 @@ const FrontScreen = ({
 
       {/* Header superior derecho - Canal (visible cuando Chat está activo) */}
       {
-        activeBottomTab === 'chat' && chatView !== 'groupChat' && !(chatView === 'channel' && !!selectedChannel) && (
+        activeBottomTab === 'chat' && !expandedChannelReading && chatView !== 'groupChat' && !(chatView === 'channel' && !!selectedChannel) && (
           <View
             key={`chat-top-tabs-${chatTopTabsRenderKey}-${chatView}-${groupsTab}-${channelTab}`}
             style={{
@@ -11098,10 +16051,135 @@ const FrontScreen = ({
         )
       }
 
+      {
+        activeBottomTab === 'hype' && (
+          <View
+            style={[
+              styles.hypeHeaderOverlay,
+              { top: topSystemOffset },
+            ]}
+          >
+            <View
+              onLayout={({ nativeEvent }) => {
+                const nextHeight = Math.ceil(nativeEvent.layout.height);
+                setHypeHeaderHeight(prev => (prev === nextHeight ? prev : nextHeight));
+              }}
+              style={styles.hypeHeaderContent}
+            >
+              <View style={styles.hypeTopTabsRow}>
+                <TouchableOpacity
+                  onPress={() => setHypeTab('eventos')}
+                  style={styles.hypeTopSideTab}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[
+                    styles.hypeTopSideTabText,
+                    hypeTab === 'eventos' ? styles.hypeTopSideTabTextActive : styles.hypeTopSideTabTextInactive,
+                  ]}>
+                      {t('chat.eventsTab' as TranslationKey)}
+                  </Text>
+                  {hypeTab === 'eventos' && (
+                    <Svg width="40" height="3" style={{ marginTop: 0 }}>
+                      <Defs>
+                        <LinearGradient id="grad_line_hype_eventos_top" x1="0" y1="0" x2="1" y2="0">
+                          <Stop offset="0" stopColor="#FFB74D" stopOpacity="1" />
+                          <Stop offset="1" stopColor="#ffe45c" stopOpacity="1" />
+                        </LinearGradient>
+                      </Defs>
+                      <Rect x="0" y="0" width="40" height="3" fill="url(#grad_line_hype_eventos_top)" rx="1.5" />
+                    </Svg>
+                  )}
+                </TouchableOpacity>
+
+                <View style={styles.hypeTopCenterTab}>
+                  <MaterialIcons name="whatshot" size={28} color="#FFFFFF" />
+                </View>
+
+                <TouchableOpacity
+                  onPress={() => setHypeTab('lecturas')}
+                  style={styles.hypeTopSideTab}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[
+                    styles.hypeTopSideTabText,
+                    hypeTab === 'lecturas' ? styles.hypeTopSideTabTextActive : styles.hypeTopSideTabTextInactive,
+                  ]}>
+                      {t('chat.readingsTab' as TranslationKey)}
+                  </Text>
+                  {hypeTab === 'lecturas' && (
+                    <Svg width="40" height="3" style={{ marginTop: 0 }}>
+                      <Defs>
+                        <LinearGradient id="grad_line_hype_lecturas_top" x1="0" y1="0" x2="1" y2="0">
+                          <Stop offset="0" stopColor="#FFB74D" stopOpacity="1" />
+                          <Stop offset="1" stopColor="#ffe45c" stopOpacity="1" />
+                        </LinearGradient>
+                      </Defs>
+                      <Rect x="0" y="0" width="40" height="3" fill="url(#grad_line_hype_lecturas_top)" rx="1.5" />
+                    </Svg>
+                  )}
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.hypeCategoryRail}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.hypeCategoryRowContent}
+                >
+                  {HYPE_CATEGORY_OPTIONS.map(option => {
+                    const isSelected = selectedHypeCategory === option;
+                    const chipGradientId = `hype_category_chip_grad_${option.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}`;
+                    const label = option === HYPE_MOST_VIRAL_CATEGORY
+                      ? localize({
+                        es: 'Más viral',
+                        en: 'Most viral',
+                        fr: 'Le plus viral',
+                        pt: 'Mais viral',
+                        de: 'Am viralsten',
+                        it: 'Più virale',
+                      })
+                      : t(option);
+
+                    return (
+                      <TouchableOpacity
+                        key={option}
+                        activeOpacity={0.85}
+                        onPress={() => setSelectedHypeCategory(option)}
+                        style={[
+                          styles.hypeCategoryChip,
+                          isSelected && styles.hypeCategoryChipActive,
+                        ]}
+                      >
+                        {isSelected ? (
+                          <MeasuredSvgGradientBorder
+                            gradientId={chipGradientId}
+                            colors={HYPE_CATEGORY_BORDER_GRADIENT_COLORS}
+                            borderRadius={21}
+                            strokeWidth={1.4}
+                          />
+                        ) : null}
+                        <Text
+                          style={[
+                            styles.hypeCategoryChipText,
+                            isSelected && styles.hypeCategoryChipTextActive,
+                          ]}
+                        >
+                          {label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            </View>
+          </View>
+        )
+      }
+
       {/* Contenido principal */}
-      <Reanimated.View style={[styles.content, bottomContentTransitionStyle]}>
+      <View style={styles.content}>
         {/* Pantalla Home */}
-        {activeBottomTab === 'home' && (
+        {isHomeFeedTabActive && (
           <View style={[styles.homeScreenContainer, { paddingTop: Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT + 8 : 8, paddingBottom: 0 }]}>
             {giveAways.length === 0 && publications.length === 0 ? (
               <View style={styles.homeEmptyStateWrap}>
@@ -11198,1126 +16276,551 @@ const FrontScreen = ({
               </ScrollView>
             ) : (
               <View style={styles.homePager}>
-                  {(() => {
-                    const pub = activeHomePublication;
-                    if (!pub) return null;
-                    const pageIndex = 0;
-
-                    const activeIndex = activeIntimidadIndices[pub.id] || 0;
-                    const activePresentationIndex = activePresentationIndices[pub.id] || 0;
-                    const isOverlayVisible = presentationOverlayVisible[pub.id] !== false;
-                    const isTextExpanded = expandedProfileTexts[pub.id] || false;
-
-                    const ringsVisible = homeProfileRingsVisibleByPostId[String(pub.id)] === true;
-                    const presentationRings: ProfileRingPoint[] = Array.isArray(pub.presentation?.profileRings)
-                      ? (pub.presentation.profileRings as ProfileRingPoint[])
-                      : [];
-                    const hasPresentationRings = presentationRings.length > 0;
-
-                    const trimmedTitle = pub.presentation.title?.trim() ?? '';
-                    const trimmedText = pub.presentation.text?.trim() ?? '';
-                    const hasTextOverflow = trimmedText.length > PROFILE_TEXT_PREVIEW_LIMIT;
-                    const textPreview = isTextExpanded || !hasTextOverflow
-                      ? trimmedText
-                      : trimmedText.slice(0, PROFILE_TEXT_PREVIEW_LIMIT);
-
-                    const isJoined = myChannels.some(ch => String(ch?.post_id ?? ch?.postId ?? ch?.id) === String(pub.id));
-                    const renderablePublicationSocials = Array.isArray(pub.user.socialNetworks)
-                      ? pub.user.socialNetworks.reduce<Array<{ key: string; link: string; iconSource: any }>>((acc, sn, socialIndex) => {
-                        const key = normalizeSocialIconKey(sn?.id);
-                        const link = String(sn?.link || '').trim();
-                        const iconSource = SOCIAL_ICONS[key as keyof typeof SOCIAL_ICONS];
-                        if (!key || !link || !iconSource) return acc;
-                        acc.push({
-                          key: `${key}-${socialIndex}`,
-                          link,
-                          iconSource,
-                        });
-                        return acc;
-                      }, [])
-                      : [];
-                    const HOME_SOCIAL_ICON_SIZE = 18;
-                    const HOME_SOCIAL_ICON_GAP = 10;
-                    const HOME_SOCIAL_ICONS_VIEWPORT_COUNT = 3;
-                    const HOME_SOCIAL_TOUCH_HORIZONTAL_PADDING = 8;
-                    const totalRenderablePublicationSocials = renderablePublicationSocials.length;
-                    const homeSocialViewportCount = Math.min(totalRenderablePublicationSocials, HOME_SOCIAL_ICONS_VIEWPORT_COUNT);
-                    const homeSocialIconsViewportWidth = homeSocialViewportCount > 0
-                      ? (homeSocialViewportCount * HOME_SOCIAL_ICON_SIZE) + ((homeSocialViewportCount - 1) * HOME_SOCIAL_ICON_GAP)
-                      : 0;
-
-                    // Initialize animations if not present
-                    if (!publicationAnimations.current[pub.id]) {
-                      publicationAnimations.current[pub.id] = {
-                        scale: new Animated.Value(0),
-                        opacity: new Animated.Value(0)
-                      };
-                    }
-                    const pubAnims = publicationAnimations.current[pub.id];
-                    const pubDoubleTap = publicationDoubleTapState[pub.id] || { visible: false, emoji: '' };
-                    const homeCarouselLoadedMap = homePresentationImagesLoaded[String(pub.id)] || {};
-                    const isHomeCarouselLoadingVisible = homeCarouselLoadingVisibleByPubId[String(pub.id)] !== false;
-                    const homeCarouselExtraData = `rings:${ringsVisible ? 1 : 0}`;
-                    const isCurrentPage = true;
-                    return (
-                      <View
-                        key={`home-page-${pageIndex}-${String(pub.id)}`}
-                        style={styles.homePagerPage}
-                        collapsable={false}
-                      >
-                        <Animated.View
-                          pointerEvents="none"
-                          style={{
-                            position: 'absolute',
-                            top: 0,
-                            right: 0,
-                            bottom: 0,
-                            left: 0,
-                            backgroundColor: '#070b12',
-                            opacity: publicationTransitionVeilOpacity,
-                            zIndex: 2,
-                          }}
-                        />
-                        <ScrollView
-                          key={`home-scroll-${String(pub.id)}`}
-                          style={styles.homePageScroll}
-                          contentContainerStyle={[styles.homePageContentContainer, { paddingBottom: bottomNavHeight + 16 }]}
-                          nestedScrollEnabled
-                          refreshControl={
-                            <RefreshControl
-                              refreshing={false}
-                              onRefresh={handleHomePublicationRefreshTrigger}
-                              tintColor="transparent"
-                              colors={["transparent"]}
-                              progressBackgroundColor="transparent"
-                              progressViewOffset={-10000}
-                            />
-                          }
-                          showsVerticalScrollIndicator={false}
-                          scrollEventThrottle={16}
-                          keyboardShouldPersistTaps="handled"
-                          onScroll={(event) => {
-                            const nextY = Math.max(0, Number(event.nativeEvent.contentOffset.y) || 0);
-                            homePublicationScrollYRef.current = nextY;
-                            const nextAtTop = nextY <= 6;
-                            setIsHomePublicationAtTop(prev => (prev === nextAtTop ? prev : nextAtTop));
-                          }}
-                        >
-                      <Animated.View
-                        style={{
-                          marginBottom: 0,
-                          opacity: publicationTransitionOpacity,
-                          transform: [{ translateY: publicationTransitionTranslateY }],
-                        }}
-                      >
-                        {shouldShowHomeSwipeTutorial && isCurrentPage && (
-                          <Pressable
-                            style={styles.homeSwipeTutorialContainer}
-                            onPress={markHomeSwipeTutorialSeen}
-                            disabled={hasSeenHomeSwipeTutorial !== false}
-                            accessibilityRole="button"
-                          >
-                            <Animated.View
-                              style={[
-                                styles.homeSwipeTutorialIconWrap,
-                                {
-                                  opacity: homeSwipeTutorialIconOpacity,
-                                  transform: [{ scale: homeSwipeTutorialIconScale }],
-                                },
-                              ]}
-                            >
-                              <MaterialIcons name="keyboard-double-arrow-down" size={22} color="#FFB74D" />
-                            </Animated.View>
-
-                            <Text style={styles.homeSwipeTutorialText}>
-                              {t('front.homeSwipeTutorialHint' as TranslationKey)}
-                            </Text>
-                          </Pressable>
-                        )}
-                        {shouldShowHomePublicationSwipeHint && isCurrentPage && (
-                          <View style={styles.homePublicationSwipeHintContainer} pointerEvents="none">
-                            <Animated.View
-                              style={{
-                                opacity: homePullConfirmAnim.interpolate({
-                                  inputRange: [0, 0.5, 1],
-                                  outputRange: [0.85, 1, 0],
-                                }),
-                                transform: [
-                                  {
-                                    scaleX: homePullConfirmAnim.interpolate({
-                                      inputRange: [0, 1],
-                                      outputRange: [1, 4.5],
-                                    }),
-                                  },
-                                  {
-                                    scaleY: homePullConfirmAnim.interpolate({
-                                      inputRange: [0, 0.6, 1],
-                                      outputRange: [1, 1.1, 0.7],
-                                    }),
-                                  },
-                                ],
-                              }}
-                            >
-                              <Svg width={76} height={6}>
-                                <Defs>
-                                  <LinearGradient id="home_publication_swipe_hint_grad" x1="0" y1="0" x2="1" y2="0">
-                                    <Stop offset="0" stopColor="#FFB74D" stopOpacity="0.15" />
-                                    <Stop offset="0.5" stopColor="#FFB74D" stopOpacity="0.95" />
-                                    <Stop offset="1" stopColor="#ffe45c" stopOpacity="0.18" />
-                                  </LinearGradient>
-                                </Defs>
-                                <Rect x="0" y="0" width="76" height="6" rx="3" ry="3" fill="url(#home_publication_swipe_hint_grad)" />
-                              </Svg>
-                            </Animated.View>
-                          </View>
-                        )}
-                        <View style={styles.presentationHeaderContainer}>
-                          <View style={styles.presentationUserInfo}>
-                            <TouchableOpacity
-                              style={[styles.presentationAvatarContainer, { borderWidth: 0 }]}
-                              activeOpacity={0.8}
-                              onPress={() => {
-                                if (pub.user.profilePhotoUri) {
-                                  setFullScreenAvatarUri(getServerResourceUrl(pub.user.profilePhotoUri));
-                                }
-                              }}
-                            >
-                              {pub.user.profilePhotoUri ? (
-                                <Image
-                                  source={{ uri: getServerResourceUrl(pub.user.profilePhotoUri) }}
-                                  style={styles.presentationAvatar}
-                                />
-                              ) : (
-                                <MaterialIcons name="person" size={24} color="#FFFFFF" />
-                              )}
-                            </TouchableOpacity>
-                            <View style={styles.presentationUserDetails}>
-                              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                {pub.user.accountVerified ? (
-                                  <View style={{ marginRight: 6 }}>
-                                    <VerifiedBadgeIcon size={14} solidColor="#FFFFFF" solidOpacity={0.6} />
-                                  </View>
-                                ) : null}
-                                <Text style={styles.presentationUsername}>
-                                  {(pub.user.username || 'Usuario').startsWith('@')
-                                    ? (pub.user.username || 'Usuario')
-                                    : `@${pub.user.username || 'Usuario'}`}
-                                </Text>
-                                {pub.user.keintiVerified ? (
-                                  <View style={{ marginLeft: 6 }}>
-                                    <VerifiedBadgeIcon size={14} variant="gradient" />
-                                  </View>
-                                ) : null}
-                              </View>
-                              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
-                                {intimidadesVisible[pub.id] && !isJoined && (
-                                  <FireworkChatIcon
-                                    size={18}
-                                    onPress={() => handleEnterChannel(pub)}
-                                    style={{ marginRight: 4 }}
-                                  />
-                                )}
-                                {intimidadesVisible[pub.id] && renderablePublicationSocials.length > 0 ? (
-                                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                    <View
-                                      style={{
-                                        width: homeSocialIconsViewportWidth + (HOME_SOCIAL_TOUCH_HORIZONTAL_PADDING * 2),
-                                        height: 28,
-                                        marginHorizontal: -HOME_SOCIAL_TOUCH_HORIZONTAL_PADDING,
-                                        paddingHorizontal: HOME_SOCIAL_TOUCH_HORIZONTAL_PADDING,
-                                        justifyContent: 'center',
-                                      }}
-                                      onTouchStart={() => setHomeCarouselGestureActive(true)}
-                                      onTouchEnd={() => setHomeCarouselGestureActive(false)}
-                                      onTouchCancel={() => setHomeCarouselGestureActive(false)}
-                                      onMoveShouldSetResponderCapture={() => {
-                                        setHomeCarouselGestureActive(true);
-                                        return false;
-                                      }}
-                                    >
-                                      <View style={{ width: homeSocialIconsViewportWidth, height: 24, overflow: 'hidden' }}>
-                                        <ScrollView
-                                          horizontal
-                                          directionalLockEnabled
-                                          showsHorizontalScrollIndicator={false}
-                                          scrollEnabled={totalRenderablePublicationSocials > HOME_SOCIAL_ICONS_VIEWPORT_COUNT}
-                                          style={{ height: 24 }}
-                                          scrollEventThrottle={16}
-                                          onTouchStart={() => setHomeCarouselGestureActive(true)}
-                                          onTouchEnd={() => setHomeCarouselGestureActive(false)}
-                                          onTouchCancel={() => setHomeCarouselGestureActive(false)}
-                                          onScrollBeginDrag={() => setHomeCarouselGestureActive(true)}
-                                          onScrollEndDrag={() => setHomeCarouselGestureActive(false)}
-                                          onMomentumScrollBegin={() => setHomeCarouselGestureActive(true)}
-                                          onMomentumScrollEnd={() => setHomeCarouselGestureActive(false)}
-                                          contentContainerStyle={{ alignItems: 'center', paddingVertical: 2, paddingRight: 4 }}
-                                        >
-                                          {renderablePublicationSocials.map(({ key, link, iconSource }, socialIndex) => {
-                                            const isLast = socialIndex === renderablePublicationSocials.length - 1;
-                                            return (
-                                              <TouchableOpacity
-                                                key={key}
-                                                onPress={() => openExternalLink(link)}
-                                                activeOpacity={0.7}
-                                                style={{ marginRight: isLast ? 0 : HOME_SOCIAL_ICON_GAP, paddingVertical: 2 }}
-                                              >
-                                                <Image
-                                                  source={iconSource}
-                                                  style={{ width: HOME_SOCIAL_ICON_SIZE, height: HOME_SOCIAL_ICON_SIZE, resizeMode: 'contain' }}
-                                                />
-                                              </TouchableOpacity>
-                                            );
-                                          })}
-                                        </ScrollView>
-                                      </View>
-                                    </View>
-                                    <Text style={{ marginLeft: 6, color: 'rgba(255, 255, 255, 0.7)', fontSize: 12 }}>
-                                      {totalRenderablePublicationSocials}
-                                    </Text>
-                                  </View>
-                                ) : (
-                                  <Text style={{ color: '#FFFFFF', fontSize: 12 }}>
-                                    {formatSocialNetworksCount(pub.user.socialNetworks.length)}
-                                  </Text>
-                                )}
-                              </View>
-                            </View>
-                          </View>
-                          <View style={{ justifyContent: 'center', flexDirection: 'row', alignItems: 'flex-start' }}>
-                            <View style={{ alignItems: 'flex-end' }}>
-                              {!!pub.user.nationality && (
-                                <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: 'bold' }}>{pub.user.nationality}</Text>
-                              )}
-                              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: pub.user.nationality ? 4 : 0 }}>
-                                <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '400', marginRight: 4 }}>
-                                  {t('front.channelLabel' as TranslationKey)}
-                                </Text>
-                                <MaterialIcons name="person" size={13} color="rgba(255,255,255,0.72)" style={{ marginRight: 4 }} />
-                                <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '600' }}>
-                                  {getPublicationChannelSubscriberCount(pub)}
-                                </Text>
-                              </View>
-                            </View>
-
-                            <View style={{ position: 'relative', marginLeft: 6, zIndex: 80, elevation: 80 }}>
-                                <TouchableOpacity
-                                  onPress={() => togglePublicationOptions(pub.id)}
-                                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                  accessibilityRole="button"
-                                  accessibilityLabel="Opciones"
-                                >
-                                  <MaterialIcons name="more-vert" size={18} color="rgba(255,255,255,0.9)" />
-                                </TouchableOpacity>
-                                {activePublicationOptionsId === pub.id && (
-                                  <View style={styles.publicationOptionsMenu}>
-                                    <TouchableOpacity
-                                      style={styles.publicationOptionsMenuItem}
-                                      onPress={() => {
-                                        openPublicationReportModal(pub);
-                                      }}
-                                    >
-                                      <Text style={styles.publicationOptionsMenuText}>{t('common.report' as TranslationKey)}</Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                      style={styles.publicationOptionsMenuItem}
-                                      onPress={() => {
-                                        openPublicationBlockModal(pub);
-                                      }}
-                                    >
-                                      <Text style={styles.publicationOptionsMenuTextDanger}>{t('common.block' as TranslationKey)}</Text>
-                                    </TouchableOpacity>
-                                  </View>
-                                )}
-                              </View>
-                            </View>
-                          </View>
-
-                        {pub.presentation.images.length > 0 && (
-                          <View>
-                            <View
-                              style={[styles.profilePresentationCarousel, { width: HOME_CARD_WIDTH }]}
-                              onTouchStart={() => setHomeCarouselGestureActive(true)}
-                              onTouchEnd={() => setHomeCarouselGestureActive(false)}
-                              onTouchCancel={() => setHomeCarouselGestureActive(false)}
-                            >
-                              {(() => {
-                                const total = pub.presentation.images.length;
-                                const loadedMap = homeCarouselLoadedMap;
-                                const loadedCount = Math.min(total, Object.values(loadedMap).filter(Boolean).length);
-                                const isLoading = isHomeCarouselLoadingVisible;
-                                return (
-                                  <View
-                                    style={[
-                                      styles.homeCarouselLoadingOverlay,
-                                      !isLoading && styles.homeCarouselLoadingOverlayHidden,
-                                    ]}
-                                    pointerEvents="none"
-                                  >
-                                    <View style={styles.homeCarouselLoadingSpinnerWrap}>
-                                      <GradientSpinner size={22} />
-                                    </View>
-                                    <View style={styles.homeCarouselLoadingPill}>
-                                      <Text style={styles.homeCarouselLoadingText}>{t('front.loadingImages' as TranslationKey)}</Text>
-                                      <Text style={styles.homeCarouselLoadingSubText}>{loadedCount}/{total}</Text>
-                                    </View>
-                                  </View>
-                                );
-                              })()}
-                              <FlatList
-                                key={`home-carousel-${String(pub.id)}`}
-                                data={pub.presentation.images}
-                                keyExtractor={(_item, index) => `pub-${pub.id}-image-${index}`}
-                                extraData={homeCarouselExtraData}
-                                horizontal
-                                pagingEnabled
-                                bounces={false}
-                                directionalLockEnabled
-                                showsHorizontalScrollIndicator={false}
-                                snapToAlignment="center"
-                                snapToInterval={HOME_CARD_WIDTH}
-                                decelerationRate="fast"
-                                scrollEventThrottle={16}
-                                removeClippedSubviews={false}
-                                initialNumToRender={pub.presentation.images.length}
-                                maxToRenderPerBatch={pub.presentation.images.length}
-                                windowSize={3}
-                                onScrollBeginDrag={() => setHomeCarouselGestureActive(true)}
-                                onScrollEndDrag={() => setHomeCarouselGestureActive(false)}
-                                onMomentumScrollBegin={() => setHomeCarouselGestureActive(true)}
-                                onScroll={(event) => {
-                                  // Drive the indicator imperatively so only the tiny dot component
-                                  // re-renders — NOT the entire FrontScreen (eliminates 2-3s lag).
-                                  const x = Math.max(0, event.nativeEvent.contentOffset.x);
-                                  const w = Math.max(1, event.nativeEvent.layoutMeasurement.width || HOME_CARD_WIDTH);
-                                  const total = pub.presentation.images.length;
-                                  const nextIdx = Math.min(total - 1, Math.max(0, Math.round(x / w)));
-                                  presentationDotsRefsMap.current[String(pub.id)]?.setIndex(nextIdx);
-                                }}
-                                onMomentumScrollEnd={(event) => {
-                                  updateHomePresentationActiveIndexFromScroll(
-                                    pub.id,
-                                    event.nativeEvent.contentOffset.x,
-                                    event.nativeEvent.layoutMeasurement.width,
-                                    pub.presentation.images.length
-                                  );
-                                  setHomeCarouselGestureActive(false);
-                                }}
-                                renderItem={({ item, index }) => {
-                                  const imageUri = getServerResourceUrl(item.uri);
-                                  const imageRenderKey = `pub-${pub.id}-image-${index}`;
-
-                                  return (
-                                  <View style={[styles.profilePresentationSlide, { width: HOME_CARD_WIDTH }]}> 
-                                    <TouchableWithoutFeedback onPress={() => handlePublicationDoubleTap(pub.id, pub.reactions)}>
-                                      <View style={[
-                                        styles.carouselImageFrame,
-                                        item.aspectRatio === '3:4' ? styles.carouselImageFramePortrait : styles.carouselImageFrameSquare,
-                                        { width: '100%' }
-                                      ]}
-                                        onLayout={(e) => {
-                                          const { width, height } = e.nativeEvent.layout;
-                                          setHomePresentationImageLayout(pub.id, index, width, height);
-                                        }}
-                                      >
-                                        <Image
-                                          source={{ uri: imageUri }}
-                                          style={styles.carouselImage}
-                                          resizeMode="cover"
-                                          fadeDuration={0}
-                                          onLoad={() => markHomePresentationImageLoaded(pub.id, index)}
-                                          onLoadEnd={() => markHomePresentationImageLoaded(pub.id, index)}
-                                          onError={() => markHomePresentationImageLoaded(pub.id, index)}
-                                        />
-
-                                        {(() => {
-                                          if (!hasPresentationRings || !ringsVisible) return null;
-                                          const layout = homePresentationImageLayouts[String(pub.id)]?.[index];
-                                          if (!layout) return null;
-
-                                          const ringSize = 18;
-                                          const ringRadius = ringSize / 2;
-                                          const points = presentationRings.filter(p => Number(p?.imageIndex) === index);
-                                          if (points.length === 0) return null;
-
-                                          return points.map((p) => {
-                                            const x = Number(p?.x);
-                                            const y = Number(p?.y);
-                                            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-
-                                            const left = Math.max(0, Math.min(layout.width - ringSize, x * layout.width - ringRadius));
-                                            const top = Math.max(0, Math.min(layout.height - ringSize, y * layout.height - ringRadius));
-
-                                            return (
-                                                <Pressable
-                                                key={String(p.id)}
-                                                  onPress={() => {
-                                                    homeRingTapSuppressUntilRef.current[String(pub.id)] = Date.now() + 350;
-                                                    openHomeProfileRingViewerPanelFromRing(p as ProfileRingPoint);
-                                                  }}
-                                                  hitSlop={10}
-                                                style={{
-                                                  position: 'absolute',
-                                                  left,
-                                                  top,
-                                                  width: ringSize,
-                                                  height: ringSize,
-                                                  borderRadius: ringRadius,
-                                                  borderWidth: 3,
-                                                  borderColor: p.color || '#FFFFFF',
-                                                  backgroundColor: withHexAlpha(p.color || '#FFFFFF', 0.4),
-                                                }}
-                                              />
-                                            );
-                                          });
-                                        })()}
-
-                                        {/* Double Tap Animation */}
-                                        {pubDoubleTap.visible && (
-                                          <View style={{
-                                            position: 'absolute',
-                                            top: 0,
-                                            left: 0,
-                                            right: 0,
-                                            bottom: 0,
-                                            justifyContent: 'center',
-                                            alignItems: 'center',
-                                            zIndex: 20,
-                                            pointerEvents: 'none'
-                                          }}>
-                                            <Animated.Text style={{
-                                              fontSize: 100,
-                                              transform: [{ scale: pubAnims.scale }],
-                                              opacity: pubAnims.opacity,
-                                              textShadowColor: 'rgba(0, 0, 0, 0.3)',
-                                              textShadowOffset: { width: 0, height: 2 },
-                                              textShadowRadius: 4
-                                            }}>
-                                              {pubDoubleTap.emoji}
-                                            </Animated.Text>
-                                          </View>
-                                        )}
-                                      </View>
-                                    </TouchableWithoutFeedback>
-                                  </View>
-                                );}}
-                              />
-
-                              <View style={styles.profilePresentationOverlay} pointerEvents="box-none">
-                                {isOverlayVisible && (
-                                  <View style={styles.profilePresentationOverlayContent}>
-                                    <Text style={styles.profilePresentationOverlayTitle}>
-                                      {trimmedTitle}
-                                    </Text>
-                                    <Text style={styles.profilePresentationOverlayText}>
-                                      {textPreview}
-                                      {hasTextOverflow && (
-                                        <Text
-                                          style={styles.profilePresentationToggleLink}
-                                          onPress={(e) => {
-                                            e.stopPropagation();
-                                            setExpandedProfileTexts(prev => ({
-                                              ...prev,
-                                              [pub.id]: !isTextExpanded
-                                            }));
-                                          }}>
-                                          {' '}
-                                          {isTextExpanded ? 'Leer menos' : 'Leer más...'}
-                                        </Text>
-                                      )}
-                                    </Text>
-                                  </View>
-                                )}
-
-                                <View style={styles.carouselPagination}>
-                                  <HomePresentationDotIndicator
-                                    key={`pub-dots-${String(pub.id)}`}
-                                    ref={(r) => { presentationDotsRefsMap.current[String(pub.id)] = r; }}
-                                    count={pub.presentation.images.length}
-                                    onPress={() => {
-                                      setPresentationOverlayVisible(prev => ({
-                                        ...prev,
-                                        [pub.id]: !isOverlayVisible,
-                                      }));
-                                    }}
-                                  />
-                                </View>
-
-                                {pub.presentation.category && pub.presentation.category !== 'Sin categoría' && (
-                                  <View style={styles.categoryBelowIndicator}>
-                                    <Text style={styles.categoryBelowIndicatorText}>{getCategoryLabel(pub.presentation.category)}</Text>
-                                  </View>
-                                )}
-                              </View>
-                            </View>
-
-                            <View style={[styles.profileMetaContainer, { paddingBottom: 0 }]}>
-                              <View style={styles.profileLikeRow}>
-                                <View style={{ position: 'absolute', left: 0, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                  <TouchableOpacity
-                                    activeOpacity={0.7}
-                                    onPress={() => {
-                                      if (!hasPresentationRings) return;
-                                      toggleHomeProfileRingsVisible(String(pub.id));
-                                    }}
-                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                    style={{ paddingVertical: 2, paddingHorizontal: 2, opacity: hasPresentationRings ? 1 : 0.35 }}
-                                  >
-                                    <Animated.View style={ringsVisible ? { transform: [{ scale: homeRingIconPulseAnim }] } : undefined}>
-                                      <GradientIcon
-                                        name="panorama-fish-eye"
-                                        size={16}
-                                        colors={['#FFB74D', '#ffe45c']}
-                                      />
-                                    </Animated.View>
-                                  </TouchableOpacity>
-
-                                  <CountdownTimer
-                                    createdAt={pub.createdAt}
-                                    style={{ color: '#6e6e6eff', fontSize: 12 }}
-                                    onExpire={() => {
-                                      // Eliminar localmente cuando expire
-                                      setPublications(prev => prev.filter(p => p.id !== pub.id));
-                                    }}
-                                  />
-                                </View>
-                                <View style={styles.profileLikeGroup}>
-                                  {pub.reactions.selected.map((emoji, index) => (
-                                    <TouchableOpacity
-                                      key={index}
-                                      onPress={() => applyPublicationReaction(pub.id, pub.reactions, emoji)}
-                                      activeOpacity={0.75}
-                                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                                      style={{ flexDirection: 'row', alignItems: 'center' }}
-                                    >
-                                      <Text style={{ fontSize: 18, color: '#FFFFFF', opacity: 1 }}>{emoji}</Text>
-                                      <Text style={{ color: '#FFFFFF', fontSize: 12, marginLeft: 2, fontWeight: 'bold', opacity: 1 }}>{pub.reactions.counts[emoji] || 0}</Text>
-                                    </TouchableOpacity>
-                                  ))}
-                                </View>
-                              </View>
-                            </View>
-
-                            {/* Intimidades Container */}
-                            {pub.intimidades.length > 0 && intimidadesVisible[pub.id] && (
-                              <View style={{
-                                width: HOME_CARD_WIDTH,
-                                alignSelf: 'center',
-                                backgroundColor: '#000000',
-                                borderRadius: 10,
-                                marginTop: 20,
-                                position: 'relative',
-                                overflow: 'hidden',
-                                minHeight: 110,
-                              }}>
-                                <View style={{
-                                  position: 'absolute',
-                                  top: 0,
-                                  left: 0,
-                                  right: 0,
-                                  bottom: 0,
-                                  borderWidth: 2.4,
-                                  borderColor: '#FFB74D',
-                                  borderRadius: 10,
-                                  zIndex: 10,
-                                  pointerEvents: 'none',
-                                }} />
-
-                                {pub.intimidades[activeIndex].type === 'image' ? (
-                                  <View style={{ width: '100%' }}>
-                                    <View style={{ width: '100%', aspectRatio: 3 / 4 }}>
-                                      <Image
-                                        source={{ uri: pub.intimidades[activeIndex].content }}
-                                        style={{ width: '100%', height: '100%' }}
-                                        resizeMode="cover"
-                                      />
-                                    </View>
-                                    {pub.intimidades[activeIndex].caption ? (
-                                      <View style={{ padding: 15 }}>
-                                        <Text style={{ color: '#FFFFFF', textAlign: 'justify' }}>
-                                          {pub.intimidades[activeIndex].caption || ''}
-                                        </Text>
-                                      </View>
-                                    ) : (
-                                      <View style={{ height: 15 }} />
-                                    )}
-                                  </View>
-                                ) : pub.intimidades[activeIndex].type === 'quiz' ? (
-                                  <View style={{ width: '100%' }}>
-                                    {pub.intimidades[activeIndex].quizData?.imageUri && (
-                                      <View style={{ width: '100%', aspectRatio: 3 / 4 }}>
-                                        <Image
-                                          source={{ uri: pub.intimidades[activeIndex].quizData?.imageUri ?? undefined }}
-                                          style={{ width: '100%', height: '100%' }}
-                                          resizeMode="cover"
-                                        />
-                                      </View>
-                                    )}
-                                    <View style={{ padding: 10 }}>
-                                      {pub.intimidades[activeIndex].quizData?.text ? (
-                                        <Text style={{ color: '#FFFFFF', marginBottom: 10, textAlign: 'justify' }}>
-                                          {pub.intimidades[activeIndex].quizData?.text || ''}
-                                        </Text>
-                                      ) : null}
-                                      <View style={{ width: '100%' }}>
-                                        {(() => {
-                                          const quizData = pub.intimidades[activeIndex].quizData;
-                                          const stats = quizData?.stats;
-                                          const correctOption = quizData?.correctOption;
-                                          if (!stats || !correctOption) return null;
-
-                                          const total = stats.a + stats.b + stats.c + stats.d;
-                                          if (total <= 0) return null;
-
-                                          const correctCount = stats[correctOption as keyof typeof stats] ?? 0;
-                                          return (
-                                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, marginBottom: 5, marginLeft: 5 }}>
-                                              {correctCount} acertantes
-                                            </Text>
-                                          );
-                                        })()}
-                                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
-                                          {['a', 'b'].map((optionKey) => {
-                                            const userSelection = pub.intimidades[activeIndex].quizData?.userSelection;
-                                            const isSelected = userSelection === optionKey;
-                                            const isCorrect = pub.intimidades[activeIndex].quizData?.correctOption === optionKey;
-                                            const hasAnswered = !!userSelection;
-
-                                            const showCheck = hasAnswered && isCorrect;
-                                            const showX = isSelected && !isCorrect;
-
-                                            let percentage = 0;
-                                            const quizStats = pub.intimidades[activeIndex].quizData?.stats;
-                                            if (hasAnswered && quizStats) {
-                                              const totalVotes = quizStats.a + quizStats.b + quizStats.c + quizStats.d;
-                                              const optionVotes = quizStats[optionKey as 'a' | 'b' | 'c' | 'd'];
-                                              if (totalVotes > 0) {
-                                                percentage = Math.round((optionVotes / totalVotes) * 100);
-                                              }
-                                            }
-
-                                            return (
-                                              <View key={optionKey} style={{ flex: 1, marginLeft: optionKey === 'b' ? 5 : 0, marginRight: optionKey === 'a' ? 5 : 0 }}>
-                                                <TouchableOpacity
-                                                  onPress={() => {
-                                                    if (!pub.intimidades[activeIndex].quizData?.userSelection) {
-                                                      setPublications(prev => prev.map(p => {
-                                                        if (p.id === pub.id) {
-                                                          const newIntimidades = [...p.intimidades];
-                                                          if (newIntimidades[activeIndex].quizData) {
-                                                            const existingQuizData = newIntimidades[activeIndex].quizData!;
-                                                            const currentStats = existingQuizData.stats || { a: 0, b: 0, c: 0, d: 0 };
-                                                            const newStats = { ...currentStats };
-                                                            newStats[optionKey as 'a' | 'b' | 'c' | 'd'] = (newStats[optionKey as 'a' | 'b' | 'c' | 'd'] || 0) + 1;
-
-                                                            newIntimidades[activeIndex].quizData = {
-                                                              options: existingQuizData.options,
-                                                              correctOption: existingQuizData.correctOption,
-                                                              imageUri: existingQuizData.imageUri,
-                                                              text: existingQuizData.text,
-                                                              userSelection: optionKey,
-                                                              stats: newStats
-                                                            };
-                                                          }
-                                                          return { ...p, intimidades: newIntimidades };
-                                                        }
-                                                        return p;
-                                                      }));
-
-                                                      fetch(`${API_URL}/api/posts/${pub.id}/vote`, {
-                                                        method: 'POST',
-                                                        headers: {
-                                                          'Content-Type': 'application/json',
-                                                          'Authorization': `Bearer ${authToken}`
-                                                        },
-                                                        body: JSON.stringify({
-                                                          intimidadIndex: activeIndex,
-                                                          optionKey: optionKey
-                                                        })
-                                                      }).then(res => res.json())
-                                                        .then(data => {
-                                                          if (data.success) {
-                                                            setPublications(prev => prev.map(p => {
-                                                              if (p.id === pub.id) {
-                                                                const newIntimidades = [...p.intimidades];
-                                                                if (newIntimidades[activeIndex].quizData) {
-                                                                  const existingQuizData = newIntimidades[activeIndex].quizData!;
-                                                                  const newStats = { a: 0, b: 0, c: 0, d: 0 };
-                                                                  Object.keys(data.counts).forEach(key => {
-                                                                    if (key === 'a' || key === 'b' || key === 'c' || key === 'd') {
-                                                                      newStats[key] = data.counts[key];
-                                                                    }
-                                                                  });
-
-                                                                  newIntimidades[activeIndex].quizData = {
-                                                                    options: existingQuizData.options,
-                                                                    correctOption: existingQuizData.correctOption,
-                                                                    imageUri: existingQuizData.imageUri,
-                                                                    text: existingQuizData.text,
-                                                                    userSelection: optionKey,
-                                                                    stats: newStats
-                                                                  };
-                                                                }
-                                                                return { ...p, intimidades: newIntimidades };
-                                                              }
-                                                              return p;
-                                                            }));
-                                                          }
-                                                        })
-                                                        .catch(err => console.error('Error voting:', err));
-                                                    }
-                                                  }}
-                                                  activeOpacity={0.7}
-                                                  style={{
-                                                    borderWidth: 1,
-                                                    borderColor: showCheck ? '#FFB74D' : showX ? '#F44336' : '#FFB74D',
-                                                    borderRadius: 15,
-                                                    padding: 5,
-                                                    minHeight: 30,
-                                                    justifyContent: 'center',
-                                                    flexDirection: 'row',
-                                                    alignItems: 'center'
-                                                  }}
-                                                >
-                                                  <Text style={{ color: '#FFFFFF', fontSize: 12, flex: 1 }}>
-                                                    <Text style={{ fontWeight: 'bold', color: '#FFB74D' }}>{optionKey}. </Text>
-                                                    {pub.intimidades[activeIndex].quizData?.options[optionKey as 'a' | 'b'] || ''}
-                                                  </Text>
-                                                  {showCheck && (
-                                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                                      <Text style={{ color: '#FFB74D', fontSize: 10, marginRight: 2 }}>{percentage}%</Text>
-                                                      <MaterialIcons name="check-circle" size={16} color="#FFB74D" style={{ marginLeft: 4 }} />
-                                                    </View>
-                                                  )}
-                                                  {showX && <MaterialIcons name="cancel" size={16} color="#F44336" style={{ marginLeft: 4 }} />}
-                                                </TouchableOpacity>
-                                              </View>
-                                            );
-                                          })}
-                                        </View>
-                                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                          {['c', 'd'].map((optionKey) => {
-                                            const userSelection = pub.intimidades[activeIndex].quizData?.userSelection;
-                                            const isSelected = userSelection === optionKey;
-                                            const isCorrect = pub.intimidades[activeIndex].quizData?.correctOption === optionKey;
-                                            const hasAnswered = !!userSelection;
-
-                                            const showCheck = hasAnswered && isCorrect;
-                                            const showX = isSelected && !isCorrect;
-
-                                            let percentage = 0;
-                                            const quizStats = pub.intimidades[activeIndex].quizData?.stats;
-                                            if (hasAnswered && quizStats) {
-                                              const totalVotes = quizStats.a + quizStats.b + quizStats.c + quizStats.d;
-                                              const optionVotes = quizStats[optionKey as 'a' | 'b' | 'c' | 'd'];
-                                              if (totalVotes > 0) {
-                                                percentage = Math.round((optionVotes / totalVotes) * 100);
-                                              }
-                                            }
-
-                                            return (
-                                              <View key={optionKey} style={{ flex: 1, marginLeft: optionKey === 'd' ? 5 : 0, marginRight: optionKey === 'c' ? 5 : 0 }}>
-                                                <TouchableOpacity
-                                                  onPress={() => {
-                                                    if (!pub.intimidades[activeIndex].quizData?.userSelection) {
-                                                      setPublications(prev => prev.map(p => {
-                                                        if (p.id === pub.id) {
-                                                          const newIntimidades = [...p.intimidades];
-                                                          if (newIntimidades[activeIndex].quizData) {
-                                                            const existingQuizData = newIntimidades[activeIndex].quizData!;
-                                                            const currentStats = existingQuizData.stats || { a: 0, b: 0, c: 0, d: 0 };
-                                                            const newStats = { ...currentStats };
-                                                            newStats[optionKey as 'a' | 'b' | 'c' | 'd'] = (newStats[optionKey as 'a' | 'b' | 'c' | 'd'] || 0) + 1;
-
-                                                            newIntimidades[activeIndex].quizData = {
-                                                              options: existingQuizData.options,
-                                                              correctOption: existingQuizData.correctOption,
-                                                              imageUri: existingQuizData.imageUri,
-                                                              text: existingQuizData.text,
-                                                              userSelection: optionKey,
-                                                              stats: newStats
-                                                            };
-                                                          }
-                                                          return { ...p, intimidades: newIntimidades };
-                                                        }
-                                                        return p;
-                                                      }));
-
-                                                      fetch(`${API_URL}/api/posts/${pub.id}/vote`, {
-                                                        method: 'POST',
-                                                        headers: {
-                                                          'Content-Type': 'application/json',
-                                                          'Authorization': `Bearer ${authToken}`
-                                                        },
-                                                        body: JSON.stringify({
-                                                          intimidadIndex: activeIndex,
-                                                          optionKey: optionKey
-                                                        })
-                                                      }).then(res => res.json())
-                                                        .then(data => {
-                                                          if (data.success) {
-                                                            setPublications(prev => prev.map(p => {
-                                                              if (p.id === pub.id) {
-                                                                const newIntimidades = [...p.intimidades];
-                                                                if (newIntimidades[activeIndex].quizData) {
-                                                                  const existingQuizData = newIntimidades[activeIndex].quizData!;
-                                                                  const newStats = { a: 0, b: 0, c: 0, d: 0 };
-                                                                  Object.keys(data.counts).forEach(key => {
-                                                                    if (key === 'a' || key === 'b' || key === 'c' || key === 'd') {
-                                                                      newStats[key] = data.counts[key];
-                                                                    }
-                                                                  });
-
-                                                                  newIntimidades[activeIndex].quizData = {
-                                                                    options: existingQuizData.options,
-                                                                    correctOption: existingQuizData.correctOption,
-                                                                    imageUri: existingQuizData.imageUri,
-                                                                    text: existingQuizData.text,
-                                                                    userSelection: optionKey,
-                                                                    stats: newStats
-                                                                  };
-                                                                }
-                                                                return { ...p, intimidades: newIntimidades };
-                                                              }
-                                                              return p;
-                                                            }));
-                                                          }
-                                                        })
-                                                        .catch(err => console.error('Error voting:', err));
-                                                    }
-                                                  }}
-                                                  activeOpacity={0.7}
-                                                  style={{
-                                                    borderWidth: 1,
-                                                    borderColor: showCheck ? '#FFB74D' : showX ? '#F44336' : '#FFB74D',
-                                                    borderRadius: 15,
-                                                    padding: 5,
-                                                    minHeight: 30,
-                                                    justifyContent: 'center',
-                                                    flexDirection: 'row',
-                                                    alignItems: 'center'
-                                                  }}
-                                                >
-                                                  <Text style={{ color: '#FFFFFF', fontSize: 12, flex: 1 }}>
-                                                    <Text style={{ fontWeight: 'bold', color: '#FFB74D' }}>{optionKey}. </Text>
-                                                    {pub.intimidades[activeIndex].quizData?.options[optionKey as 'c' | 'd'] || ''}
-                                                  </Text>
-                                                  {showCheck && (
-                                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                                      <Text style={{ color: '#FFB74D', fontSize: 10, marginRight: 2 }}>{percentage}%</Text>
-                                                      <MaterialIcons name="check-circle" size={16} color="#FFB74D" style={{ marginLeft: 4 }} />
-                                                    </View>
-                                                  )}
-                                                  {showX && <MaterialIcons name="cancel" size={16} color="#F44336" style={{ marginLeft: 4 }} />}
-                                                </TouchableOpacity>
-                                              </View>
-                                            );
-                                          })}
-                                        </View>
-                                      </View>
-                                    </View>
-                                  </View>
-                                ) : pub.intimidades[activeIndex].type === 'survey' ? (
-                                  <View style={{ width: '100%' }}>
-                                    {pub.intimidades[activeIndex].surveyData?.imageUri && (
-                                      <View style={{ width: '100%', aspectRatio: 3 / 4 }}>
-                                        <Image
-                                          source={{ uri: pub.intimidades[activeIndex].surveyData?.imageUri ?? undefined }}
-                                          style={{ width: '100%', height: '100%' }}
-                                          resizeMode="cover"
-                                        />
-                                      </View>
-                                    )}
-                                    <View style={{ padding: 10 }}>
-                                      {pub.intimidades[activeIndex].surveyData?.text ? (
-                                        <Text style={{ color: '#FFFFFF', marginBottom: 10, textAlign: 'justify' }}>
-                                          {pub.intimidades[activeIndex].surveyData?.text || ''}
-                                        </Text>
-                                      ) : null}
-                                      <View style={{ width: '100%' }}>
-                                        {(() => {
-                                          const stats = pub.intimidades[activeIndex].surveyData?.stats;
-                                          if (!stats) return null;
-                                          const totalVotes = stats.reduce((a, b) => a + b, 0);
-                                          if (totalVotes <= 0) return null;
-                                          return (
-                                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, marginBottom: 5, marginLeft: 5 }}>
-                                              {totalVotes} votos
-                                            </Text>
-                                          );
-                                        })()}
-                                        {pub.intimidades[activeIndex].surveyData?.options.map((option, idx) => {
-                                          const userSelection = pub.intimidades[activeIndex].surveyData?.userSelection;
-                                          const isSelected = userSelection === idx;
-                                          const hasAnswered = userSelection !== null && userSelection !== undefined;
-
-                                          let percentage = 0;
-                                          if (hasAnswered && pub.intimidades[activeIndex].surveyData?.stats) {
-                                            const stats = pub.intimidades[activeIndex].surveyData?.stats;
-                                            const totalVotes = stats ? stats.reduce((a, b) => a + b, 0) : 0;
-                                            const optionVotes = stats ? stats[idx] : 0;
-                                            if (totalVotes > 0) {
-                                              percentage = Math.round((optionVotes / totalVotes) * 100);
-                                            }
-                                          }
-
-                                          return (
-                                            <TouchableOpacity
-                                              key={idx}
-                                              onPress={() => {
-                                                if (pub.intimidades[activeIndex].surveyData?.userSelection === null || pub.intimidades[activeIndex].surveyData?.userSelection === undefined) {
-                                                  setPublications(prev => prev.map(p => {
-                                                    if (p.id === pub.id) {
-                                                      const newIntimidades = [...p.intimidades];
-                                                      if (newIntimidades[activeIndex].surveyData) {
-                                                        const existingSurveyData = newIntimidades[activeIndex].surveyData!;
-                                                        const currentStats = existingSurveyData.stats || new Array(existingSurveyData.options.length).fill(0);
-                                                        const newStats = [...currentStats];
-                                                        newStats[idx] = (newStats[idx] || 0) + 1;
-
-                                                        newIntimidades[activeIndex].surveyData = {
-                                                          options: existingSurveyData.options,
-                                                          imageUri: existingSurveyData.imageUri,
-                                                          text: existingSurveyData.text,
-                                                          userSelection: idx,
-                                                          stats: newStats
-                                                        };
-                                                      }
-                                                      return { ...p, intimidades: newIntimidades };
-                                                    }
-                                                    return p;
-                                                  }));
-
-                                                  fetch(`${API_URL}/api/posts/${pub.id}/vote`, {
-                                                    method: 'POST',
-                                                    headers: {
-                                                      'Content-Type': 'application/json',
-                                                      'Authorization': `Bearer ${authToken}`
-                                                    },
-                                                    body: JSON.stringify({
-                                                      intimidadIndex: activeIndex,
-                                                      optionKey: idx.toString()
-                                                    })
-                                                  }).then(res => res.json())
-                                                    .then(data => {
-                                                      if (data.success) {
-                                                        setPublications(prev => prev.map(p => {
-                                                          if (p.id === pub.id) {
-                                                            const newIntimidades = [...p.intimidades];
-                                                            if (newIntimidades[activeIndex].surveyData) {
-                                                              const existingSurveyData = newIntimidades[activeIndex].surveyData!;
-                                                              const optionsCount = existingSurveyData.options.length;
-                                                              const newStats = new Array(optionsCount).fill(0);
-                                                              Object.keys(data.counts).forEach(key => {
-                                                                const index = parseInt(key);
-                                                                if (!isNaN(index) && index < optionsCount) {
-                                                                  newStats[index] = data.counts[key];
-                                                                }
-                                                              });
-
-                                                              newIntimidades[activeIndex].surveyData = {
-                                                                options: existingSurveyData.options,
-                                                                imageUri: existingSurveyData.imageUri,
-                                                                text: existingSurveyData.text,
-                                                                userSelection: existingSurveyData.userSelection,
-                                                                stats: newStats
-                                                              };
-                                                            }
-                                                            return { ...p, intimidades: newIntimidades };
-                                                          }
-                                                          return p;
-                                                        }));
-                                                      }
-                                                    })
-                                                    .catch(err => console.error('Error voting:', err));
-                                                }
-                                              }}
-                                              activeOpacity={0.7}
-                                              style={{
-                                                borderWidth: 1,
-                                                borderColor: isSelected ? '#FFB74D' : '#FFB74D',
-                                                backgroundColor: isSelected ? 'rgba(255, 183, 77, 0.1)' : 'transparent',
-                                                borderRadius: 15,
-                                                padding: 8,
-                                                marginBottom: 8,
-                                                justifyContent: 'center',
-                                                flexDirection: 'row',
-                                                alignItems: 'center'
-                                              }}
-                                            >
-                                              <Text style={{ color: '#FFFFFF', fontSize: 12, flex: 1 }}>
-                                                <Text style={{ fontWeight: 'bold', color: '#FFB74D' }}>{String.fromCharCode(97 + idx)}. </Text>
-                                                {option || ''}
-                                              </Text>
-                                              {hasAnswered && (
-                                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                                  <Text style={{ color: '#FFB74D', fontSize: 10, marginRight: 2 }}>{percentage}%</Text>
-                                                  {isSelected && <MaterialIcons name="check-circle" size={16} color="#FFB74D" style={{ marginLeft: 4 }} />}
-                                                </View>
-                                              )}
-                                            </TouchableOpacity>
-                                          );
-                                        })}
-                                      </View>
-                                    </View>
-                                  </View>
-                                ) : (
-                                  <View style={{ padding: 15, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 110 }}>
-                                    <Text style={{ color: '#FFFFFF', textAlign: 'justify' }}>
-                                      {pub.intimidades[activeIndex].content || ''}
-                                    </Text>
-                                  </View>
-                                )}
-                              </View>
-                            )
-                            }
-
-                            {/* ICON_KEITIN Container */}
-                            < View style={[styles.profileMetaContainer, { paddingTop: 0 }]} >
-                              <TouchableOpacity
-                                style={styles.bottomPanel}
-                                activeOpacity={0.7}
-                                onPress={() => {
-                                  if (pub.intimidades.length > 0) {
-                                    if (!intimidadesVisible[pub.id]) {
-                                      showRewardedToRevealIntimidades(pub.id);
-                                    } else if (pub.intimidades.length > 1) {
-                                      setActiveIntimidadIndices(prev => ({
-                                        ...prev,
-                                        [pub.id]: ((prev[pub.id] || 0) + 1) % pub.intimidades.length
-                                      }));
-                                    }
-                                  }
-                                }}
-                              >
-                                <Image source={ICON_KEITIN} style={styles.profileBrandIcon} resizeMode="contain" />
-                                {pub.intimidades.length > 0 && (
-                                  <View style={{ flexDirection: 'row', marginTop: 8, gap: 6 }}>
-                                    {pub.intimidades.map((_, idx) => (
-                                      <View
-                                        key={idx}
-                                        style={{
-                                          width: 6,
-                                          height: 6,
-                                          borderRadius: 3,
-                                          backgroundColor: idx === activeIndex ? '#FFB74D' : 'rgba(255, 183, 77, 0.3)',
-                                        }}
-                                      />
-                                    ))}
-                                  </View>
-                                )}
-                              </TouchableOpacity>
-                            </View>
-                          </View>
-                        )}
-
-                      </Animated.View>
-                        </ScrollView>
-                      </View>
-                    );
-                  })()}
+                {activeHomePublicationCard}
               </View>
             )}
           </View >
+        )}
+
+        {activeBottomTab === 'hype' && (
+          <View
+            style={[
+              styles.hypeScreenContainer,
+              { paddingTop: Math.max(CHAT_TABS_DEFAULT_OFFSET + 8, CHAT_TABS_TOP + hypeHeaderHeight + 16) },
+            ]}
+          >
+            <View style={styles.hypeScreenBody}>
+              {hypeTab === 'eventos' ? (
+                isLoadingHypeViralEvents && !hasLoadedHypeViralEvents ? (
+                  <View style={styles.hypeStateContainer}>
+                    <GradientSpinner size={50} />
+                  </View>
+                ) : renderableHypeViralEvents.length === 0 ? (
+                  <View style={styles.hypeStateContainer}>
+                    <Text style={styles.hypeScreenBodyLabel}>
+                      {selectedHypeCategory === HYPE_MOST_VIRAL_CATEGORY
+                        ? localize({
+                          es: 'Sin eventos virales',
+                          en: 'No viral events',
+                          fr: 'Aucun événement viral',
+                          pt: 'Sem eventos virais',
+                          de: 'Keine viralen Events',
+                          it: 'Nessun evento virale',
+                        })
+                        : localize({
+                          es: 'Sin eventos en esta categoría',
+                          en: 'No events in this category',
+                          fr: 'Aucun événement dans cette catégorie',
+                          pt: 'Sem eventos nesta categoria',
+                          de: 'Keine Events in dieser Kategorie',
+                          it: 'Nessun evento in questa categoria',
+                        })}
+                    </Text>
+                    <Text style={styles.hypeEmptyStateText}>
+                      {localize({
+                        es: 'Los eventos del canal se ordenarán aquí según las llaves que reciban.',
+                        en: 'Channel events will be ranked here by the keys they receive.',
+                        fr: 'Les événements du canal seront classés ici selon les clés reçues.',
+                        pt: 'Os eventos do canal serão ordenados aqui conforme as chaves recebidas.',
+                        de: 'Kanal-Events werden hier nach den erhaltenen Schlüsseln sortiert.',
+                        it: 'Gli eventi del canale verranno ordinati qui in base alle chiavi ricevute.',
+                      })}
+                    </Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    data={renderableHypeViralEvents}
+                    keyExtractor={(item) => `hype-event-${String(item.id)}`}
+                    style={styles.hypeEventsList}
+                    contentContainerStyle={[
+                      styles.hypeEventsListContent,
+                      { paddingBottom: bottomNavHeight + 20 },
+                    ]}
+                    showsVerticalScrollIndicator={false}
+                    removeClippedSubviews={false}
+                    viewabilityConfig={HYPE_VIRAL_LIST_VIEWABILITY_CONFIG}
+                    onViewableItemsChanged={handleHypeViralEventsViewableItemsChanged}
+                    ListFooterComponent={isLoadingHypeViralEventsMore ? (
+                      <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+                        <GradientSpinner size={28} />
+                      </View>
+                    ) : null}
+                    renderItem={({ item, index }) => {
+                      const channelEventDonationTotalValue = Math.max(0, Math.floor(Number(item?.channel_event_donation_total) || 0));
+                      const channelEventHypeCounterLabel = formatChannelEventIntegerInput(String(channelEventDonationTotalValue));
+                      const normalizedUserEmail = String(userEmail || '').trim().toLowerCase();
+                      const publisherEmailValue = String(item?.publisher_email || '').trim().toLowerCase();
+                        const isOwnedByViewer = !!normalizedUserEmail && !!publisherEmailValue && normalizedUserEmail === publisherEmailValue;
+                        const hypeEventUnlockKey = String(item?.id ?? '').trim();
+                        const isHypeEventUnlocked = isOwnedByViewer
+                          || !hypeEventUnlockKey
+                          || unlockedHypeChannelEventKeys[hypeEventUnlockKey] === true;
+                        const isHypeEventLocked = !isHypeEventUnlocked;
+                        const shouldShowJoinChannelIcon = !isOwnedByViewer
+                          && !item?.viewer_is_subscribed
+                          && !isHypeEventLocked;
+                      const rawPublisherSocialNetworks = Array.isArray(item?.publisher_social_networks)
+                        ? item.publisher_social_networks
+                        : [];
+                      const renderablePublisherSocials = rawPublisherSocialNetworks.reduce<HomeRenderablePublicationSocial[]>((accumulator, socialNetwork, socialIndex) => {
+                        const key = normalizeHomePublicationSocialIconKey(socialNetwork?.id ?? socialNetwork?.network);
+                        const link = String(socialNetwork?.link || '').trim();
+                        const iconSource = SOCIAL_ICONS[key as keyof typeof SOCIAL_ICONS];
+                        if (!key || !link || !iconSource) {return accumulator;}
+
+                        accumulator.push({
+                          key: `${String(item?.id || 'event')}-${key}-${socialIndex}`,
+                          link,
+                          iconSource,
+                        });
+                        return accumulator;
+                      }, []);
+                      const totalRenderablePublisherSocials = renderablePublisherSocials.length;
+                      const hypeSocialViewportCount = Math.min(totalRenderablePublisherSocials, HOME_PUBLICATION_SOCIAL_VIEWPORT_COUNT);
+                      const hypeSocialIconsViewportWidth = hypeSocialViewportCount > 0
+                        ? (hypeSocialViewportCount * HOME_PUBLICATION_SOCIAL_ICON_SIZE) + ((hypeSocialViewportCount - 1) * HOME_PUBLICATION_SOCIAL_ICON_GAP)
+                        : 0;
+                      const publisherHandle = formatUsernameWithAt(String(item?.publisher_username || item?.publisher_email || 'Canal'));
+                      const publisherAvatarUri = item?.publisher_profile_photo_uri
+                        ? getServerResourceUrl(String(item.publisher_profile_photo_uri))
+                        : '';
+                      const showPublisherVerifiedBadge = !!item?.publisher_account_verified || !!item?.publisher_keinti_verified;
+                      const hypeRankLabel = `Top ${index + 1}`;
+                      const channelRemainingRaw = item?.post_created_at ? getRemainingTime(item.post_created_at) : 'Tiempo agotado';
+                      const channelRemainingLabel = formatRemainingTimeForDisplay(channelRemainingRaw, language, t as any);
+
+                      return (
+                        <View style={styles.hypeEventItem}>
+                          <View style={styles.hypeEventHeader}>
+                            <TouchableOpacity
+                              activeOpacity={publisherAvatarUri ? 0.85 : 1}
+                              disabled={!publisherAvatarUri}
+                              onPress={() => {
+                                if (!publisherAvatarUri) {return;}
+                                setFullScreenAvatarUri(publisherAvatarUri);
+                              }}
+                              style={styles.hypeEventHeaderAvatarButton}
+                            >
+                              {publisherAvatarUri ? (
+                                <Image source={{ uri: publisherAvatarUri }} style={styles.hypeEventHeaderAvatar} resizeMode="cover" />
+                              ) : (
+                                <View style={styles.hypeEventHeaderAvatarFallback}>
+                                  <MaterialIcons name="person" size={18} color="rgba(255,255,255,0.75)" />
+                                </View>
+                              )}
+                            </TouchableOpacity>
+                            <View style={styles.hypeEventHeaderTextWrap}>
+                              <View style={styles.hypeEventHeaderHandleRow}>
+                                {showPublisherVerifiedBadge ? (
+                                  <View style={styles.hypeEventHeaderVerifiedBadge}>
+                                    <VerifiedBadgeIcon size={12} solidColor="#FFFFFF" solidOpacity={0.6} />
+                                  </View>
+                                ) : null}
+                                <Text style={styles.hypeEventHeaderHandle}>{publisherHandle}</Text>
+                              </View>
+                              {totalRenderablePublisherSocials > 0 ? (
+                                <View style={styles.hypeEventHeaderMetaRow}>
+                                  <View
+                                    style={{
+                                      width: hypeSocialIconsViewportWidth + (HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING * 2),
+                                      height: 24,
+                                      marginHorizontal: -HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING,
+                                      paddingHorizontal: HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING,
+                                      justifyContent: 'center',
+                                    }}
+                                  >
+                                    <View style={{ width: hypeSocialIconsViewportWidth, height: 24, overflow: 'hidden' }}>
+                                      <ScrollView
+                                        horizontal
+                                        directionalLockEnabled
+                                        showsHorizontalScrollIndicator={false}
+                                        scrollEnabled={totalRenderablePublisherSocials > HOME_PUBLICATION_SOCIAL_VIEWPORT_COUNT}
+                                        style={{ height: 24 }}
+                                        scrollEventThrottle={16}
+                                        contentContainerStyle={{ alignItems: 'center', paddingVertical: 2, paddingRight: 4 }}
+                                      >
+                                        {renderablePublisherSocials.map(({ key, link, iconSource }, socialIndex) => {
+                                          const isLast = socialIndex === renderablePublisherSocials.length - 1;
+                                          return (
+                                            <TouchableOpacity
+                                              key={key}
+                                              onPress={() => openExternalLink(link)}
+                                              activeOpacity={0.7}
+                                              style={{ marginRight: isLast ? 0 : HOME_PUBLICATION_SOCIAL_ICON_GAP, paddingVertical: 2 }}
+                                            >
+                                              <Image
+                                                source={iconSource}
+                                                style={{ width: HOME_PUBLICATION_SOCIAL_ICON_SIZE, height: HOME_PUBLICATION_SOCIAL_ICON_SIZE, resizeMode: 'contain' }}
+                                              />
+                                            </TouchableOpacity>
+                                          );
+                                        })}
+                                      </ScrollView>
+                                    </View>
+                                  </View>
+                                  <Text style={styles.hypeEventHeaderSocialCount}>{totalRenderablePublisherSocials}</Text>
+                                </View>
+                              ) : (
+                                <View style={styles.hypeEventHeaderMetaRow}>
+                                  <Text style={styles.hypeEventHeaderSocialFallbackText}>
+                                    {formatSocialNetworksCount(rawPublisherSocialNetworks.length)}
+                                  </Text>
+                                </View>
+                              )}
+                            </View>
+                            <View style={styles.hypeEventHeaderRight}>
+                              <View style={styles.hypeEventHeaderRankRow}>
+                                {shouldShowJoinChannelIcon ? (
+                                  <FireworkChatIcon
+                                    size={12}
+                                    onPress={() => {
+                                      const channelPostId = String(item?.post_id ?? '').trim();
+                                      if (!channelPostId || !publisherEmailValue) {return;}
+                                      void handleEnterChannel({
+                                        id: channelPostId,
+                                        user: {
+                                          email: String(item?.publisher_email || ''),
+                                          username: String(item?.publisher_username || item?.publisher_email || 'Canal'),
+                                        },
+                                      } as Publication);
+                                    }}
+                                    style={{ marginRight: 6 }}
+                                  />
+                                ) : null}
+                                <Text style={styles.hypeEventHeaderRankText}>{hypeRankLabel}</Text>
+                              </View>
+                              <View style={styles.hypeEventHeaderMetaRowRight}>
+                                <Text style={styles.hypeEventHeaderRemainingText}>{channelRemainingLabel}</Text>
+                              </View>
+                            </View>
+                          </View>
+
+                          <View style={styles.hypeEventBubble}>
+                            <BlurView
+                              blurType="dark"
+                              blurAmount={HYPE_EVENT_CARD_BLUR_AMOUNT}
+                              reducedTransparencyFallbackColor="rgba(0,0,0,0.65)"
+                              style={StyleSheet.absoluteFill}
+                            />
+                            <View pointerEvents="none" style={styles.hypeEventBubbleOverlay} />
+                            <View style={styles.hypeEventBubbleContent}>
+                              {renderChannelEventMessageCard(item.parsedPayload, {
+                                onOpenImage: openChannelImageViewer,
+                                message: item,
+                                imageBlurRadius: isHypeEventLocked ? HYPE_EVENT_IMAGE_BLUR_RADIUS : undefined,
+                                imageOpacity: isHypeEventLocked ? HYPE_EVENT_IMAGE_OPACITY : undefined,
+                                canOpenImage: !isHypeEventLocked,
+                                canCompleteRewardedTasks: false,
+                              })}
+                            </View>
+                          </View>
+
+                            <View style={styles.hypeEventFooterRow}>
+                              <View style={styles.hypeEventCounterRow}>
+                                <MaterialIcons name="whatshot" size={20} color="#FFFFFF" />
+                                <Text style={styles.hypeEventCounterText}>{channelEventHypeCounterLabel}</Text>
+                              </View>
+                              <View style={styles.hypeEventDonationTriggerWrap}>
+                                <TouchableOpacity
+                                  activeOpacity={isHypeEventLocked ? 0.8 : 1}
+                                  disabled={!isHypeEventLocked}
+                                  onPress={() => {
+                                    if (!isHypeEventLocked) {return;}
+                                    void showRewardedToUnlockHypeChannelEvent(hypeEventUnlockKey);
+                                  }}
+                                  style={{ borderRadius: 12, overflow: 'hidden', opacity: isHypeEventLocked ? 1 : 0.6 }}
+                                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                >
+                                  <View style={{ borderRadius: 12, position: 'relative', padding: 1.2 }}>
+                                    <MeasuredSvgGradientBorder
+                                      gradientId={`hype_event_cost_trigger_grad_${String(item.id)}_${index}`}
+                                      colors={['#FFB74D', '#ffe45c']}
+                                      borderRadius={12}
+                                      strokeWidth={1.4}
+                                    />
+                                    <View style={styles.hypeEventDonationTriggerInner}>
+                                          <Text style={styles.hypeEventDonationTriggerText}>{t('common.view' as TranslationKey)}</Text>
+                                    </View>
+                                  </View>
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                        </View>
+                      );
+                    }}
+                  />
+                )
+              ) : isLoadingHypeViralReadings && !hasLoadedHypeViralReadings ? (
+                <View style={styles.hypeStateContainer}>
+                  <GradientSpinner size={50} />
+                </View>
+              ) : renderableHypeViralReadings.length === 0 ? (
+                <View style={styles.hypeStateContainer}>
+                  <Text style={styles.hypeScreenBodyLabel}>
+                    {selectedHypeCategory === HYPE_MOST_VIRAL_CATEGORY
+                      ? localize({
+                        es: 'Sin lecturas virales',
+                        en: 'No viral readings',
+                        fr: 'Aucune lecture virale',
+                        pt: 'Sem leituras virais',
+                        de: 'Keine viralen Lesungen',
+                        it: 'Nessuna lettura virale',
+                      })
+                      : localize({
+                        es: 'Sin lecturas en esta categoría',
+                        en: 'No readings in this category',
+                        fr: 'Aucune lecture dans cette catégorie',
+                        pt: 'Sem leituras nesta categoria',
+                        de: 'Keine Lesungen in dieser Kategorie',
+                        it: 'Nessuna lettura in questa categoria',
+                      })}
+                  </Text>
+                  <Text style={styles.hypeEmptyStateText}>
+                    {selectedHypeCategory === HYPE_MOST_VIRAL_CATEGORY
+                      ? localize({
+                        es: 'Las lecturas del canal se ordenarán aquí según las llaves que reciban.',
+                        en: 'Channel readings will be ranked here by the keys they receive.',
+                        fr: 'Les lectures du canal seront classées ici selon les clés reçues.',
+                        pt: 'As leituras do canal serão ordenadas aqui conforme as chaves recebidas.',
+                        de: 'Kanallesungen werden hier nach den erhaltenen Schlüsseln sortiert.',
+                        it: 'Le letture del canale verranno ordinate qui in base alle chiavi ricevute.',
+                      })
+                      : localize({
+                        es: 'Selecciona otra categoría o vuelve a Más viral para ver más lecturas.',
+                        en: 'Choose another category or switch back to Most viral to see more readings.',
+                        fr: 'Choisis une autre catégorie ou reviens à Le plus viral pour voir plus de lectures.',
+                        pt: 'Escolhe outra categoria ou volta a Mais viral para veres mais leituras.',
+                        de: 'Wähle eine andere Kategorie oder gehe zurück zu Am viralsten, um mehr Lesungen zu sehen.',
+                        it: 'Scegli un\'altra categoria o torna a Più virale per vedere più letture.',
+                      })}
+                  </Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={renderableHypeViralReadings}
+                  keyExtractor={(item) => `hype-reading-${String(item.id)}`}
+                  style={styles.hypeEventsList}
+                  contentContainerStyle={[
+                    styles.hypeEventsListContent,
+                    { paddingBottom: bottomNavHeight + 20 },
+                  ]}
+                  showsVerticalScrollIndicator={false}
+                  removeClippedSubviews={false}
+                  viewabilityConfig={HYPE_VIRAL_LIST_VIEWABILITY_CONFIG}
+                  onViewableItemsChanged={handleHypeViralReadingsViewableItemsChanged}
+                  ListFooterComponent={isLoadingHypeViralReadingsMore ? (
+                    <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+                      <GradientSpinner size={28} />
+                    </View>
+                  ) : null}
+                  renderItem={({ item, index }) => {
+                    const channelReadingDonationTotalValue = Math.max(0, Math.floor(Number(item?.channel_event_donation_total) || 0));
+                    const channelReadingHypeCounterLabel = formatChannelEventIntegerInput(String(channelReadingDonationTotalValue));
+                    const normalizedUserEmail = String(userEmail || '').trim().toLowerCase();
+                    const publisherEmailValue = String(item?.publisher_email || '').trim().toLowerCase();
+                    const isOwnedByViewer = !!normalizedUserEmail && !!publisherEmailValue && normalizedUserEmail === publisherEmailValue;
+                    const hypeReadingUnlockKey = String(item?.id ?? '').trim();
+                    const isHypeReadingUnlocked = isOwnedByViewer
+                      || !hypeReadingUnlockKey
+                      || unlockedHypeChannelReadingKeys[hypeReadingUnlockKey] === true;
+                    const isHypeReadingLocked = !isHypeReadingUnlocked;
+                    const shouldShowJoinChannelIcon = !isOwnedByViewer
+                      && !item?.viewer_is_subscribed
+                      && !isHypeReadingLocked;
+                    const rawPublisherSocialNetworks = Array.isArray(item?.publisher_social_networks)
+                      ? item.publisher_social_networks
+                      : [];
+                    const renderablePublisherSocials = rawPublisherSocialNetworks.reduce<HomeRenderablePublicationSocial[]>((accumulator, socialNetwork, socialIndex) => {
+                      const key = normalizeHomePublicationSocialIconKey(socialNetwork?.id ?? socialNetwork?.network);
+                      const link = String(socialNetwork?.link || '').trim();
+                      const iconSource = SOCIAL_ICONS[key as keyof typeof SOCIAL_ICONS];
+                      if (!key || !link || !iconSource) {return accumulator;}
+
+                      accumulator.push({
+                        key: `${String(item?.id || 'reading')}-${key}-${socialIndex}`,
+                        link,
+                        iconSource,
+                      });
+                      return accumulator;
+                    }, []);
+                    const totalRenderablePublisherSocials = renderablePublisherSocials.length;
+                    const hypeSocialViewportCount = Math.min(totalRenderablePublisherSocials, HOME_PUBLICATION_SOCIAL_VIEWPORT_COUNT);
+                    const hypeSocialIconsViewportWidth = hypeSocialViewportCount > 0
+                      ? (hypeSocialViewportCount * HOME_PUBLICATION_SOCIAL_ICON_SIZE) + ((hypeSocialViewportCount - 1) * HOME_PUBLICATION_SOCIAL_ICON_GAP)
+                      : 0;
+                    const publisherHandle = formatUsernameWithAt(String(item?.publisher_username || item?.publisher_email || 'Canal'));
+                    const publisherAvatarUri = item?.publisher_profile_photo_uri
+                      ? getServerResourceUrl(String(item.publisher_profile_photo_uri))
+                      : '';
+                    const showPublisherVerifiedBadge = !!item?.publisher_account_verified || !!item?.publisher_keinti_verified;
+                    const hypeRankLabel = `Top ${index + 1}`;
+                    const channelRemainingRaw = item?.post_created_at ? getRemainingTime(item.post_created_at) : 'Tiempo agotado';
+                    const channelRemainingLabel = formatRemainingTimeForDisplay(channelRemainingRaw, language, t as any);
+
+                    return (
+                      <View style={styles.hypeEventItem}>
+                        <View style={styles.hypeEventHeader}>
+                          <TouchableOpacity
+                            activeOpacity={publisherAvatarUri ? 0.85 : 1}
+                            disabled={!publisherAvatarUri}
+                            onPress={() => {
+                              if (!publisherAvatarUri) {return;}
+                              setFullScreenAvatarUri(publisherAvatarUri);
+                            }}
+                            style={styles.hypeEventHeaderAvatarButton}
+                          >
+                            {publisherAvatarUri ? (
+                              <Image source={{ uri: publisherAvatarUri }} style={styles.hypeEventHeaderAvatar} resizeMode="cover" />
+                            ) : (
+                              <View style={styles.hypeEventHeaderAvatarFallback}>
+                                <MaterialIcons name="person" size={18} color="rgba(255,255,255,0.75)" />
+                              </View>
+                            )}
+                          </TouchableOpacity>
+                          <View style={styles.hypeEventHeaderTextWrap}>
+                            <View style={styles.hypeEventHeaderHandleRow}>
+                              {showPublisherVerifiedBadge ? (
+                                <View style={styles.hypeEventHeaderVerifiedBadge}>
+                                  <VerifiedBadgeIcon size={12} solidColor="#FFFFFF" solidOpacity={0.6} />
+                                </View>
+                              ) : null}
+                              <Text style={styles.hypeEventHeaderHandle}>{publisherHandle}</Text>
+                            </View>
+                            {totalRenderablePublisherSocials > 0 ? (
+                              <View style={styles.hypeEventHeaderMetaRow}>
+                                <View
+                                  style={{
+                                    width: hypeSocialIconsViewportWidth + (HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING * 2),
+                                    height: 24,
+                                    marginHorizontal: -HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING,
+                                    paddingHorizontal: HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING,
+                                    justifyContent: 'center',
+                                  }}
+                                >
+                                  <View style={{ width: hypeSocialIconsViewportWidth, height: 24, overflow: 'hidden' }}>
+                                    <ScrollView
+                                      horizontal
+                                      directionalLockEnabled
+                                      showsHorizontalScrollIndicator={false}
+                                      scrollEnabled={totalRenderablePublisherSocials > HOME_PUBLICATION_SOCIAL_VIEWPORT_COUNT}
+                                      style={{ height: 24 }}
+                                      scrollEventThrottle={16}
+                                      contentContainerStyle={{ alignItems: 'center', paddingVertical: 2, paddingRight: 4 }}
+                                    >
+                                      {renderablePublisherSocials.map(({ key, link, iconSource }, socialIndex) => {
+                                        const isLast = socialIndex === renderablePublisherSocials.length - 1;
+                                        return (
+                                          <TouchableOpacity
+                                            key={key}
+                                            onPress={() => openExternalLink(link)}
+                                            activeOpacity={0.7}
+                                            style={{ marginRight: isLast ? 0 : HOME_PUBLICATION_SOCIAL_ICON_GAP, paddingVertical: 2 }}
+                                          >
+                                            <Image
+                                              source={iconSource}
+                                              style={{ width: HOME_PUBLICATION_SOCIAL_ICON_SIZE, height: HOME_PUBLICATION_SOCIAL_ICON_SIZE, resizeMode: 'contain' }}
+                                            />
+                                          </TouchableOpacity>
+                                        );
+                                      })}
+                                    </ScrollView>
+                                  </View>
+                                </View>
+                                <Text style={styles.hypeEventHeaderSocialCount}>{totalRenderablePublisherSocials}</Text>
+                              </View>
+                            ) : (
+                              <View style={styles.hypeEventHeaderMetaRow}>
+                                <Text style={styles.hypeEventHeaderSocialFallbackText}>
+                                  {formatSocialNetworksCount(rawPublisherSocialNetworks.length)}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                          <View style={styles.hypeEventHeaderRight}>
+                            <View style={styles.hypeEventHeaderRankRow}>
+                              {shouldShowJoinChannelIcon ? (
+                                <FireworkChatIcon
+                                  size={12}
+                                  onPress={() => {
+                                    const channelPostId = String(item?.post_id ?? '').trim();
+                                    if (!channelPostId || !publisherEmailValue) {return;}
+                                    void handleEnterChannel({
+                                      id: channelPostId,
+                                      user: {
+                                        email: String(item?.publisher_email || ''),
+                                        username: String(item?.publisher_username || item?.publisher_email || 'Canal'),
+                                      },
+                                    } as Publication);
+                                  }}
+                                  style={{ marginRight: 6 }}
+                                />
+                              ) : null}
+                              <Text style={styles.hypeEventHeaderRankText}>{hypeRankLabel}</Text>
+                            </View>
+                            <View style={styles.hypeEventHeaderMetaRowRight}>
+                              <Text style={styles.hypeEventHeaderRemainingText}>{channelRemainingLabel}</Text>
+                            </View>
+                          </View>
+                        </View>
+
+                        <View style={styles.hypeEventBubble}>
+                          <BlurView
+                            blurType="dark"
+                            blurAmount={HYPE_EVENT_CARD_BLUR_AMOUNT}
+                            reducedTransparencyFallbackColor="rgba(0,0,0,0.65)"
+                            style={StyleSheet.absoluteFill}
+                          />
+                          <View pointerEvents="none" style={styles.hypeEventBubbleOverlay} />
+                          <View style={styles.hypeEventBubbleContent}>
+                            {renderChannelReadingMessageCard(item.parsedPayload, {
+                              onOpenImage: openChannelImageViewer,
+                              message: item,
+                              imageBlurRadius: isHypeReadingLocked ? HYPE_EVENT_IMAGE_BLUR_RADIUS : undefined,
+                              imageOpacity: isHypeReadingLocked ? HYPE_EVENT_IMAGE_OPACITY : undefined,
+                              canOpenImage: !isHypeReadingLocked,
+                              canOpenExpanded: !isHypeReadingLocked,
+                              showLockIcon: isHypeReadingLocked,
+                            })}
+                          </View>
+                        </View>
+
+                        <View style={styles.hypeEventFooterRow}>
+                          <View style={styles.hypeEventCounterRow}>
+                            <MaterialIcons name="whatshot" size={20} color="#FFFFFF" />
+                            <Text style={styles.hypeEventCounterText}>{channelReadingHypeCounterLabel}</Text>
+                          </View>
+                          <View style={styles.hypeEventDonationTriggerWrap}>
+                            <TouchableOpacity
+                              activeOpacity={isHypeReadingLocked ? 0.8 : 1}
+                              disabled={!isHypeReadingLocked}
+                              onPress={() => {
+                                if (!isHypeReadingLocked) {return;}
+                                void showRewardedToUnlockHypeChannelReading(hypeReadingUnlockKey);
+                              }}
+                              style={{ borderRadius: 12, overflow: 'hidden', opacity: isHypeReadingLocked ? 1 : 0.6 }}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            >
+                              <View style={{ borderRadius: 12, position: 'relative', padding: 1.2 }}>
+                                <MeasuredSvgGradientBorder
+                                  gradientId={`hype_reading_cost_trigger_grad_${String(item.id)}_${index}`}
+                                  colors={['#FFB74D', '#ffe45c']}
+                                  borderRadius={12}
+                                  strokeWidth={1.4}
+                                />
+                                <View style={styles.hypeEventDonationTriggerInner}>
+                                  <Text style={styles.hypeEventDonationTriggerText}>{t('common.view' as TranslationKey)}</Text>
+                                </View>
+                              </View>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </View>
+                    );
+                  }}
+                />
+              )}
+            </View>
+          </View>
         )}
 
         {/* Pantalla Profile */}
@@ -12341,7 +16844,7 @@ const FrontScreen = ({
                             }
                           }}
                           onPressIn={() => {
-                            if (!isPublished) return;
+                            if (!isPublished) {return;}
                             profilePublishActionGlowAnim.stopAnimation();
                             profilePublishActionGlowAnim.setValue(0);
                             Animated.sequence([
@@ -12408,14 +16911,16 @@ const FrontScreen = ({
                               width: 40,
                               height: 3,
                               backgroundColor: '#ffae35ff',
-                              borderRadius: 1.5
+                              borderRadius: 1.5,
                             }} />
                           )}
                         </TouchableOpacity>
 
-                        <View style={{ justifyContent: 'center' }}>
-                          <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: 'bold' }}>{nationality}</Text>
-                        </View>
+                        {!!localizedProfileNationality && (
+                          <View style={{ justifyContent: 'center' }}>
+                            <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: 'bold' }}>{localizedProfileNationality}</Text>
+                          </View>
+                        )}
                       </View>
                       {profilePresentation.images.length > 0 && (
                         <View>
@@ -12424,7 +16929,7 @@ const FrontScreen = ({
                               const total = profilePresentation.images.length;
                               const loadedCount = Math.min(total, profilePresentationLoadedCount);
                               const isLoading = loadedCount < total;
-                              if (!isLoading) return null;
+                              if (!isLoading) {return null;}
 
                               return (
                                 <View style={styles.profileCarouselLoadingOverlay} pointerEvents="none">
@@ -12471,16 +16976,16 @@ const FrontScreen = ({
                                       item.aspectRatio === '3:4'
                                         ? styles.carouselImageFramePortrait
                                         : styles.carouselImageFrameSquare,
-                                      { width: '100%' }
+                                      { width: '100%' },
                                     ]}>
                                     <Pressable
                                       style={{ width: '100%', height: '100%' }}
                                       onLayout={(e) => {
                                         const { width, height } = e.nativeEvent.layout;
-                                        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+                                        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {return;}
                                         setProfileCarouselImageLayouts(prev => {
                                           const prevEntry = prev[index];
-                                          if (prevEntry && prevEntry.width === width && prevEntry.height === height) return prev;
+                                          if (prevEntry && prevEntry.width === width && prevEntry.height === height) {return prev;}
                                           return { ...prev, [index]: { width, height } };
                                         });
                                       }}
@@ -12495,12 +17000,12 @@ const FrontScreen = ({
                                       />
                                       {(() => {
                                         const layout = profileCarouselImageLayouts[index];
-                                        if (!layout) return null;
+                                        if (!layout) {return null;}
 
                                         const ringSize = 18;
                                         const ringRadius = ringSize / 2;
                                         const points = profileRingPoints.filter(p => p.imageIndex === index);
-                                        if (points.length === 0) return null;
+                                        if (points.length === 0) {return null;}
 
                                         return points.map(p => {
                                           const left = Math.max(0, Math.min(layout.width - ringSize, p.x * layout.width - ringRadius));
@@ -12557,7 +17062,7 @@ const FrontScreen = ({
                                           setIsProfileTextExpanded(prev => !prev);
                                         }}>
                                         {' '}
-                                        {isProfileTextExpanded ? 'Leer menos' : 'Leer más...'}
+                                        {isProfileTextExpanded ? t('front.readLess' as TranslationKey) : t('front.readMore' as TranslationKey)}
                                       </Text>
                                     )}
                                   </Text>
@@ -12634,17 +17139,17 @@ const FrontScreen = ({
                           </View>
 
                           {(() => {
-                            if (intimidades.length === 0) return null;
+                            if (intimidades.length === 0) {return null;}
                             const safeIndex = Math.min(activeIntimidadIndex, intimidades.length - 1);
                             const activeIntimidad = intimidades[safeIndex];
-                            if (!activeIntimidad) return null;
+                            if (!activeIntimidad) {return null;}
 
                             return (
                               <View style={{
                                 width: PROFILE_CONTENT_WIDTH,
                                 alignSelf: 'center',
                                 marginTop: 20,
-                                position: 'relative'
+                                position: 'relative',
                               }}>
                                 <View style={{
                                   width: '100%',
@@ -12707,20 +17212,20 @@ const FrontScreen = ({
                                         <View style={{ width: '100%' }}>
                                           {(() => {
                                             // Mostrar stats SOLO cuando la publicación esté activa en Home (24h)
-                                            if (!isPublished || !myPublication) return null;
+                                            if (!isPublished || !myPublication) {return null;}
 
                                             const created = parseServerDate(myPublication.createdAt as any);
-                                            if (!Number.isFinite(created.getTime())) return null;
+                                            if (!Number.isFinite(created.getTime())) {return null;}
                                             const expiresAt = created.getTime() + POST_TTL_MS;
-                                            if (Date.now() >= expiresAt) return null;
+                                            if (Date.now() >= expiresAt) {return null;}
 
                                             const quizData = activeIntimidad.quizData;
                                             const stats = quizData?.stats;
                                             const correctOption = quizData?.correctOption as ('a' | 'b' | 'c' | 'd' | undefined);
-                                            if (!stats || !correctOption) return null;
+                                            if (!stats || !correctOption) {return null;}
 
                                             const total = stats.a + stats.b + stats.c + stats.d;
-                                            if (total <= 0) return null;
+                                            if (total <= 0) {return null;}
 
                                             const correctCount = stats[correctOption] ?? 0;
                                             return (
@@ -12755,7 +17260,7 @@ const FrontScreen = ({
                                                       minHeight: 30,
                                                       justifyContent: 'center',
                                                       flexDirection: 'row',
-                                                      alignItems: 'center'
+                                                      alignItems: 'center',
                                                     }}
                                                   >
                                                     <Text style={{ color: '#FFFFFF', fontSize: 12, flex: 1 }}>
@@ -12801,7 +17306,7 @@ const FrontScreen = ({
                                                       minHeight: 30,
                                                       justifyContent: 'center',
                                                       flexDirection: 'row',
-                                                      alignItems: 'center'
+                                                      alignItems: 'center',
                                                     }}
                                                   >
                                                     <Text style={{ color: '#FFFFFF', fontSize: 12, flex: 1 }}>
@@ -12872,7 +17377,7 @@ const FrontScreen = ({
                                                         marginBottom: 8,
                                                         justifyContent: 'center',
                                                         flexDirection: 'row',
-                                                        alignItems: 'center'
+                                                        alignItems: 'center',
                                                       }}
                                                     >
                                                       <Text style={{ color: '#FFFFFF', fontSize: 12, flex: 1 }}>
@@ -12907,7 +17412,7 @@ const FrontScreen = ({
                                     bottom: -32,
                                     right: 0,
                                     zIndex: 20,
-                                    padding: 5
+                                    padding: 5,
                                   }}
                                   onPress={() => handleDeleteIntimidad(safeIndex)}
                                 >
@@ -13172,7 +17677,7 @@ const FrontScreen = ({
                     <View style={{
                       width: '100%',
                       marginTop: intimidadesImageUri ? 0 : 15,
-                      paddingHorizontal: intimidadesImageUri ? 0 : 10
+                      paddingHorizontal: intimidadesImageUri ? 0 : 10,
                     }}>
                       {intimidadesImageUri ? (
                         <View style={{ width: '100%' }}>
@@ -13231,7 +17736,7 @@ const FrontScreen = ({
                               <Text style={{
                                 color: textInputValue.length > 0 ? '#FFB74D' : 'rgba(255, 183, 77, 0.5)',
                                 fontWeight: 'bold',
-                                fontSize: 14
+                                fontSize: 14,
                               }}>
                                 {t('common.apply' as TranslationKey)}
                               </Text>
@@ -13277,7 +17782,7 @@ const FrontScreen = ({
                     <TouchableOpacity
                       style={[
                         styles.publishButton,
-                        ((appliedText.length === 0 && !intimidadesImageUri) || isUploadingIntimidadesImage) && styles.publishButtonDisabled
+                        ((appliedText.length === 0 && !intimidadesImageUri) || isUploadingIntimidadesImage) && styles.publishButtonDisabled,
                       ]}
                       disabled={(appliedText.length === 0 && !intimidadesImageUri) || isUploadingIntimidadesImage}
                       activeOpacity={0.7}
@@ -13292,12 +17797,12 @@ const FrontScreen = ({
                             newIntimidad = {
                               type: 'image',
                               content: intimidadesImageUri,
-                              caption: textInputValue
+                              caption: textInputValue,
                             };
                           } else if (appliedText.length > 0) {
                             newIntimidad = {
                               type: 'text',
-                              content: appliedText
+                              content: appliedText,
                             };
                           }
 
@@ -13318,7 +17823,7 @@ const FrontScreen = ({
                     >
                       <Text style={[
                         styles.publishButtonText,
-                        (appliedText.length === 0 && !intimidadesImageUri) && styles.publishButtonTextDisabled
+                        (appliedText.length === 0 && !intimidadesImageUri) && styles.publishButtonTextDisabled,
                       ]}>
                         {t('front.incorporate' as TranslationKey)}
                       </Text>
@@ -13429,7 +17934,7 @@ const FrontScreen = ({
                               <Text style={{
                                 color: quizTextInputValue.length > 0 ? '#FFB74D' : 'rgba(255, 183, 77, 0.5)',
                                 fontWeight: 'bold',
-                                fontSize: 14
+                                fontSize: 14,
                               }}>
                                 {t('common.apply' as TranslationKey)}
                               </Text>
@@ -13490,7 +17995,7 @@ const FrontScreen = ({
                               <Text style={{ fontWeight: 'bold', color: '#FFFFFF', marginRight: 4, fontSize: 12 }}>a.</Text>
                             )}
                             <TextInput
-                              placeholder={optionTextA.length === 0 ? `a. ${t('front.answerPlaceholder' as TranslationKey)}` : ""}
+                              placeholder={optionTextA.length === 0 ? `a. ${t('front.answerPlaceholder' as TranslationKey)}` : ''}
                               placeholderTextColor="rgba(255, 183, 77, 0.5)"
                               value={optionTextA}
                               onChangeText={setOptionTextA}
@@ -13507,9 +18012,9 @@ const FrontScreen = ({
                           </View>
                           <TouchableOpacity onPress={() => setSelectedCorrectOption('a')}>
                             <MaterialIcons
-                              name={selectedCorrectOption === 'a' ? "check-circle-outline" : "radio-button-unchecked"}
+                              name={selectedCorrectOption === 'a' ? 'check-circle-outline' : 'radio-button-unchecked'}
                               size={20}
-                              color={selectedCorrectOption === 'a' ? "#FFB74D" : "rgba(255, 255, 255, 0.3)"}
+                              color={selectedCorrectOption === 'a' ? '#FFB74D' : 'rgba(255, 255, 255, 0.3)'}
                               style={{ marginLeft: 5 }}
                             />
                           </TouchableOpacity>
@@ -13517,9 +18022,9 @@ const FrontScreen = ({
                         <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', marginLeft: 10 }}>
                           <TouchableOpacity onPress={() => setSelectedCorrectOption('b')}>
                             <MaterialIcons
-                              name={selectedCorrectOption === 'b' ? "check-circle-outline" : "radio-button-unchecked"}
+                              name={selectedCorrectOption === 'b' ? 'check-circle-outline' : 'radio-button-unchecked'}
                               size={20}
-                              color={selectedCorrectOption === 'b' ? "#FFB74D" : "rgba(255, 255, 255, 0.3)"}
+                              color={selectedCorrectOption === 'b' ? '#FFB74D' : 'rgba(255, 255, 255, 0.3)'}
                               style={{ marginRight: 5 }}
                             />
                           </TouchableOpacity>
@@ -13538,7 +18043,7 @@ const FrontScreen = ({
                               <Text style={{ fontWeight: 'bold', color: '#FFFFFF', marginRight: 4, fontSize: 12 }}>b.</Text>
                             )}
                             <TextInput
-                              placeholder={optionTextB.length === 0 ? `b. ${t('front.answerPlaceholder' as TranslationKey)}` : ""}
+                              placeholder={optionTextB.length === 0 ? `b. ${t('front.answerPlaceholder' as TranslationKey)}` : ''}
                               placeholderTextColor="rgba(255, 183, 77, 0.5)"
                               value={optionTextB}
                               onChangeText={setOptionTextB}
@@ -13574,7 +18079,7 @@ const FrontScreen = ({
                               <Text style={{ fontWeight: 'bold', color: '#FFFFFF', marginRight: 4, fontSize: 12 }}>c.</Text>
                             )}
                             <TextInput
-                              placeholder={optionTextC.length === 0 ? `c. ${t('front.answerPlaceholder' as TranslationKey)}` : ""}
+                              placeholder={optionTextC.length === 0 ? `c. ${t('front.answerPlaceholder' as TranslationKey)}` : ''}
                               placeholderTextColor="rgba(255, 183, 77, 0.5)"
                               value={optionTextC}
                               onChangeText={setOptionTextC}
@@ -13591,9 +18096,9 @@ const FrontScreen = ({
                           </View>
                           <TouchableOpacity onPress={() => setSelectedCorrectOption('c')}>
                             <MaterialIcons
-                              name={selectedCorrectOption === 'c' ? "check-circle-outline" : "radio-button-unchecked"}
+                              name={selectedCorrectOption === 'c' ? 'check-circle-outline' : 'radio-button-unchecked'}
                               size={20}
-                              color={selectedCorrectOption === 'c' ? "#FFB74D" : "rgba(255, 255, 255, 0.3)"}
+                              color={selectedCorrectOption === 'c' ? '#FFB74D' : 'rgba(255, 255, 255, 0.3)'}
                               style={{ marginLeft: 5 }}
                             />
                           </TouchableOpacity>
@@ -13601,9 +18106,9 @@ const FrontScreen = ({
                         <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', marginLeft: 10 }}>
                           <TouchableOpacity onPress={() => setSelectedCorrectOption('d')}>
                             <MaterialIcons
-                              name={selectedCorrectOption === 'd' ? "check-circle-outline" : "radio-button-unchecked"}
+                              name={selectedCorrectOption === 'd' ? 'check-circle-outline' : 'radio-button-unchecked'}
                               size={20}
-                              color={selectedCorrectOption === 'd' ? "#FFB74D" : "rgba(255, 255, 255, 0.3)"}
+                              color={selectedCorrectOption === 'd' ? '#FFB74D' : 'rgba(255, 255, 255, 0.3)'}
                               style={{ marginRight: 5 }}
                             />
                           </TouchableOpacity>
@@ -13622,7 +18127,7 @@ const FrontScreen = ({
                               <Text style={{ fontWeight: 'bold', color: '#FFFFFF', marginRight: 4, fontSize: 12 }}>d.</Text>
                             )}
                             <TextInput
-                              placeholder={optionTextD.length === 0 ? `d. ${t('front.answerPlaceholder' as TranslationKey)}` : ""}
+                              placeholder={optionTextD.length === 0 ? `d. ${t('front.answerPlaceholder' as TranslationKey)}` : ''}
                               placeholderTextColor="rgba(255, 183, 77, 0.5)"
                               value={optionTextD}
                               onChangeText={setOptionTextD}
@@ -13651,7 +18156,7 @@ const FrontScreen = ({
                     <TouchableOpacity
                       style={[
                         styles.publishButton,
-                        !((optionTextA && optionTextB && optionTextC && optionTextD && selectedCorrectOption) && ((quizAppliedText.length > 0) || (!!quizImageUri && !isUploadingQuizImage))) && styles.publishButtonDisabled
+                        !((optionTextA && optionTextB && optionTextC && optionTextD && selectedCorrectOption) && ((quizAppliedText.length > 0) || (!!quizImageUri && !isUploadingQuizImage))) && styles.publishButtonDisabled,
                       ]}
                       disabled={!((optionTextA && optionTextB && optionTextC && optionTextD && selectedCorrectOption) && ((quizAppliedText.length > 0) || (!!quizImageUri && !isUploadingQuizImage)))}
                       activeOpacity={0.7}
@@ -13669,7 +18174,7 @@ const FrontScreen = ({
                                   a: optionTextA,
                                   b: optionTextB,
                                   c: optionTextC,
-                                  d: optionTextD
+                                  d: optionTextD,
                                 },
                                 correctOption: selectedCorrectOption,
                                 imageUri: quizImageUri,
@@ -13678,9 +18183,9 @@ const FrontScreen = ({
                                   a: 0,
                                   b: 0,
                                   c: 0,
-                                  d: 0
-                                }
-                              }
+                                  d: 0,
+                                },
+                              },
                             };
                             const updatedIntimidades = [newQuiz, ...intimidades];
                             setIntimidades(updatedIntimidades);
@@ -13701,7 +18206,7 @@ const FrontScreen = ({
                     >
                       <Text style={[
                         styles.publishButtonText,
-                        !((optionTextA && optionTextB && optionTextC && optionTextD && selectedCorrectOption) && ((quizAppliedText.length > 0) || (!!quizImageUri && !isUploadingQuizImage))) && styles.publishButtonTextDisabled
+                        !((optionTextA && optionTextB && optionTextC && optionTextD && selectedCorrectOption) && ((quizAppliedText.length > 0) || (!!quizImageUri && !isUploadingQuizImage))) && styles.publishButtonTextDisabled,
                       ]}>
                         {t('front.incorporate' as TranslationKey)}
                       </Text>
@@ -13813,7 +18318,7 @@ const FrontScreen = ({
                               <Text style={{
                                 color: surveyTextInputValue.length > 0 ? '#FFB74D' : 'rgba(255, 183, 77, 0.5)',
                                 fontWeight: 'bold',
-                                fontSize: 14
+                                fontSize: 14,
                               }}>
                                 {t('common.apply' as TranslationKey)}
                               </Text>
@@ -13911,7 +18416,7 @@ const FrontScreen = ({
                         <MaterialIcons
                           name="add"
                           size={24}
-                          color={surveyOptions.length >= 6 ? "rgba(255, 183, 77, 0.3)" : "#FFB74D"}
+                          color={surveyOptions.length >= 6 ? 'rgba(255, 183, 77, 0.3)' : '#FFB74D'}
                           style={{ marginBottom: 5 }}
                         />
                       </TouchableOpacity>
@@ -13926,7 +18431,7 @@ const FrontScreen = ({
                       <TouchableOpacity
                         style={[
                           styles.publishButton,
-                          !(((surveyAppliedText.length > 0) || (!!surveyImageUri && !isUploadingSurveyImage)) && surveyOptions[0]?.trim().length > 0 && surveyOptions[1]?.trim().length > 0) && styles.publishButtonDisabled
+                          !(((surveyAppliedText.length > 0) || (!!surveyImageUri && !isUploadingSurveyImage)) && surveyOptions[0]?.trim().length > 0 && surveyOptions[1]?.trim().length > 0) && styles.publishButtonDisabled,
                         ]}
                         disabled={!(((surveyAppliedText.length > 0) || (!!surveyImageUri && !isUploadingSurveyImage)) && surveyOptions[0]?.trim().length > 0 && surveyOptions[1]?.trim().length > 0)}
                         activeOpacity={0.7}
@@ -13943,8 +18448,8 @@ const FrontScreen = ({
                                 imageUri: surveyImageUri,
                                 text: (surveyAppliedText || surveyTextInputValue || '').trim(),
                                 userSelection: null,
-                                stats: surveyOptions.filter(opt => opt.trim().length > 0).map(() => 0)
-                              }
+                                stats: surveyOptions.filter(opt => opt.trim().length > 0).map(() => 0),
+                              },
                             };
 
                             const updatedIntimidades = [newSurvey, ...intimidades];
@@ -13964,7 +18469,7 @@ const FrontScreen = ({
                       >
                         <Text style={[
                           styles.publishButtonText,
-                          !(((surveyAppliedText.length > 0) || (!!surveyImageUri && !isUploadingSurveyImage)) && surveyOptions[0]?.trim().length > 0 && surveyOptions[1]?.trim().length > 0) && styles.publishButtonTextDisabled
+                          !(((surveyAppliedText.length > 0) || (!!surveyImageUri && !isUploadingSurveyImage)) && surveyOptions[0]?.trim().length > 0 && surveyOptions[1]?.trim().length > 0) && styles.publishButtonTextDisabled,
                         ]}>
                           {t('front.incorporate' as TranslationKey)}
                         </Text>
@@ -14018,7 +18523,7 @@ const FrontScreen = ({
                     left: 10,
                     zIndex: 10,
                     flexDirection: 'row',
-                    alignItems: 'center'
+                    alignItems: 'center',
                   }}>
                     <TouchableOpacity
                       onPress={() => {
@@ -14037,7 +18542,7 @@ const FrontScreen = ({
                         borderRadius: 20,
                         padding: 8,
                         flexDirection: 'row',
-                        alignItems: 'center'
+                        alignItems: 'center',
                       }}
                     >
                       <MaterialIcons name="arrow-back" size={24} color="#FFB74D" />
@@ -14138,25 +18643,25 @@ const FrontScreen = ({
 
                         allMessages.forEach((m: any) => {
                           const mid = Number(m?.id);
-                          if (Number.isFinite(mid)) messageById[String(mid)] = m;
+                          if (Number.isFinite(mid)) {messageById[String(mid)] = m;}
                         });
 
                         const getThreadRootId = (m: any): number | null => {
                           const startId = Number(m?.id);
-                          if (!Number.isFinite(startId)) return null;
+                          if (!Number.isFinite(startId)) {return null;}
 
                           let current: any = m;
                           // Walk up reply_to_id until we reach a root or missing link.
                           // Guard against cycles with a hard cap.
                           for (let i = 0; i < 25; i++) {
                             const replyTo = current?.reply_to_id ?? current?.replyToId ?? null;
-                            if (replyTo === null || replyTo === undefined || replyTo === '') return Number(current?.id) || startId;
+                            if (replyTo === null || replyTo === undefined || replyTo === '') {return Number(current?.id) || startId;}
 
                             const nextId = Number(replyTo);
-                            if (!Number.isFinite(nextId)) return Number(current?.id) || startId;
+                            if (!Number.isFinite(nextId)) {return Number(current?.id) || startId;}
 
                             const parent = messageById[String(nextId)];
-                            if (!parent) return nextId; // best effort
+                            if (!parent) {return nextId;} // best effort
                             current = parent;
                           }
 
@@ -14170,9 +18675,9 @@ const FrontScreen = ({
                           const hasReplyTo = m?.reply_to_id ?? m?.replyToId ?? null;
                           if (hasReplyTo) {
                             const rootId = getThreadRootId(m);
-                            if (rootId === null) return;
+                            if (rootId === null) {return;}
                             const key = String(rootId);
-                            if (!repliesByRootId[key]) repliesByRootId[key] = [];
+                            if (!repliesByRootId[key]) {repliesByRootId[key] = [];}
                             repliesByRootId[key].push(m);
                           } else {
                             rootMessages.push(m);
@@ -14184,7 +18689,7 @@ const FrontScreen = ({
                           repliesByRootId[k].sort((a: any, b: any) => {
                             const ia = Number(a?.id);
                             const ib = Number(b?.id);
-                            if (Number.isFinite(ia) && Number.isFinite(ib) && ia !== ib) return ia - ib;
+                            if (Number.isFinite(ia) && Number.isFinite(ib) && ia !== ib) {return ia - ib;}
                             return String(a?.created_at ?? '').localeCompare(String(b?.created_at ?? ''));
                           });
                         });
@@ -14193,7 +18698,7 @@ const FrontScreen = ({
                         const activityIdByRoot: Record<string, number> = {};
                         rootMessages.forEach((m: any) => {
                           const rid = Number(m?.id);
-                          if (Number.isFinite(rid)) activityIdByRoot[String(rid)] = rid;
+                          if (Number.isFinite(rid)) {activityIdByRoot[String(rid)] = rid;}
                         });
                         Object.keys(repliesByRootId).forEach((k) => {
                           const base = Number(activityIdByRoot[k] ?? Number(k));
@@ -14209,7 +18714,7 @@ const FrontScreen = ({
                           const kb = String(b?.id ?? '');
                           const ta = activityIdByRoot[ka] ?? Number(a?.id) ?? 0;
                           const tb = activityIdByRoot[kb] ?? Number(b?.id) ?? 0;
-                          if (ta !== tb) return ta - tb;
+                          if (ta !== tb) {return ta - tb;}
                           return ka.localeCompare(kb);
                         });
 
@@ -14312,7 +18817,7 @@ const FrontScreen = ({
                                                 {expandedSocials.map((sn: any, sIdx: number) => {
                                                   const key = ((sn.id || sn.network) || '').toLowerCase();
                                                   const iconSource = SOCIAL_ICONS[key as keyof typeof SOCIAL_ICONS];
-                                                  if (!iconSource || !sn.link) return null;
+                                                  if (!iconSource || !sn.link) {return null;}
                                                   return (
                                                     <TouchableOpacity
                                                       key={`${key}-${sIdx}`}
@@ -14452,8 +18957,8 @@ const FrontScreen = ({
                               {(() => {
                                 const isGroupOwner = !!userEmail && !!selectedGroup?.ownerEmail && String(userEmail) === String(selectedGroup.ownerEmail);
                                 const canReplyHere = (!isMe) || isGroupOwner;
-                                if (!canReplyHere) return null;
-                                if (!Number.isFinite(rootId) || !msgUsername) return null;
+                                if (!canReplyHere) {return null;}
+                                if (!Number.isFinite(rootId) || !msgUsername) {return null;}
 
                                 return (
                                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
@@ -14506,7 +19011,7 @@ const FrontScreen = ({
                   <View
                     onLayout={(e) => {
                       const h = Math.ceil(e.nativeEvent.layout.height);
-                      if (h > 0) setGroupInputBarHeight(prev => (prev === h ? prev : h));
+                      if (h > 0) {setGroupInputBarHeight(prev => (prev === h ? prev : h));}
                     }}
                     style={{
                       position: 'absolute',
@@ -14567,8 +19072,8 @@ const FrontScreen = ({
 
                     {(() => {
                       const isGroupOwner = !!userEmail && !!selectedGroup?.ownerEmail && String(userEmail) === String(selectedGroup.ownerEmail);
-                      if (!isGroupOwner) return null;
-                      if (!showGroupAttachmentPanel) return null;
+                      if (!isGroupOwner) {return null;}
+                      if (!showGroupAttachmentPanel) {return null;}
 
                       return (
                         <View
@@ -14609,7 +19114,7 @@ const FrontScreen = ({
                     }}>
                       {(() => {
                         const isGroupOwner = !!userEmail && !!selectedGroup?.ownerEmail && String(userEmail) === String(selectedGroup.ownerEmail);
-                        if (!isGroupOwner) return null;
+                        if (!isGroupOwner) {return null;}
                         return (
                           <TouchableOpacity
                             activeOpacity={0.85}
@@ -14644,14 +19149,14 @@ const FrontScreen = ({
                       <TouchableOpacity
                         disabled={groupChatInputValue.trim().length === 0 || isSendingGroupMessage}
                         onPress={async () => {
-                          if (isSendingGroupMessage) return;
+                          if (isSendingGroupMessage) {return;}
                           if (!authToken) {
                             Alert.alert(sessionRequiredTitle, t('chat.signInToSendMessages' as TranslationKey));
                             return;
                           }
-                          if (!selectedGroup?.id) return;
+                          if (!selectedGroup?.id) {return;}
                           const trimmed = groupChatInputValue.trim();
-                          if (!trimmed) return;
+                          if (!trimmed) {return;}
 
                           setIsSendingGroupMessage(true);
                           try {
@@ -14702,7 +19207,7 @@ const FrontScreen = ({
                           <MaterialIcons
                             name="send"
                             size={24}
-                            color={groupChatInputValue.trim().length > 0 ? "#FFB74D" : "rgba(255, 255, 255, 0.3)"}
+                            color={groupChatInputValue.trim().length > 0 ? '#FFB74D' : 'rgba(255, 255, 255, 0.3)'}
                           />
                         )}
                       </TouchableOpacity>
@@ -14845,7 +19350,7 @@ const FrontScreen = ({
                       zIndex: 10,
                       flexDirection: 'row',
                       alignItems: 'center',
-                      justifyContent: 'space-between'
+                      justifyContent: 'space-between',
                     }}>
                       <TouchableOpacity
                         onPress={() => {
@@ -14859,7 +19364,7 @@ const FrontScreen = ({
                           borderRadius: 20,
                           padding: 8,
                           flexDirection: 'row',
-                          alignItems: 'center'
+                          alignItems: 'center',
                         }}
                       >
                         <MaterialIcons name="arrow-back" size={24} color="#FFB74D" />
@@ -14930,16 +19435,34 @@ const FrontScreen = ({
                       (() => {
                           const resolveChannelMediaUri = (raw: string) => {
                             const uri = String(raw || '').trim();
-                            if (!uri) return uri;
-                            if (/^(https?:|file:|content:|data:)/i.test(uri)) return uri;
-                            if (uri.startsWith('/api/') || uri.startsWith('/uploads/')) return getServerResourceUrl(uri);
-                            if (uri.startsWith('api/') || uri.startsWith('uploads/')) return getServerResourceUrl(`/${uri}`);
+                            if (!uri) {return uri;}
+                            if (/^(https?:|file:|content:|data:)/i.test(uri)) {return uri;}
+                            if (uri.startsWith('/api/') || uri.startsWith('/uploads/')) {return getServerResourceUrl(uri);}
+                            if (uri.startsWith('api/') || uri.startsWith('uploads/')) {return getServerResourceUrl(`/${uri}`);}
                             return uri;
                           };
 
                           const { messagesToRender, repliesByMessageKey } = channelChatRenderModel;
 
-                          const renderChannelRichContent = (rawText: string, onMentionPress: (m: string) => void) => {
+                          const renderChannelRichContent = (rawText: string, onMentionPress: (m: string) => void, sourceMessage?: any) => {
+                            const parsedEvent = parseChannelEventMessage(rawText.trim());
+                            if (parsedEvent) {
+                              return renderChannelEventMessageCard(parsedEvent, {
+                                onOpenImage: openChannelImageViewer,
+                                message: sourceMessage,
+                                canCompleteRewardedTasks: !!userEmail && !!channelOwnerEmail && String(userEmail) === String(channelOwnerEmail),
+                                onCompleteRewardedTask: handleCompleteChannelEventRewardTask,
+                              });
+                            }
+
+                            const parsedReading = parseChannelReadingMessage(rawText.trim());
+                            if (parsedReading) {
+                              return renderChannelReadingMessageCard(parsedReading, {
+                                onOpenImage: openChannelImageViewer,
+                                message: sourceMessage,
+                              });
+                            }
+
                             const parsedImage = parseChannelImageMessage(rawText.trim());
                             if (parsedImage) {
                               const mediaUri = resolveChannelMediaUri(parsedImage.url);
@@ -14986,8 +19509,27 @@ const FrontScreen = ({
                               lockImage?: boolean;
                               onPressLockedImage?: () => void;
                               onOpenImage?: (mediaUri: string) => void;
-                            }
+                            },
+                            sourceMessage?: any,
                           ) => {
+                            const parsedEvent = parseChannelEventMessage(rawText.trim());
+                            if (parsedEvent) {
+                              return renderChannelEventMessageCard(parsedEvent, {
+                                onOpenImage: options?.onOpenImage || openChannelImageViewer,
+                                message: sourceMessage,
+                                canCompleteRewardedTasks: !!userEmail && !!channelOwnerEmail && String(userEmail) === String(channelOwnerEmail),
+                                onCompleteRewardedTask: handleCompleteChannelEventRewardTask,
+                              });
+                            }
+
+                            const parsedReading = parseChannelReadingMessage(rawText.trim());
+                            if (parsedReading) {
+                              return renderChannelReadingMessageCard(parsedReading, {
+                                onOpenImage: options?.onOpenImage || openChannelImageViewer,
+                                message: sourceMessage,
+                              });
+                            }
+
                             const parsedImage = parseChannelImageMessage(rawText.trim());
                             if (parsedImage) {
                               const mediaUri = resolveChannelMediaUri(parsedImage.url);
@@ -15188,11 +19730,69 @@ const FrontScreen = ({
                             const isOwnerMessage = msg.sender_email === channelOwnerEmail;
                             const isMe = msg.sender_email === userEmail;
                             const messageText = String(typeof msg === 'string' ? msg : (msg?.message ?? ''));
+                            const parsedChannelEventMessage = parseChannelEventMessage(messageText.trim());
+                            const isChannelEventMessage = !!parsedChannelEventMessage;
+                            const parsedChannelReadingMessage = parseChannelReadingMessage(messageText.trim());
+                            const isChannelReadingMessage = !!parsedChannelReadingMessage;
+                            const isViewerInJoinedChannel =
+                              !!selectedChannel &&
+                              !!userEmail &&
+                              !!channelOwnerEmail &&
+                              String(userEmail) !== String(channelOwnerEmail);
+                            const isHostInOwnChannel =
+                              !selectedChannel &&
+                              !!userEmail &&
+                              !!channelOwnerEmail &&
+                              String(userEmail) === String(channelOwnerEmail);
+                            const channelEventHypeCostValue = Math.max(0, Math.floor(Number(parsedChannelEventMessage?.hypeCost ?? parsedChannelReadingMessage?.hypeCost) || 0));
+                            const channelEventHypeCostLabel = channelEventHypeCostValue > 0
+                              ? formatChannelEventIntegerInput(String(channelEventHypeCostValue))
+                              : '';
+                            const channelEventDonationTotalValue = Math.max(0, Math.floor(Number((msg as any)?.channel_event_donation_total) || 0));
+                            const channelEventHypeCounterLabel = formatChannelEventIntegerInput(String(channelEventDonationTotalValue));
+                            const channelEventWhiteKeysBalanceLabel = channelEventWhiteKeysBalance === null
+                              ? '...'
+                              : formatChannelEventIntegerInput(String(Math.max(0, Math.floor(channelEventWhiteKeysBalance))));
+                            const donationPanelTitle = isChannelReadingMessage
+                              ? localize({
+                                es: 'Viraliza esta lectura del canal con tus llaves',
+                                en: 'Boost this channel reading with your keys',
+                                fr: 'Viralise cette lecture du canal avec vos clés',
+                                pt: 'Impulsiona esta leitura do canal com as tuas chaves',
+                                de: 'Verbreite diese Kanal-Lesung mit deinen Schlüsseln',
+                                it: 'Fai crescere questa lettura del canale con le tue chiavi',
+                              })
+                              : localize({
+                                es: 'Viraliza el evento de este canal con tus llaves',
+                                en: 'Boost this channel event with your keys',
+                                fr: 'Viralise cet événement du canal avec vos clés',
+                                pt: 'Impulsiona este evento do canal com as tuas chaves',
+                                de: 'Verbreite dieses Kanal-Event mit deinen Schlüsseln',
+                                it: 'Fai crescere questo evento del canale con le tue chiavi',
+                              });
+                              const viralizeButtonLabel = localize({
+                                es: 'Viralizar',
+                                en: 'Boost',
+                                fr: 'Viraliser',
+                                pt: 'Impulsionar',
+                                de: 'Verbreiten',
+                                it: 'Diffondi',
+                            });
+                            const insufficientDonationBalanceMessage = localize({
+                              es: 'No tienes suficientes llaves para donar',
+                              en: 'You do not have enough keys to donate',
+                              fr: 'Vous n\'avez pas assez de clés pour faire un don',
+                              pt: 'Não tens chaves suficientes para doar',
+                              de: 'Du hast nicht genug Schlüssel zum Spenden',
+                              it: 'Non hai abbastanza chiavi per donare',
+                            });
                             const hasRealUsername = typeof msg !== 'string' && !!msg?.username;
                             const msgUsername = typeof msg === 'string'
                               ? ''
                               : (msg.username ? (msg.username.startsWith('@') ? msg.username : `@${msg.username}`) : `@${msg.sender_email}`);
                             const messageKey = String((msg as any)?.__key ?? msg?.id ?? `idx-${index}`);
+                            const isChannelEventDonationPanelOpen = activeChannelEventDonationPanelKey === messageKey;
+                            const isDonatingThisChannelEvent = donatingChannelEventMessageKey === messageKey;
                             const myReplies = repliesByMessageKey[messageKey] || [];
 
                             const activeChannelPostId = String(
@@ -15203,11 +19803,8 @@ const FrontScreen = ({
                               ''
                             );
 
-                            const isViewerInJoinedChannel =
-                              !!selectedChannel &&
-                              !!userEmail &&
-                              !!channelOwnerEmail &&
-                              String(userEmail) !== String(channelOwnerEmail);
+                            const canOpenChannelEventDonationPanel = isViewerInJoinedChannel;
+                            const canPressChannelEventDonationButton = isViewerInJoinedChannel || isHostInOwnChannel;
 
                             const parsedOwnerImage = (isViewerInJoinedChannel && isOwnerMessage)
                               ? parseChannelImageMessage(messageText.trim())
@@ -15229,6 +19826,7 @@ const FrontScreen = ({
                                 marginBottom: 10,
                                 alignSelf: isMe ? 'flex-end' : 'flex-start',
                                 maxWidth: '80%',
+                                zIndex: isChannelEventDonationPanelOpen ? 30 : 1,
                               }}>
                                 <View style={{
                                   borderRadius: 10,
@@ -15340,7 +19938,7 @@ const FrontScreen = ({
                                                 {expandedSocials.map((sn: any, sIdx: number) => {
                                                   const key = ((sn.id || sn.network) || '').toLowerCase();
                                                   const iconSource = SOCIAL_ICONS[key as keyof typeof SOCIAL_ICONS];
-                                                  if (!iconSource || !sn.link) return null;
+                                                  if (!iconSource || !sn.link) {return null;}
                                                   return (
                                                     <TouchableOpacity
                                                       key={`${key}-${sIdx}`}
@@ -15365,7 +19963,8 @@ const FrontScreen = ({
                                       isOwnerImageLocked ? {
                                         lockImage: true,
                                         onPressLockedImage: () => openChannelImageUnlockAd(ownerImageUnlockKey),
-                                      } : undefined
+                                      } : undefined,
+                                      msg,
                                     )}
                                     </View>
                                     {myReplies.length > 0 && (
@@ -15471,11 +20070,204 @@ const FrontScreen = ({
                                     />
                                   </TouchableOpacity>
                                 )}
+                                {(isChannelEventMessage || isChannelReadingMessage) && channelEventHypeCostValue > 0 && (
+                                  <View
+                                    style={{
+                                      flexDirection: 'row',
+                                      alignItems: 'center',
+                                      justifyContent: 'space-between',
+                                      alignSelf: 'stretch',
+                                      marginTop: 4,
+                                      position: 'relative',
+                                      zIndex: isChannelEventDonationPanelOpen ? 6 : 1,
+                                    }}
+                                  >
+                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                      <MaterialIcons
+                                        name="whatshot"
+                                        size={20}
+                                        color="#FFFFFF"
+                                      />
+                                      <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '700', marginLeft: 6 }}>
+                                        {channelEventHypeCounterLabel}
+                                      </Text>
+                                    </View>
+                                    <View style={{ alignItems: 'flex-end', position: 'relative' }}>
+                                      <TouchableOpacity
+                                        activeOpacity={canPressChannelEventDonationButton ? 0.8 : 1}
+                                        disabled={!canPressChannelEventDonationButton}
+                                        onPress={() => {
+                                          if (isHostInOwnChannel) {
+                                            showHostOnlyChannelHypeToast(isChannelReadingMessage ? 'reading' : 'event');
+                                            return;
+                                          }
+                                          if (!canOpenChannelEventDonationPanel) {return;}
+                                          setActiveChannelEventDonationPanelKey(previousValue => (
+                                            previousValue === messageKey ? null : messageKey
+                                          ));
+                                          setChannelEventDonationErrorMessage('');
+                                        }}
+                                        style={{ borderRadius: 12, overflow: 'hidden' }}
+                                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                      >
+                                        <View style={{ borderRadius: 12, position: 'relative', padding: 1.2 }}>
+                                          <MeasuredSvgGradientBorder
+                                            gradientId={`channel_event_cost_trigger_grad_${index}`}
+                                            colors={['#FFB74D', '#ffe45c']}
+                                            borderRadius={12}
+                                            strokeWidth={1.4}
+                                          />
+                                          <View
+                                            style={{
+                                              flexDirection: 'row',
+                                              alignItems: 'center',
+                                              borderRadius: 11,
+                                              backgroundColor: 'transparent',
+                                              paddingHorizontal: 9,
+                                              paddingVertical: 5,
+                                            }}
+                                          >
+                                            <MaterialCommunityIcons
+                                              name="key-outline"
+                                              size={18}
+                                              color="#FFFFFF"
+                                            />
+                                            <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '700', marginLeft: 6 }}>
+                                              {channelEventHypeCostLabel}
+                                            </Text>
+                                          </View>
+                                        </View>
+                                      </TouchableOpacity>
+                                      {canOpenChannelEventDonationPanel && isChannelEventDonationPanelOpen ? (
+                                        <View
+                                          style={{
+                                            position: 'absolute',
+                                            bottom: 28,
+                                            right: 0,
+                                            zIndex: 8,
+                                            alignItems: 'center',
+                                          }}
+                                        >
+                                          <View
+                                            style={{
+                                              width: 170,
+                                              paddingHorizontal: 12,
+                                              paddingVertical: 10,
+                                              borderRadius: 14,
+                                              backgroundColor: 'rgba(10,10,10,0.97)',
+                                              borderWidth: 1,
+                                              borderColor: 'rgba(255,255,255,0.12)',
+                                              elevation: 8,
+                                            }}
+                                          >
+                                            <Text
+                                              style={{
+                                                color: '#FFFFFF',
+                                                fontSize: 12,
+                                                fontWeight: '400',
+                                                textAlign: 'center',
+                                                marginBottom: 10,
+                                              }}
+                                            >
+                                              {donationPanelTitle}
+                                            </Text>
+                                            <TouchableOpacity
+                                              activeOpacity={isDonatingThisChannelEvent ? 1 : 0.8}
+                                              disabled={isDonatingThisChannelEvent}
+                                              onPress={() => {
+                                                const numericMessageId = Number((msg as any)?.id);
+                                                if (!Number.isFinite(numericMessageId) || numericMessageId <= 0) {return;}
+                                                handleDonateChannelEvent({
+                                                  messageId: numericMessageId,
+                                                  messageKey,
+                                                  donationAmount: channelEventHypeCostValue,
+                                                });
+                                              }}
+                                              style={{
+                                                minHeight: 58,
+                                                borderRadius: 12,
+                                                overflow: 'hidden',
+                                              }}
+                                            >
+                                              <View style={{ flex: 1, borderRadius: 12, position: 'relative', padding: 1.5 }}>
+                                                <MeasuredSvgGradientBorder
+                                                  gradientId={`channel_event_donate_button_grad_${index}`}
+                                                  colors={['#FFB74D', '#ffe45c']}
+                                                  borderRadius={12}
+                                                  strokeWidth={1.6}
+                                                />
+                                                <View
+                                                  style={{
+                                                    flex: 1,
+                                                    minHeight: 55,
+                                                    borderRadius: 11,
+                                                    backgroundColor: '#000000',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    paddingVertical: 8,
+                                                    paddingHorizontal: 10,
+                                                  }}
+                                                >
+                                                  {isDonatingThisChannelEvent ? (
+                                                    <ActivityIndicator size="small" color="#FFFFFF" style={{ marginBottom: 5 }} />
+                                                  ) : null}
+                                                  <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: '800', marginBottom: 5 }}>
+                                                    {viralizeButtonLabel}
+                                                  </Text>
+                                                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                                                    <MaterialCommunityIcons
+                                                      name="key-outline"
+                                                      size={16}
+                                                      color="#FFFFFF"
+                                                    />
+                                                    <Text style={{ color: 'rgba(255,255,255,0.88)', fontSize: 12, marginLeft: 6 }}>
+                                                      {channelEventHypeCostLabel}
+                                                    </Text>
+                                                  </View>
+                                                </View>
+                                              </View>
+                                            </TouchableOpacity>
+                                            {channelEventDonationErrorMessage === insufficientDonationBalanceMessage ? (
+                                              <Text
+                                                style={{
+                                                  color: '#FFB74D',
+                                                  fontSize: 11,
+                                                  fontWeight: '400',
+                                                  textAlign: 'center',
+                                                  marginTop: 8,
+                                                }}
+                                              >
+                                                {channelEventDonationErrorMessage}
+                                              </Text>
+                                            ) : null}
+                                            <View
+                                              style={{
+                                                marginTop: 8,
+                                                flexDirection: 'row',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                              }}
+                                            >
+                                              <MaterialCommunityIcons
+                                                name="key-outline"
+                                                size={14}
+                                                color="#FFFFFF"
+                                              />
+                                              <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '400', marginLeft: 6 }}>
+                                                {channelEventWhiteKeysBalanceLabel}
+                                              </Text>
+                                            </View>
+                                          </View>
+                                        </View>
+                                      ) : null}
+                                    </View>
+                                  </View>
+                                )}
                                 {/* Botón Responder para el viewer en un canal unido — solo activo si la última respuesta del hilo es del publisher */}
                                 {isMe && !!selectedChannel && (() => {
                                   const lastReply = myReplies.length > 0 ? myReplies[myReplies.length - 1] : null;
                                   const canReply = !!lastReply && lastReply.author === 'publisher';
-                                  if (!canReply) return null;
+                                  if (!canReply) {return null;}
                                   return (
                                     <TouchableOpacity
                                       onPress={() => {
@@ -15497,7 +20289,7 @@ const FrontScreen = ({
                                   );
                                 })()}
                               </View>
-                            )
+                            );
                           }}
                             />
                             </View>
@@ -15551,6 +20343,9 @@ const FrontScreen = ({
                               const safeChatGradientSuffix = hashString(`joined-chat-icon:${channelKey}`);
                               const CHAT_GRADIENT_ID = `joined_chat_icon_grad_${safeChatGradientSuffix}`;
                               const CHAT_RING_GRADIENT_ID = `joined_chat_icon_ring_grad_${safeChatGradientSuffix}`;
+                              const UNREAD_BADGE_GRADIENT_ID = `joined_chat_unread_badge_grad_${safeChatGradientSuffix}`;
+                              const unreadBadgeDiameter = unreadRepliesCount > 99 ? 30 : 26;
+                              const unreadBadgeRadius = unreadBadgeDiameter / 2;
 
                               return (
                                 <View
@@ -15563,7 +20358,7 @@ const FrontScreen = ({
                                     paddingBottom: 10,
                                     marginBottom: 15,
                                     borderWidth: 1,
-                                    borderColor: '#ffbe73ff'
+                                    borderColor: '#ffbe73ff',
                                   }}
                                 >
                                   {unreadRepliesCount > 0 && (
@@ -15573,18 +20368,44 @@ const FrontScreen = ({
                                         position: 'absolute',
                                         top: -10,
                                         right: -10,
-                                        minWidth: 24,
-                                        height: 24,
-                                        borderRadius: 12,
-                                        paddingHorizontal: 6,
-                                        backgroundColor: 'rgba(255,255,255,0.8)',
+                                        width: unreadBadgeDiameter,
+                                        height: unreadBadgeDiameter,
+                                        borderRadius: unreadBadgeRadius,
                                         alignItems: 'center',
                                         justifyContent: 'center',
                                         zIndex: 250,
                                         elevation: 18,
                                       }}
                                     >
-                                      <Text style={{ color: '#000000', fontSize: 12, fontWeight: '900' }}>
+                                      <Svg
+                                        pointerEvents="none"
+                                        width={unreadBadgeDiameter}
+                                        height={unreadBadgeDiameter}
+                                        viewBox={`0 0 ${unreadBadgeDiameter} ${unreadBadgeDiameter}`}
+                                        style={{ position: 'absolute' }}
+                                      >
+                                        <Defs>
+                                          <LinearGradient id={UNREAD_BADGE_GRADIENT_ID} x1="0" y1="0" x2="1" y2="0">
+                                            <Stop offset="0" stopColor="#FFB74D" stopOpacity="1" />
+                                            <Stop offset="1" stopColor="#FFF176" stopOpacity="1" />
+                                          </LinearGradient>
+                                        </Defs>
+                                        <Circle
+                                          cx={unreadBadgeRadius}
+                                          cy={unreadBadgeRadius}
+                                          r={unreadBadgeRadius - 0.75}
+                                          fill="none"
+                                          stroke={`url(#${UNREAD_BADGE_GRADIENT_ID})`}
+                                          strokeWidth="1.5"
+                                        />
+                                        <Circle
+                                          cx={unreadBadgeRadius}
+                                          cy={unreadBadgeRadius}
+                                          r={unreadBadgeRadius - 2}
+                                          fill="rgba(0, 0, 0, 0.6)"
+                                        />
+                                      </Svg>
+                                      <Text style={{ color: '#FFFFFF', fontSize: unreadRepliesCount > 99 ? 9 : 12, fontWeight: '900' }}>
                                         {unreadRepliesCount > 99 ? '99+' : unreadRepliesCount}
                                       </Text>
                                     </View>
@@ -15823,7 +20644,7 @@ const FrontScreen = ({
                     <View
                       onLayout={(e) => {
                         const h = Math.ceil(e.nativeEvent.layout.height);
-                        if (h > 0) setChannelInputBarHeight(prev => (prev === h ? prev : h));
+                        if (h > 0) {setChannelInputBarHeight(prev => (prev === h ? prev : h));}
                       }}
                       style={{
                         position: 'absolute',
@@ -15931,8 +20752,8 @@ const FrontScreen = ({
                           const isViewer = !!userEmail && !!channelOwnerEmail && userEmail !== channelOwnerEmail;
 
                           const viewerTurnMustWait = (() => {
-                            if (expired) return false;
-                            if (!isViewer) return false;
+                            if (expired) {return false;}
+                            if (!isViewer) {return false;}
 
                             const myHandle = username
                               ? (String(username).trim().startsWith('@') ? String(username).trim() : `@${String(username).trim()}`)
@@ -15947,18 +20768,18 @@ const FrontScreen = ({
                             const lastMy = [...chatMessages]
                               .reverse()
                               .find((m: any) => String(m?.sender_email ?? '') === String(userEmail));
-                            if (!lastMy?.id) return false; // nunca has enviado
+                            if (!lastMy?.id) {return false;} // nunca has enviado
 
                             const lastMyId = toMsgId(lastMy);
-                            if (!Number.isFinite(lastMyId)) return false;
+                            if (!Number.isFinite(lastMyId)) {return false;}
 
                             const hasPublisherReplyAfter = chatMessages.some((m: any) => {
-                              if (String(m?.sender_email ?? '') !== String(channelOwnerEmail)) return false;
+                              if (String(m?.sender_email ?? '') !== String(channelOwnerEmail)) {return false;}
                               const mid = toMsgId(m);
-                              if (!Number.isFinite(mid) || mid <= lastMyId) return false;
+                              if (!Number.isFinite(mid) || mid <= lastMyId) {return false;}
                               const text = String(m?.message ?? '').trim();
-                              if (myHandle && text.startsWith(`${myHandle} `)) return true;
-                              if (myEmailHandle && text.startsWith(`${myEmailHandle} `)) return true;
+                              if (myHandle && text.startsWith(`${myHandle} `)) {return true;}
+                              if (myEmailHandle && text.startsWith(`${myEmailHandle} `)) {return true;}
                               return false;
                             });
 
@@ -15981,7 +20802,7 @@ const FrontScreen = ({
                                 borderRadius: 20,
                                 paddingRight: 10,
                                 marginBottom: 0,
-                                position: 'relative'
+                                position: 'relative',
                               }}>
                                 {(channelTab === 'Tu canal' && userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) && showChannelAttachmentPanel && (
                                   <View
@@ -16002,6 +20823,23 @@ const FrontScreen = ({
                                     <TouchableOpacity activeOpacity={0.8} onPress={handlePickChannelImage}>
                                       <MaterialIcons name="image" size={22} color="#FFB74D" />
                                     </TouchableOpacity>
+                                    <View style={{ width: 14 }} />
+                                    <TouchableOpacity
+                                      activeOpacity={0.8}
+                                      onPress={() => {
+                                        setShowChannelAttachmentPanel(false);
+                                        setShowChannelEventPanel(true);
+                                      }}
+                                    >
+                                      <MaterialIcons name="event" size={22} color="#FFB74D" />
+                                    </TouchableOpacity>
+                                    <View style={{ width: 14 }} />
+                                    <TouchableOpacity
+                                      activeOpacity={0.8}
+                                      onPress={handleOpenChannelReading}
+                                    >
+                                      <MaterialCommunityIcons name="book-open-page-variant" size={22} color="#FFB74D" />
+                                    </TouchableOpacity>
                                   </View>
                                 )}
 
@@ -16017,7 +20855,7 @@ const FrontScreen = ({
                                     alignItems: 'center',
                                     backgroundColor: 'rgba(50,50,50,0.95)',
                                     borderRadius: 20,
-                                    zIndex: 10
+                                    zIndex: 10,
                                   }}>
                                     <Text style={{ color: '#FFFFFF', fontSize: 12, textAlign: 'center' }}>
                                       {formatHostLimitedInteractions(hostLimitWarning || 'usuario')}
@@ -16070,9 +20908,9 @@ const FrontScreen = ({
                                     isSendingChannelMessage
                                   }
                                   onPress={async () => {
-                                    if (isSendingChannelMessage) return;
+                                    if (isSendingChannelMessage) {return;}
                                     const trimmed = chatInputValue.trim();
-                                    if (!trimmed) return;
+                                    if (!trimmed) {return;}
 
                                     setIsSendingChannelMessage(true);
                                     try {
@@ -16082,12 +20920,12 @@ const FrontScreen = ({
                                         method: 'POST',
                                         headers: {
                                           'Content-Type': 'application/json',
-                                          'Authorization': `Bearer ${authToken}`
+                                          'Authorization': `Bearer ${authToken}`,
                                         },
                                         body: JSON.stringify({
                                           postId: targetPostId,
-                                          message: finalMessage
-                                        })
+                                          message: finalMessage,
+                                        }),
                                       });
                                       if (response.ok) {
                                         const newMessage = await response.json();
@@ -16152,7 +20990,7 @@ const FrontScreen = ({
                                     <MaterialIcons
                                       name="send"
                                       size={24}
-                                      color={(!expired && chatInputValue.length > 0) ? "#FFB74D" : "rgba(255, 255, 255, 0.3)"}
+                                      color={(!expired && chatInputValue.length > 0) ? '#FFB74D' : 'rgba(255, 255, 255, 0.3)'}
                                     />
                                   )}
                                 </TouchableOpacity>
@@ -16177,7 +21015,7 @@ const FrontScreen = ({
                                 <TouchableOpacity
                                   activeOpacity={0.85}
                                   onPress={() => {
-                                    setChannelMessagesTab(prev => prev === 'General' ? 'Respuestas' : 'General');
+                                    setChannelMessagesTab(prev => getNextChannelMessagesTab(prev));
                                     setReplyingToMessageIndex(null);
                                     setReplyingToUsername(null);
                                     setExpandedMention(null);
@@ -16185,9 +21023,16 @@ const FrontScreen = ({
                                   style={{ paddingHorizontal: 8, paddingVertical: 2, alignItems: 'center' }}
                                 >
                                   {(() => {
-                                    const currentTabLabel = channelMessagesTab === 'General'
-                                      ? t('chat.generalTab' as TranslationKey)
-                                      : t('chat.yourThreadsTab' as TranslationKey);
+                                    const currentTabLabelKey = channelMessagesTab === 'General'
+                                      ? 'chat.generalTab'
+                                      : channelMessagesTab === 'Hilos'
+                                        ? 'chat.yourThreadsTab'
+                                        : channelMessagesTab === 'Eventos'
+                                          ? 'chat.eventsTab'
+                                          : channelMessagesTab === 'Lecturas'
+                                            ? 'chat.readingsTab'
+                                            : 'chat.imagesTab';
+                                    const currentTabLabel = t(currentTabLabelKey as TranslationKey);
                                     const indicatorWidth = Math.max(26, Math.min(120, currentTabLabel.length * 7));
 
                                     return (
@@ -16312,47 +21157,12 @@ const FrontScreen = ({
                                     <MaterialIcons
                                       name="send"
                                       size={26}
-                                      color={channelDraftImageUri ? "#FFB74D" : "rgba(255,255,255,0.3)"}
+                                      color={channelDraftImageUri ? '#FFB74D' : 'rgba(255,255,255,0.3)'}
                                     />
                                   )}
                                 </TouchableOpacity>
                               </View>
                             </KeyboardAvoidingView>
-                          </View>
-                        </Modal>
-
-                        <Modal
-                          visible={showChannelImageViewer}
-                          transparent={false}
-                          animationType="fade"
-                          onRequestClose={closeChannelImageViewer}
-                        >
-                          <View style={{ flex: 1, backgroundColor: '#000' }}>
-                            <View
-                              style={{
-                                height: 56,
-                                paddingHorizontal: 12,
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                backgroundColor: '#000',
-                              }}
-                            >
-                              <TouchableOpacity onPress={closeChannelImageViewer} style={{ padding: 8 }}>
-                                <MaterialIcons name="arrow-back" size={24} color="#FFF" />
-                              </TouchableOpacity>
-                              <View style={{ width: 36, height: 36 }} />
-                            </View>
-
-                            <View style={{ flex: 1, backgroundColor: '#000' }}>
-                              {!!channelImageViewerUri && (
-                                <Image
-                                  source={{ uri: channelImageViewerUri }}
-                                  style={{ flex: 1, width: '100%' }}
-                                  resizeMode="contain"
-                                />
-                              )}
-                            </View>
                           </View>
                         </Modal>
 
@@ -16402,7 +21212,7 @@ const FrontScreen = ({
                               width: '90%',
                               borderWidth: 1,
                               borderColor: '#333',
-                              position: 'relative'
+                              position: 'relative',
                             }}
                           >
                             <TouchableOpacity
@@ -16723,198 +21533,10 @@ const FrontScreen = ({
         }
 
         {/* Pantalla Notificaciones */}
-        {activeBottomTab === 'notifications' && (
-          <View style={{ flex: 1, backgroundColor: '#000000' }}>
-            <View
-              style={[
-                styles.header,
-                {
-                  paddingTop: ANDROID_STATUS_BAR_HEIGHT,
-                  height: 56 + ANDROID_STATUS_BAR_HEIGHT,
-                  alignItems: 'flex-end',
-                },
-              ]}
-            >
-              <TouchableOpacity
-                style={styles.backButton}
-                onPress={() => setActiveBottomTab('profile')}
-                activeOpacity={0.7}
-              >
-                <MaterialIcons name="arrow-back" size={24} color="#FFFFFF" />
-              </TouchableOpacity>
-              <Text style={styles.title}>{t('common.notifications' as TranslationKey)}</Text>
-              <View style={styles.headerRightSpacer}>
-                {unreadNotificationsCount > 0 && (
-                  <View
-                    style={{
-                      minWidth: 22,
-                      height: 22,
-                      paddingHorizontal: 6,
-                      borderRadius: 11,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: '#ffffff38',
-                    }}
-                  >
-                    <Text style={{ color: '#ffffffff', fontSize: 11, fontWeight: 'bold' }}>
-                      {unreadNotificationsCount}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            </View>
-
-            <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 20, paddingBottom: 30 }}>
-              {isLoadingNotifications ? (
-                <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-                  <Text style={{ color: 'rgba(255, 255, 255, 0.6)' }}>Cargando...</Text>
-                </View>
-              ) : (
-                (() => {
-                  const pending = notifications.filter(n => n.type === 'group_join_request' && n.status === 'pending');
-                  if (pending.length === 0) {
-                    return (
-                      <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-                        <Text style={{ color: 'rgba(255, 255, 255, 0.6)' }}>{t('notifications.empty' as TranslationKey)}</Text>
-                      </View>
-                    );
-                  }
-
-                  return pending.map(n => {
-                    const isRead = !!readNotificationIds[n.id];
-                    const gradientId = `notif_border_${n.id}`;
-
-                    const handleMarkRead = () => markNotificationAsRead(n.id);
-
-                    const cardContent = (
-                      <>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                          <Text style={{ color: 'rgba(255, 255, 255, 0.6)', fontSize: 12 }}>
-                            {formatRemainingTimeForDisplay(
-                              getRemainingTime((n.postCreatedAt ?? n.createdAt) as any),
-                              language,
-                              t as any
-                            )}
-                          </Text>
-                          <Text
-                            style={{
-                              color: isRead ? 'rgba(255, 255, 255, 0.6)' : '#FFB74D',
-                              fontSize: 12,
-                              fontWeight: '600',
-                            }}
-                          >
-                            {isRead ? t('notifications.read') : t('notifications.unread')}
-                          </Text>
-                        </View>
-
-                        <Text style={{ color: '#FFFFFF', fontSize: 13, lineHeight: 18, marginBottom: 12 }}>
-                          {formatTemplate(
-                            t('notifications.groupJoinRequestMessage' as TranslationKey),
-                            { user: String(n.requesterUsername ?? ''), group: String(n.groupHashtag ?? '') }
-                          )}
-                        </Text>
-
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 10 }}>
-                          <TouchableOpacity
-                            activeOpacity={0.8}
-                            onPress={() => {
-                              handleMarkRead();
-                              respondToGroupJoinRequest(n, 'ignore');
-                            }}
-                            style={{
-                              flex: 1,
-                              paddingVertical: 10,
-                              borderRadius: 10,
-                              alignItems: 'center',
-                              borderWidth: 1,
-                              borderColor: '#FFB74D',
-                              backgroundColor: 'transparent',
-                            }}
-                          >
-                            <Text style={{ color: '#FFB74D', fontWeight: 'bold' }}>{t('notifications.ignore' as TranslationKey)}</Text>
-                          </TouchableOpacity>
-
-                          <TouchableOpacity
-                            activeOpacity={0.8}
-                            onPress={() => {
-                              handleMarkRead();
-                              respondToGroupJoinRequest(n, 'accept');
-                            }}
-                            style={{
-                              flex: 1,
-                              paddingVertical: 10,
-                              borderRadius: 10,
-                              alignItems: 'center',
-                              backgroundColor: '#FFB74D',
-                            }}
-                          >
-                            <Text style={{ color: '#000000', fontWeight: 'bold' }}>{t('notifications.accept' as TranslationKey)}</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </>
-                    );
-
-                    if (isRead) {
-                      return (
-                        <TouchableOpacity
-                          key={n.id}
-                          activeOpacity={1}
-                          onPress={handleMarkRead}
-                          style={{ marginBottom: 12 }}
-                        >
-                          <View
-                            style={{
-                              backgroundColor: '#1E1E1E',
-                              borderRadius: 12,
-                              padding: 14,
-                              borderWidth: 1,
-                              borderColor: '#333',
-                            }}
-                          >
-                            {cardContent}
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    }
-
-                    return (
-                      <TouchableOpacity
-                        key={n.id}
-                        activeOpacity={0.95}
-                        onPress={handleMarkRead}
-                        style={{ marginBottom: 12 }}
-                      >
-                        <View
-                          style={{
-                            backgroundColor: '#1E1E1E',
-                            borderRadius: 12,
-                            padding: 14,
-                            overflow: 'hidden',
-                            position: 'relative',
-                          }}
-                        >
-                          <MeasuredSvgGradientBorder
-                            gradientId={gradientId}
-                            colors={['#FF9800', '#FFEB3B']}
-                            borderRadius={12}
-                            strokeWidth={2}
-                          />
-
-                          {cardContent}
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  });
-                })()
-              )}
-            </ScrollView>
-          </View>
-        )
-        }
-      </Reanimated.View>
+      </View>
 
       {/* Barra de navegación inferior */}
-      {activeBottomTab !== 'notifications' && !isKeyboardVisible && isMainBottomTab(activeBottomTab) && (
+      {!isKeyboardVisible && !expandedChannelReading && isMainBottomTab(activeBottomTab) && (
         <BottomNavigationBar
           activeTab={activeBottomTab as MainBottomTab}
           bottomInset={bottomSystemOffset}
@@ -16998,7 +21620,7 @@ const FrontScreen = ({
                   {(() => {
                     const key = String(viewingProfileRing.linkNetwork || '').trim();
                     const source = (SOCIAL_ICONS as any)[key];
-                    if (!source) return null;
+                    if (!source) {return null;}
                     return (
                       <Image
                         source={source}
@@ -17030,7 +21652,7 @@ const FrontScreen = ({
               </View>
             )}
           </ScrollView>
-          {(viewingProfileRingSource === 'home' || activeBottomTab === 'home') && adsSdkReady && (
+          {(viewingProfileRingSource === 'home' || isHomeFeedTabActive) && adsSdkReady && (
             <View
               collapsable={false}
               style={[
@@ -17204,7 +21826,7 @@ const FrontScreen = ({
                   {!!(profileRingLinkNetworkDraft && profileRingLinkUrlDraft) && !isProfileRingLinkExpanded && (() => {
                     const key = String(profileRingLinkNetworkDraft || '').trim();
                     const url = String(profileRingLinkUrlDraft || '').trim();
-                    if (!key || !url) return null;
+                    if (!key || !url) {return null;}
                     const source = (SOCIAL_ICONS as any)[key];
 
                     return (
@@ -17522,14 +22144,14 @@ const FrontScreen = ({
         transparent
         animationType="fade"
         onRequestClose={() => {
-          if (isDeletingGroup) return;
+          if (isDeletingGroup) {return;}
           setShowDeleteGroupModal(false);
           setPendingDeleteGroup(null);
         }}
       >
         <TouchableWithoutFeedback
           onPress={() => {
-            if (isDeletingGroup) return;
+            if (isDeletingGroup) {return;}
             setShowDeleteGroupModal(false);
             setPendingDeleteGroup(null);
           }}
@@ -17572,6 +22194,1186 @@ const FrontScreen = ({
         </TouchableWithoutFeedback>
       </Modal>
 
+      <Modal
+        visible={showChannelEventPanel && !isChannelEventPanelMinimized}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setShowChannelEventPanel(false);
+          setIsChannelEventPanelMinimized(false);
+        }}
+      >
+        <View style={styles.channelEventModalOverlay}>
+          {/* Dismiss layer behind the card */}
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => {
+              if (showChannelEventHypeCostInfo) {
+                setShowChannelEventHypeCostInfo(false);
+                return;
+              }
+              setShowChannelEventPanel(false);
+              setIsChannelEventPanelMinimized(false);
+            }}
+          />
+          <View style={styles.channelEventModalCard}>
+            {showChannelEventHypeCostInfo ? (
+              <Pressable
+                style={styles.channelEventInfoBackdrop}
+                onPress={() => setShowChannelEventHypeCostInfo(false)}
+              />
+            ) : null}
+            <View style={styles.channelEventPanelTopActions}>
+              <View style={styles.channelEventWhiteKeysBadge}>
+                <Text style={styles.channelEventWhiteKeysBadgeText}>
+                  {channelEventWhiteKeysBalance === null ? '...' : channelEventWhiteKeysBalance}
+                </Text>
+                <MaterialCommunityIcons name="key-outline" size={16} color="#FFFFFF" />
+              </View>
+              <TouchableOpacity
+                activeOpacity={0.75}
+                onPress={() => {
+                  setShowChannelEventHypeCostInfo(false);
+                  setIsChannelEventPanelMinimized(true);
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={styles.channelEventPanelMinimizeButton}
+              >
+                <MaterialIcons name="minimize" size={18} color="rgba(255,255,255,0.78)" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView
+              ref={channelEventPanelScrollRef}
+              style={styles.channelEventScrollView}
+              contentContainerStyle={styles.channelEventScrollContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+              bounces={false}
+            >
+              <View style={styles.channelEventToggleRow}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    setChannelEventTasksEnabled(prev => {
+                      const next = !prev;
+                      if (next) {
+                        setChannelEventAssignTaskEnabled(true);
+                      } else {
+                        setChannelEventAssignTaskEnabled(false);
+                        setChannelEventRewardTaskEnabled(false);
+                      }
+                      return next;
+                    });
+                  }}
+                  style={styles.channelEventTogglePressable}
+                >
+                  <ChannelEventToggleDot
+                    active={channelEventTasksEnabled}
+                    gradientId="channel_event_tasks_toggle_grad"
+                  />
+                </TouchableOpacity>
+                <Text style={styles.channelEventPrimaryText}>{t('event.enableTasks' as TranslationKey)}</Text>
+              </View>
+
+              {channelEventTasksEnabled ? (
+                <>
+                  {channelEventTaskDescriptions.map((taskDescription, index) => {
+                    const taskAssigneeInput = String(channelEventTaskAssigneeInputs[index] ?? '');
+                    const taskAssigneeError = String(channelEventTaskAssigneeErrors[index] ?? '');
+                    const taskAssignments = channelEventTaskAssignments[index] ?? [];
+                    const taskRewardInput = String(channelEventTaskRewardInputs[index] ?? '');
+                    const hasTaskDescription = taskDescription.trim().length > 0;
+                    const taskRewardValue = Number.parseInt(channelEventTaskRewardValues[index] ?? '0', 10) || 0;
+                    const canAddMoreAssignees = taskAssignments.length < 1;
+                    const canVerifyAssignee = hasTaskDescription && !!taskAssigneeInput.trim() && canAddMoreAssignees;
+                    const taskAssigneeSuggestions = !hasTaskDescription || !canAddMoreAssignees || !taskAssigneeInput.trim()
+                      ? []
+                      : channelEventJoinedUsers
+                        .filter(joinedUser => joinedUser.username.toLowerCase().startsWith(taskAssigneeInput.trim().toLowerCase()))
+                        .filter(joinedUser => !taskAssignments.some(assignment => assignment.username.toLowerCase() === joinedUser.username.toLowerCase()))
+                        .slice(0, 6);
+                    const showTaskRewardError = !!channelEventRewardValidationError && !!taskRewardInput.trim();
+                    const showTaskRewardMissingError = channelEventRewardTaskEnabled && hasTaskDescription && taskRewardValue < 1;
+
+                    return (
+                      <React.Fragment key={`channel-event-task-${index}`}>
+                        <ChannelEventField
+                          label={t('event.describeTask' as TranslationKey)}
+                          value={taskDescription}
+                          onChangeText={text => handleChannelEventTaskDescriptionChange(index, text)}
+                          maxLength={280}
+                          multiline
+                          style={styles.channelEventTaskField}
+                        />
+                        {channelEventAssignTaskEnabled ? (
+                          <>
+                            <View style={styles.channelEventTaskDetailRow}>
+                              <ChannelEventField
+                                label={t('event.userPlaceholder' as TranslationKey)}
+                                value={taskAssigneeInput}
+                                onChangeText={text => handleChannelEventTaskAssigneeInputChange(index, text)}
+                                maxLength={40}
+                                autoCapitalize="none"
+                                autoCorrect={false}
+                                disabled={!hasTaskDescription || !canAddMoreAssignees}
+                                style={styles.channelEventTaskAssigneeField}
+                                trailingContent={(
+                                  <TouchableOpacity
+                                    activeOpacity={canVerifyAssignee ? 0.8 : 1}
+                                    disabled={!canVerifyAssignee}
+                                    onPress={() => handleVerifyChannelEventTaskAssignee(index)}
+                                    style={styles.channelEventTaskAssigneeVerifyButton}
+                                  >
+                                    <MaterialIcons
+                                      name={
+                                        !hasTaskDescription || !taskAssigneeInput.trim()
+                                          ? 'check-circle-outline'
+                                          : taskAssigneeError
+                                            ? 'error-outline'
+                                            : 'check-circle'
+                                      }
+                                      size={20}
+                                      color={
+                                        !hasTaskDescription || !taskAssigneeInput.trim()
+                                          ? 'rgba(255,255,255,0.24)'
+                                          : taskAssigneeError
+                                            ? '#D84315'
+                                            : '#FFB74D'
+                                      }
+                                    />
+                                  </TouchableOpacity>
+                                )}
+                              />
+                              {channelEventRewardTaskEnabled ? (
+                                <ChannelEventField
+                                  label={t('event.amount' as TranslationKey)}
+                                  value={taskRewardInput}
+                                  onChangeText={text => handleChannelEventTaskRewardInputChange(index, text)}
+                                  maxLength={8}
+                                  keyboardType="numeric"
+                                  autoCapitalize="none"
+                                  autoCorrect={false}
+                                  style={[
+                                    styles.channelEventTaskRewardField,
+                                    showTaskRewardError ? styles.channelEventFieldError : null,
+                                  ]}
+                                  trailingContent={(
+                                    <MaterialCommunityIcons name="key-outline" size={17} color="#FFFFFF" />
+                                  )}
+                                />
+                              ) : null}
+                            </View>
+
+                            {taskAssigneeSuggestions.length > 0 ? (
+                              <View style={styles.channelEventTaskAssigneeSuggestionsCard}>
+                                {taskAssigneeSuggestions.map(suggestion => (
+                                  <TouchableOpacity
+                                    key={`${index}-${suggestion.username}`}
+                                    activeOpacity={0.8}
+                                    onPress={() => handleSelectChannelEventTaskAssigneeSuggestion(index, suggestion)}
+                                    style={styles.channelEventTaskAssigneeSuggestionRow}
+                                  >
+                                    <MaterialIcons name="person-outline" size={16} color="rgba(255,183,77,0.92)" />
+                                    <Text style={styles.channelEventTaskAssigneeSuggestionText}>{suggestion.username}</Text>
+                                  </TouchableOpacity>
+                                ))}
+                              </View>
+                            ) : null}
+
+                            {channelEventRewardTaskEnabled && showTaskRewardError ? (
+                              <Text style={styles.channelEventTaskRewardErrorText}>{channelEventRewardValidationError}</Text>
+                            ) : null}
+
+                            {channelEventRewardTaskEnabled && showTaskRewardMissingError ? (
+                              <Text style={styles.channelEventTaskRewardErrorText}>{localize({
+                                es: 'Introduce una cantidad para esta tarea.',
+                                en: 'Enter an amount for this task.',
+                                fr: 'Saisis un montant pour cette tache.',
+                                pt: 'Introduz uma quantidade para esta tarefa.',
+                                de: 'Gib einen Betrag fuer diese Aufgabe ein.',
+                                it: 'Inserisci una quantita per questa attivita.',
+                              })}</Text>
+                            ) : null}
+
+                            {taskAssigneeError ? (
+                              <Text style={styles.channelEventTaskAssigneeErrorText}>{taskAssigneeError}</Text>
+                            ) : null}
+
+                            {hasTaskDescription && taskAssignments.length === 0 ? (
+                              <Text style={styles.channelEventTaskAssigneeErrorText}>{localize({
+                                es: 'Asigna la tarea a un @usuario de tu canal.',
+                                en: 'Assign the task to an @user from your channel.',
+                                fr: 'Assigne la tache a un @utilisateur de ton canal.',
+                                pt: 'Atribui a tarefa a um @utilizador do teu canal.',
+                                de: 'Weise die Aufgabe einem @Benutzer aus deinem Kanal zu.',
+                                it: 'Assegna l\'attivita a un @utente del tuo canale.',
+                              })}</Text>
+                            ) : null}
+
+                            {taskAssignments.length > 0 ? (
+                              <View style={styles.channelEventTaskAssignmentsRow}>
+                                {taskAssignments.map(assignment => (
+                                  <TouchableOpacity
+                                    key={`${index}-${assignment.username}`}
+                                    activeOpacity={0.75}
+                                    onPress={() => handleRemoveChannelEventTaskAssignment(index, assignment.username)}
+                                    style={styles.channelEventTaskAssignmentChip}
+                                  >
+                                    <Text style={styles.channelEventTaskAssignmentChipText}>{assignment.username}</Text>
+                                    <MaterialIcons name="close" size={10} color="#FFB74D" />
+                                  </TouchableOpacity>
+                                ))}
+                              </View>
+                            ) : null}
+                          </>
+                        ) : null}
+                      </React.Fragment>
+                    );
+                  })}
+                </>
+              ) : null}
+
+              {channelEventRewardTaskEnabled && channelEventRewardBalanceHint ? (
+                <Text style={styles.channelEventTaskRewardHintText}>{channelEventRewardBalanceHint}</Text>
+              ) : null}
+
+              <View style={[styles.channelEventToggleRow, !channelEventTasksEnabled && styles.channelEventDisabled]}>
+                <TouchableOpacity
+                  activeOpacity={1}
+                  disabled={!channelEventTasksEnabled}
+                  onPress={() => {
+                    if (channelEventTasksEnabled) {return;}
+                  }}
+                  style={styles.channelEventTogglePressable}
+                >
+                  <ChannelEventToggleDot
+                    active={channelEventAssignTaskEnabled}
+                    disabled={!channelEventTasksEnabled}
+                    gradientId="channel_event_assign_toggle_grad"
+                  />
+                </TouchableOpacity>
+                <Text style={styles.channelEventPrimaryText}>{t('event.assignTask' as TranslationKey)}</Text>
+              </View>
+
+              <View style={[styles.channelEventToggleRow, !channelEventAssignTaskEnabled && styles.channelEventDisabled]}>
+                <TouchableOpacity
+                  activeOpacity={channelEventAssignTaskEnabled ? 0.85 : 1}
+                  disabled={!channelEventAssignTaskEnabled}
+                  onPress={() => setChannelEventRewardTaskEnabled(prev => !prev)}
+                  style={styles.channelEventTogglePressable}
+                >
+                  <ChannelEventToggleDot
+                    active={channelEventRewardTaskEnabled}
+                    disabled={!channelEventAssignTaskEnabled}
+                    gradientId="channel_event_reward_toggle_grad"
+                  />
+                </TouchableOpacity>
+                <Text style={styles.channelEventPrimaryText}>{t('event.rewardTasks' as TranslationKey)}</Text>
+              </View>
+
+              <View style={styles.channelEventSectionBlock}>
+                <View
+                  style={styles.channelEventHypeCostInfoAnchor}
+                  onLayout={(event) => {
+                    channelEventHypeCostSectionYRef.current = event.nativeEvent.layout.y;
+                  }}
+                >
+                  <View style={styles.channelEventHypeCostLabelRow}>
+                    <View style={styles.channelEventHypeCostLabelLeftRow}>
+                      <MaterialIcons name="whatshot" size={18} color="#FFFFFF" />
+                      <Text style={styles.channelEventSectionTitle}>
+                        {localize({
+                          es: 'Coste del hype',
+                          en: 'Hype cost',
+                          fr: 'Coût du Hype',
+                          pt: 'Custo do Hype',
+                          de: 'Hype-Kosten',
+                          it: 'Costo dell\'Hype',
+                        })}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      activeOpacity={0.75}
+                      onPress={handleShowChannelEventHypeCostInfo}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={styles.channelEventHypeCostInfoButton}
+                    >
+                      <MaterialIcons name="info-outline" size={18} color="rgba(255,255,255,0.58)" />
+                    </TouchableOpacity>
+                  </View>
+                  {showChannelEventHypeCostInfo ? (
+                    <View style={styles.channelEventHypeCostInfoPanel}>
+                      <Text style={styles.channelEventHypeCostInfoText}>
+                        {localize({
+                          es: 'Escoge la cantidad de llaves blancas que quieres que te done cada usuario del canal por este evento para impulsar tu perfil. Cuantas más llaves recibas, más se viralizará tu perfil y tu canal en la pantalla de Hype.',
+                          en: 'Choose how many white keys you want each channel user to donate for this event to boost your profile. The more keys you receive, the more your profile and channel will spread on the Hype screen.',
+                          fr: 'Choisissez le nombre de clés blanches que vous voulez que chaque utilisateur du canal vous donne pour cet événement afin de booster votre profil. Plus vous recevez de clés, plus votre profil et votre canal se diffuseront sur l’écran Hype.',
+                          pt: 'Escolha a quantidade de chaves brancas que deseja que cada usuário do canal doe por este evento para impulsionar o seu perfil. Quanto mais chaves você receber, mais o seu perfil e o seu canal serão impulsionados na tela de Hype.',
+                          de: 'Wähle die Anzahl weißer Schlüssel, die dir jeder Nutzer des Kanals für dieses Event spenden soll, um dein Profil zu pushen. Je mehr Schlüssel du erhältst, desto stärker werden dein Profil und dein Kanal im Hype-Bildschirm verbreitet.',
+                          it: 'Scegli la quantità di chiavi bianche che vuoi che ogni utente del canale ti doni per questo evento per spingere il tuo profilo. Più chiavi ricevi, più il tuo profilo e il tuo canale si diffonderanno nella schermata Hype.',
+                        })}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+                <View style={{ marginTop: 2 }}>
+                  <ChannelEventField
+                    label={localize({
+                      es: 'Cantidad',
+                      en: 'Amount',
+                      fr: 'Quantité',
+                      pt: 'Quantidade',
+                      de: 'Menge',
+                      it: 'Quantità',
+                    })}
+                    value={channelEventHypeCostInput}
+                    onChangeText={handleChannelEventHypeCostInputChange}
+                    keyboardType="numeric"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    trailingContent={<MaterialCommunityIcons name="key-outline" size={16} color="rgba(255,255,255,0.78)" />}
+                  />
+                </View>
+              </View>
+
+              <View style={[styles.channelEventSectionBlock, { marginTop: 24 }]}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    setShowChannelEventTypeOptions(prev => {
+                      const next = !prev;
+                      if (!next) {
+                        setChannelEventTypeSearchQuery('');
+                      }
+                      return next;
+                    });
+                  }}
+                  style={styles.channelEventTypeTrigger}
+                >
+                  <View style={styles.channelEventInlineLabelRow}>
+                    <Text style={styles.channelEventSectionTitle}>
+                      {selectedChannelEventType ? t(selectedChannelEventType) : (
+                        <>
+                          {t('event.type' as TranslationKey)}
+                          <Text style={styles.channelEventSectionTitleSuffix}>{` ${t('event.requiredSuffix' as TranslationKey)}`}</Text>
+                        </>
+                      )}
+                    </Text>
+                    <MaterialIcons
+                      name={showChannelEventTypeOptions ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                      size={18}
+                      color="#FFFFFF"
+                    />
+                  </View>
+                </TouchableOpacity>
+                {showChannelEventTypeOptions ? (
+                  <View style={styles.channelEventTypeOptionsPanel}>
+                    <TextInput
+                      value={channelEventTypeSearchQuery}
+                      onChangeText={setChannelEventTypeSearchQuery}
+                      placeholder={t('event.searchType' as TranslationKey)}
+                      placeholderTextColor="rgba(255,255,255,0.45)"
+                      style={styles.channelEventTypeSearchInput}
+                    />
+                    {filteredChannelEventTypeOptions.map(option => (
+                      <TouchableOpacity
+                        key={option}
+                        activeOpacity={0.85}
+                        onPress={() => {
+                          setSelectedChannelEventType(option);
+                          setShowChannelEventTypeOptions(false);
+                          setChannelEventTypeSearchQuery('');
+                        }}
+                        style={styles.channelEventTypeOption}
+                      >
+                        <Text
+                          style={[
+                            styles.channelEventTypeOptionText,
+                            selectedChannelEventType === option && styles.channelEventTypeOptionTextSelected,
+                          ]}
+                        >
+                          {t(option)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.channelEventSectionBlock}>
+                {!channelEventImageUri ? (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={handlePickChannelEventImage}
+                    style={styles.channelEventAddImageRow}
+                  >
+                    <View style={styles.channelEventAddImageLabelRow}>
+                      <MaterialIcons name="image" size={18} color="#FFFFFF" />
+                      <Text style={styles.channelEventSectionTitle}>
+                        {localize({
+                          es: 'Añadir imagen',
+                          en: 'Add image',
+                          fr: 'Ajouter une image',
+                          pt: 'Adicionar imagem',
+                          de: 'Bild hinzufügen',
+                          it: 'Aggiungi immagine',
+                        })}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={styles.channelEventImagePreviewShell}>
+                    <TouchableOpacity
+                      activeOpacity={0.9}
+                      onPress={() => openChannelImageViewer(channelEventImageUri)}
+                    >
+                      <Image
+                        source={{ uri: channelEventImageUri }}
+                        style={styles.channelEventImagePreview}
+                        resizeMode="cover"
+                      />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={handleRemoveChannelEventImage}
+                      style={styles.channelEventImageRemoveButton}
+                    >
+                      <MaterialIcons name="close" size={16} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+
+              <ChannelEventField
+                label={t('event.name' as TranslationKey)}
+                value={channelEventName}
+                onChangeText={setChannelEventName}
+                maxLength={80}
+              />
+              <ChannelEventField
+                label={t('event.description' as TranslationKey)}
+                value={channelEventDescription}
+                onChangeText={setChannelEventDescription}
+                maxLength={480}
+                multiline
+              />
+
+              <View style={styles.channelEventSectionBlock}>
+                <Text style={[styles.channelEventSubsectionTitle, channelEventTasksEnabled && styles.channelEventDisabled]}>{t('event.dateAndTime' as TranslationKey)}</Text>
+              </View>
+
+              <View style={styles.channelEventSplitRow}>
+                <ChannelEventField
+                  label={t('event.dayMonthYear' as TranslationKey)}
+                  iconName="calendar-month"
+                  value={channelEventDateText}
+                  onChangeText={handleChannelEventDateTextChange}
+                  maxLength={10}
+                  keyboardType="numeric"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  onIconPress={handleOpenChannelEventDatePicker}
+                  disabled={channelEventTasksEnabled}
+                  style={[
+                    styles.channelEventDateField,
+                    channelEventDateError ? styles.channelEventFieldError : null,
+                  ]}
+                />
+                <TouchableOpacity
+                  activeOpacity={channelEventTasksEnabled ? 1 : 0.85}
+                  disabled={channelEventTasksEnabled}
+                  onPress={handleOpenChannelEventTimePicker}
+                  style={styles.channelEventTimeField}
+                >
+                  <ChannelEventField
+                    label={channelEventTimeText || t('event.time' as TranslationKey)}
+                    iconName="schedule"
+                    onIconPress={handleOpenChannelEventTimePicker}
+                    disabled={channelEventTasksEnabled}
+                    style={styles.channelEventTimeFieldInner}
+                  />
+                </TouchableOpacity>
+              </View>
+
+              {!!channelEventDateError && !channelEventTasksEnabled ? (
+                <Text style={styles.channelEventDateErrorText}>{channelEventDateError}</Text>
+              ) : null}
+
+              <View style={styles.channelEventSectionBlock}>
+                <Text style={[styles.channelEventSubsectionTitle, !channelEventTasksEnabled && styles.channelEventDisabled]}>{t('event.durationTitle' as TranslationKey)}</Text>
+              </View>
+
+              <TouchableOpacity
+                activeOpacity={!channelEventTasksEnabled || channelEventDurationMaxMinutes < 1 ? 1 : 0.85}
+                disabled={!channelEventTasksEnabled || channelEventDurationMaxMinutes < 1}
+                onPress={handleOpenChannelEventDurationPicker}
+                style={styles.channelEventDurationField}
+              >
+                <ChannelEventField
+                  label={channelEventDurationMinutes ? formatChannelEventDurationValue(channelEventDurationMinutes) : t('event.duration' as TranslationKey)}
+                  iconName="schedule"
+                  onIconPress={handleOpenChannelEventDurationPicker}
+                  disabled={!channelEventTasksEnabled || channelEventDurationMaxMinutes < 1}
+                  style={styles.channelEventDurationFieldInner}
+                />
+              </TouchableOpacity>
+
+              {channelEventTasksEnabled && channelEventDurationMaxMinutes > 0 ? (
+                <Text style={styles.channelEventDurationHintText}>
+                  {localize({
+                    es: `Tiempo maximo disponible: ${formatChannelEventDurationValue(channelEventDurationMaxMinutes)}`,
+                    en: `Maximum available time: ${formatChannelEventDurationValue(channelEventDurationMaxMinutes)}`,
+                    fr: `Temps maximal disponible : ${formatChannelEventDurationValue(channelEventDurationMaxMinutes)}`,
+                    pt: `Tempo maximo disponivel: ${formatChannelEventDurationValue(channelEventDurationMaxMinutes)}`,
+                    de: `Maximal verfuegbare Zeit: ${formatChannelEventDurationValue(channelEventDurationMaxMinutes)}`,
+                    it: `Tempo massimo disponibile: ${formatChannelEventDurationValue(channelEventDurationMaxMinutes)}`,
+                  })}
+                </Text>
+              ) : null}
+
+              <View style={styles.channelEventSectionBlock}>
+                <Text style={styles.channelEventSectionTitle}>{t('event.link' as TranslationKey)}</Text>
+              </View>
+
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => setShowChannelEventSocialOptions(prev => !prev)}
+                style={styles.channelEventSocialTrigger}
+              >
+                <View style={styles.channelEventInlineLabelRow}>
+                  <View style={styles.channelEventSocialTriggerLabelRow}>
+                    {selectedChannelEventSocialNetwork ? (
+                      <Image
+                        source={SOCIAL_ICONS[selectedChannelEventSocialNetwork] as any}
+                        style={styles.channelEventSelectedSocialIcon}
+                      />
+                    ) : null}
+                    <Text style={styles.channelEventPrimaryText}>{t('event.selectSocialNetwork' as TranslationKey)}</Text>
+                  </View>
+                  <MaterialIcons
+                    name={showChannelEventSocialOptions ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                    size={18}
+                    color="#FFFFFF"
+                  />
+                </View>
+              </TouchableOpacity>
+
+              {showChannelEventSocialOptions ? (
+                <View style={styles.channelEventSocialOptionsPanel}>
+                  <View style={styles.channelEventSocialGrid}>
+                    {CHANNEL_EVENT_SOCIAL_OPTIONS.map(key => (
+                      <TouchableOpacity
+                        key={key}
+                        activeOpacity={0.85}
+                        onPress={() => handleSelectChannelEventSocialNetwork(key)}
+                        style={[
+                          styles.channelEventSocialOption,
+                          selectedChannelEventSocialNetwork === key && styles.channelEventSocialOptionSelected,
+                        ]}
+                      >
+                        <Image source={SOCIAL_ICONS[key] as any} style={styles.channelEventSocialOptionIcon} />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+
+              <View
+                style={[
+                  styles.channelEventLinkInputShell,
+                  !selectedChannelEventSocialNetwork && styles.channelEventLinkInputShellDisabled,
+                  channelEventSocialLinkError ? styles.channelEventLinkInputShellError : null,
+                ]}
+              >
+                <TextInput
+                  value={channelEventSocialLink}
+                  onChangeText={handleChannelEventSocialLinkChange}
+                  placeholder={selectedChannelEventSocialNetwork ? t('event.addLink' as TranslationKey) : t('event.selectSocialNetwork' as TranslationKey)}
+                  placeholderTextColor="rgba(255,255,255,0.3)"
+                  style={styles.channelEventLinkInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  editable={!!selectedChannelEventSocialNetwork}
+                  selectTextOnFocus={!!selectedChannelEventSocialNetwork}
+                />
+                <TouchableOpacity
+                  activeOpacity={channelEventCanApplySocialLink ? 0.8 : 1}
+                  disabled={!channelEventCanApplySocialLink}
+                  onPress={handleApplyChannelEventSocialLink}
+                  style={styles.channelEventLinkApplyAction}
+                >
+                  <MaterialIcons
+                    name={
+                      !selectedChannelEventSocialNetwork || !channelEventSocialLink.trim()
+                        ? 'check-circle-outline'
+                        : channelEventSocialLinkError
+                          ? 'error-outline'
+                          : 'check-circle'
+                    }
+                    size={21}
+                    color={
+                      !selectedChannelEventSocialNetwork || !channelEventSocialLink.trim()
+                        ? 'rgba(255,255,255,0.26)'
+                        : channelEventSocialLinkError
+                          ? '#D84315'
+                          : '#FFB74D'
+                    }
+                  />
+                </TouchableOpacity>
+              </View>
+
+              {selectedChannelEventSocialNetwork && channelEventSocialLinkError ? (
+                <Text style={styles.channelEventLinkErrorText}>{channelEventSocialLinkError}</Text>
+              ) : null}
+
+              {channelEventLinkedSocialNetworks.length > 0 ? (
+                <View style={styles.channelEventAppliedSocialsRow}>
+                  {channelEventLinkedSocialNetworks.map(item => (
+                    <TouchableOpacity
+                      key={item.network}
+                      activeOpacity={0.8}
+                      onPress={() => openExternalLink(item.link)}
+                      style={styles.channelEventAppliedSocialButton}
+                    >
+                      <Image
+                        source={SOCIAL_ICONS[item.network] as any}
+                        style={styles.channelEventAppliedSocialIcon}
+                      />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : null}
+
+              <View style={styles.channelEventSectionBlock}>
+                <Text style={styles.channelEventSectionTitle}>{t('event.location' as TranslationKey)}</Text>
+              </View>
+
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={openChannelEventLocationPicker}
+                style={styles.channelEventLocationTrigger}
+              >
+                <ChannelEventField
+                  label={channelEventLocationLabelDraft || t('event.selectLocation' as TranslationKey)}
+                  iconName="place"
+                />
+              </TouchableOpacity>
+
+              {!!channelEventLocationLabelDraft && (
+                <View style={styles.channelEventLocationPreviewRow}>
+                  <TouchableOpacity
+                    activeOpacity={0.75}
+                    onPress={clearChannelEventLocationDraft}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Eliminar ubicación del evento"
+                    style={styles.profileRingPreviewRemoveBtn}
+                  >
+                    <MaterialIcons name="close" size={14} color="#FFFFFF" />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    activeOpacity={0.75}
+                    onPress={() => openExternalLink(channelEventLocationUrlDraft || 'https://www.google.com/maps')}
+                    style={styles.channelEventLocationPreviewAction}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <MaterialIcons name="place" size={16} color="rgba(255, 183, 77, 0.9)" />
+                    <Text style={styles.profileRingLocationPreviewText} numberOfLines={1}>
+                      {channelEventLocationLabelDraft}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              <ChannelEventApplyButton
+                label={t('common.create' as TranslationKey)}
+                disabled={!canCreateChannelEvent}
+                loading={isCreatingChannelEvent}
+                onPress={handleCreateBasicChannelEvent}
+              />
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {showChannelEventPanel
+        && isChannelEventPanelMinimized
+        && activeBottomTab === 'chat'
+        && chatView === 'channel'
+        && channelTab === 'Tu canal' ? (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => setIsChannelEventPanelMinimized(false)}
+          style={[
+            styles.channelEventMinimizedPill,
+            { top: topSystemOffset + 74 },
+          ]}
+        >
+          <MeasuredSvgGradientBorder
+            gradientId="channel_event_minimized_panel_grad"
+            colors={['#ffe040', '#ff7a00']}
+            borderRadius={18}
+            strokeWidth={1.2}
+          />
+          <Text style={styles.channelEventMinimizedTitleText} numberOfLines={1}>
+            {channelEventMinimizedTitle}
+          </Text>
+          <MaterialIcons name="open-in-full" size={17} color="#FFB74D" />
+        </TouchableOpacity>
+      ) : null}
+
+      <Modal
+        visible={showChannelEventDatePicker}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseChannelEventDatePicker}
+      >
+        <TouchableWithoutFeedback onPress={handleCloseChannelEventDatePicker}>
+          <View style={styles.channelEventPickerModalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.channelEventPickerModalCard}>
+                <MeasuredSvgGradientBorder
+                  gradientId="channel_event_date_picker_modal_grad"
+                  colors={['#ffe040', '#ff7a00']}
+                  borderRadius={24}
+                  strokeWidth={1.4}
+                />
+                <View style={styles.channelEventPickerModalHeader}>
+                  <Text style={styles.channelEventPickerModalTitle}>{t('event.dayMonthYear' as TranslationKey)}</Text>
+                  <TouchableOpacity onPress={handleCloseChannelEventDatePicker} hitSlop={10}>
+                    <MaterialIcons name="close" size={20} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.channelEventPickerModalBody}>
+                  <View style={styles.channelEventCalendarShell}>
+                    <Calendar
+                      current={toChannelEventIsoDate(channelEventDraftDateValue)}
+                      minDate={toChannelEventIsoDate(channelEventMinimumDate)}
+                      onDayPress={handleChannelEventCalendarDayPress}
+                      firstDay={1}
+                      enableSwipeMonths
+                      hideExtraDays
+                      theme={{
+                        backgroundColor: '#101010',
+                        calendarBackground: '#101010',
+                        textSectionTitleColor: 'rgba(255,255,255,0.62)',
+                        monthTextColor: '#FFFFFF',
+                        dayTextColor: '#FFFFFF',
+                        textDisabledColor: 'rgba(255,255,255,0.18)',
+                        todayTextColor: '#FFB74D',
+                        arrowColor: '#FFB74D',
+                        selectedDayBackgroundColor: '#FFB74D',
+                        selectedDayTextColor: '#000000',
+                        textMonthFontWeight: '800',
+                        textDayFontWeight: '500',
+                        textDayHeaderFontWeight: '700',
+                        textMonthFontSize: 18,
+                        textDayFontSize: 16,
+                        textDayHeaderFontSize: 13,
+                      }}
+                      markedDates={{
+                        [toChannelEventIsoDate(channelEventDraftDateValue)]: {
+                          selected: true,
+                          disableTouchEvent: true,
+                        },
+                      }}
+                    />
+                  </View>
+                </View>
+                <View style={styles.channelEventPickerModalActions}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={handleCloseChannelEventDatePicker}
+                    style={[styles.channelEventPickerActionButton, styles.channelEventPickerActionButtonSecondary]}
+                  >
+                    <Text style={styles.channelEventPickerActionText}>{t('common.cancel' as TranslationKey)}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={handleApplyChannelEventDatePicker}
+                    style={styles.channelEventPickerActionButton}
+                  >
+                    <Text style={styles.channelEventPickerActionTextPrimary}>{t('common.apply' as TranslationKey)}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      <Modal
+        visible={showChannelEventTimePicker}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseChannelEventTimePicker}
+      >
+        <TouchableWithoutFeedback onPress={handleCloseChannelEventTimePicker}>
+          <View style={styles.channelEventPickerModalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.channelEventPickerModalCard}>
+                <MeasuredSvgGradientBorder
+                  gradientId="channel_event_time_picker_modal_grad"
+                  colors={['#ffe040', '#ff7a00']}
+                  borderRadius={24}
+                  strokeWidth={1.4}
+                />
+                <View style={styles.channelEventPickerModalHeader}>
+                  <Text style={styles.channelEventPickerModalTitle}>{t('event.time' as TranslationKey)}</Text>
+                  <TouchableOpacity onPress={handleCloseChannelEventTimePicker} hitSlop={10}>
+                    <MaterialIcons name="close" size={20} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.channelEventTimePickerBody}>
+                  <View style={styles.channelEventTimePreviewCard}>
+                    <MaterialCommunityIcons name="clock-time-four-outline" size={20} color="#FFB74D" />
+                    <Text style={styles.channelEventTimePreviewText}>{formatChannelEventTime(channelEventDraftTimeValue, channelEventTimeFormat)}</Text>
+                  </View>
+
+                  <View style={styles.channelEventTimeFormatToggleRow}>
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={() => setChannelEventTimeFormat('european')}
+                      style={[
+                        styles.channelEventTimeFormatToggleButton,
+                        channelEventTimeFormat === 'european' && styles.channelEventTimeFormatToggleButtonSelected,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.channelEventTimeFormatToggleText,
+                          channelEventTimeFormat === 'european' && styles.channelEventTimeFormatToggleTextSelected,
+                        ]}
+                      >
+                        24 hours
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={() => setChannelEventTimeFormat('us')}
+                      style={[
+                        styles.channelEventTimeFormatToggleButton,
+                        channelEventTimeFormat === 'us' && styles.channelEventTimeFormatToggleButtonSelected,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.channelEventTimeFormatToggleText,
+                          channelEventTimeFormat === 'us' && styles.channelEventTimeFormatToggleTextSelected,
+                        ]}
+                      >
+                        pm/am
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.channelEventTimeColumns}>
+                    <View style={styles.channelEventTimeColumn}>
+                      <Text style={styles.channelEventTimeColumnTitle}>
+                        {localize({
+                          es: 'Hora',
+                          en: 'Hour',
+                          fr: 'Heure',
+                          pt: 'Hora',
+                          de: 'Stunde',
+                          it: 'Ora',
+                        })}
+                      </Text>
+                      <ScrollView
+                        style={styles.channelEventTimeOptionsScroll}
+                        contentContainerStyle={styles.channelEventTimeOptionsContent}
+                        showsVerticalScrollIndicator={false}
+                      >
+                        {channelEventTimeHourOptions.map(hour => {
+                          const isSelected = Number(hour) === channelEventDraftTimeHourValue;
+                          return (
+                            <TouchableOpacity
+                              key={hour}
+                              activeOpacity={0.85}
+                              onPress={() => handleSelectChannelEventTimeHour(Number(hour))}
+                              style={[
+                                styles.channelEventTimeOption,
+                                isSelected && styles.channelEventTimeOptionSelected,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.channelEventTimeOptionText,
+                                  isSelected && styles.channelEventTimeOptionTextSelected,
+                                ]}
+                              >
+                                {hour}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ScrollView>
+                    </View>
+
+                    <View style={styles.channelEventTimeColumnDivider} />
+
+                    <View style={styles.channelEventTimeColumn}>
+                      <Text style={styles.channelEventTimeColumnTitle}>
+                        {localize({
+                          es: 'Minutos',
+                          en: 'Minutes',
+                          fr: 'Minutes',
+                          pt: 'Minutos',
+                          de: 'Minuten',
+                          it: 'Minuti',
+                        })}
+                      </Text>
+                      <ScrollView
+                        style={styles.channelEventTimeOptionsScroll}
+                        contentContainerStyle={styles.channelEventTimeOptionsContent}
+                        showsVerticalScrollIndicator={false}
+                      >
+                        {CHANNEL_EVENT_TIME_MINUTES.map(minute => {
+                          const isSelected = Number(minute) === channelEventDraftTimeValue.getMinutes();
+                          return (
+                            <TouchableOpacity
+                              key={minute}
+                              activeOpacity={0.85}
+                              onPress={() => handleSelectChannelEventTimeMinute(Number(minute))}
+                              style={[
+                                styles.channelEventTimeOption,
+                                isSelected && styles.channelEventTimeOptionSelected,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.channelEventTimeOptionText,
+                                  isSelected && styles.channelEventTimeOptionTextSelected,
+                                ]}
+                              >
+                                {minute}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ScrollView>
+                    </View>
+
+                    {channelEventTimeFormat === 'us' ? (
+                      <>
+                        <View style={styles.channelEventTimeColumnDivider} />
+
+                        <View style={styles.channelEventTimeColumnMeridiem}>
+                          <Text style={styles.channelEventTimeColumnTitle}>AM / PM</Text>
+                          <ScrollView
+                            style={styles.channelEventTimeOptionsScroll}
+                            contentContainerStyle={styles.channelEventTimeOptionsContent}
+                            showsVerticalScrollIndicator={false}
+                          >
+                            {CHANNEL_EVENT_TIME_MERIDIEMS.map(meridiem => {
+                              const isSelected = meridiem === channelEventDraftTimeMeridiem;
+                              return (
+                                <TouchableOpacity
+                                  key={meridiem}
+                                  activeOpacity={0.85}
+                                  onPress={() => handleSelectChannelEventTimeMeridiem(meridiem)}
+                                  style={[
+                                    styles.channelEventTimeOption,
+                                    isSelected && styles.channelEventTimeOptionSelected,
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.channelEventTimeOptionText,
+                                      isSelected && styles.channelEventTimeOptionTextSelected,
+                                    ]}
+                                  >
+                                    {meridiem}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </ScrollView>
+                        </View>
+                      </>
+                    ) : null}
+                  </View>
+                </View>
+                <View style={styles.channelEventPickerModalActions}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={handleCloseChannelEventTimePicker}
+                    style={[styles.channelEventPickerActionButton, styles.channelEventPickerActionButtonSecondary]}
+                  >
+                    <Text style={styles.channelEventPickerActionText}>{t('common.cancel' as TranslationKey)}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={handleApplyChannelEventTimePicker}
+                    style={styles.channelEventPickerActionButton}
+                  >
+                    <Text style={styles.channelEventPickerActionTextPrimary}>{t('common.apply' as TranslationKey)}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      <Modal
+        visible={showChannelEventDurationPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseChannelEventDurationPicker}
+      >
+        <TouchableWithoutFeedback onPress={handleCloseChannelEventDurationPicker}>
+          <View style={styles.channelEventPickerModalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.channelEventPickerModalCard}>
+                <MeasuredSvgGradientBorder
+                  gradientId="channel_event_duration_picker_modal_grad"
+                  colors={['#ffe040', '#ff7a00']}
+                  borderRadius={24}
+                  strokeWidth={1.4}
+                />
+                <View style={styles.channelEventPickerModalHeader}>
+                  <Text style={styles.channelEventPickerModalTitle}>{t('event.duration' as TranslationKey)}</Text>
+                  <TouchableOpacity onPress={handleCloseChannelEventDurationPicker} hitSlop={10}>
+                    <MaterialIcons name="close" size={20} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.channelEventTimePickerBody}>
+                  <View style={styles.channelEventTimePreviewCard}>
+                    <MaterialCommunityIcons name="timer-outline" size={20} color="#FFB74D" />
+                    <Text style={styles.channelEventTimePreviewText}>{formatChannelEventDurationValue(channelEventDraftDurationMinutes)}</Text>
+                  </View>
+
+                  <Text style={styles.channelEventDurationModalHint}>
+                    {localize({
+                      es: `Puedes elegir entre 1 min y ${formatChannelEventDurationValue(channelEventDurationMaxMinutes)}.`,
+                      en: `You can choose from 1 min to ${formatChannelEventDurationValue(channelEventDurationMaxMinutes)}.`,
+                      fr: `Tu peux choisir entre 1 min et ${formatChannelEventDurationValue(channelEventDurationMaxMinutes)}.`,
+                      pt: `Podes escolher entre 1 min e ${formatChannelEventDurationValue(channelEventDurationMaxMinutes)}.`,
+                      de: `Du kannst zwischen 1 Min. und ${formatChannelEventDurationValue(channelEventDurationMaxMinutes)} waehlen.`,
+                      it: `Puoi scegliere da 1 min a ${formatChannelEventDurationValue(channelEventDurationMaxMinutes)}.`,
+                    })}
+                  </Text>
+
+                  <View style={styles.channelEventTimeColumns}>
+                    <View style={styles.channelEventTimeColumn}>
+                      <Text style={styles.channelEventTimeColumnTitle}>
+                        {localize({
+                          es: 'Horas',
+                          en: 'Hours',
+                          fr: 'Heures',
+                          pt: 'Horas',
+                          de: 'Stunden',
+                          it: 'Ore',
+                        })}
+                      </Text>
+                      <ScrollView
+                        style={styles.channelEventTimeOptionsScroll}
+                        contentContainerStyle={styles.channelEventTimeOptionsContent}
+                        showsVerticalScrollIndicator={false}
+                      >
+                        {channelEventDurationHourOptions.map(hour => {
+                          const isSelected = Number(hour) === Math.floor(channelEventDraftDurationMinutes / 60);
+                          return (
+                            <TouchableOpacity
+                              key={hour}
+                              activeOpacity={0.85}
+                              onPress={() => handleSelectChannelEventDurationHour(Number(hour))}
+                              style={[
+                                styles.channelEventTimeOption,
+                                isSelected && styles.channelEventTimeOptionSelected,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.channelEventTimeOptionText,
+                                  isSelected && styles.channelEventTimeOptionTextSelected,
+                                ]}
+                              >
+                                {hour}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ScrollView>
+                    </View>
+
+                    <View style={styles.channelEventTimeColumnDivider} />
+
+                    <View style={styles.channelEventTimeColumn}>
+                      <Text style={styles.channelEventTimeColumnTitle}>
+                        {localize({
+                          es: 'Minutos',
+                          en: 'Minutes',
+                          fr: 'Minutes',
+                          pt: 'Minutos',
+                          de: 'Minuten',
+                          it: 'Minuti',
+                        })}
+                      </Text>
+                      <ScrollView
+                        style={styles.channelEventTimeOptionsScroll}
+                        contentContainerStyle={styles.channelEventTimeOptionsContent}
+                        showsVerticalScrollIndicator={false}
+                      >
+                        {CHANNEL_EVENT_TIME_MINUTES.map(minute => {
+                          const nextTotalMinutes = (Math.floor(channelEventDraftDurationMinutes / 60) * 60) + Number(minute);
+                          const isDisabled = nextTotalMinutes < 1 || nextTotalMinutes > channelEventDurationMaxMinutes;
+                          const isSelected = Number(minute) === (channelEventDraftDurationMinutes % 60);
+
+                          return (
+                            <TouchableOpacity
+                              key={minute}
+                              activeOpacity={isDisabled ? 1 : 0.85}
+                              disabled={isDisabled}
+                              onPress={() => handleSelectChannelEventDurationMinute(Number(minute))}
+                              style={[
+                                styles.channelEventTimeOption,
+                                isSelected && styles.channelEventTimeOptionSelected,
+                                isDisabled && styles.channelEventDurationOptionDisabled,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.channelEventTimeOptionText,
+                                  isSelected && styles.channelEventTimeOptionTextSelected,
+                                  isDisabled && styles.channelEventDurationOptionTextDisabled,
+                                ]}
+                              >
+                                {minute}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ScrollView>
+                    </View>
+                  </View>
+                </View>
+                <View style={styles.channelEventPickerModalActions}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={handleCloseChannelEventDurationPicker}
+                    style={[styles.channelEventPickerActionButton, styles.channelEventPickerActionButtonSecondary]}
+                  >
+                    <Text style={styles.channelEventPickerActionText}>{t('common.cancel' as TranslationKey)}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={handleApplyChannelEventDurationPicker}
+                    style={styles.channelEventPickerActionButton}
+                  >
+                    <Text style={styles.channelEventPickerActionTextPrimary}>{t('common.apply' as TranslationKey)}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
       {/* Modal de Categorías */}
       < Modal
         visible={showCategoryModal}
@@ -17598,7 +23400,7 @@ const FrontScreen = ({
                 >
                   <Text style={[
                     styles.categoryOptionText,
-                    selectedCategory === cat && styles.categoryOptionTextSelected
+                    selectedCategory === cat && styles.categoryOptionTextSelected,
                   ]}>
                     {getCategoryLabel(cat)}
                   </Text>
@@ -17611,6 +23413,109 @@ const FrontScreen = ({
           </View>
         </TouchableOpacity>
       </Modal >
+
+      <Modal
+        visible={showPhotoEditor && !!selectedImageUri}
+        animationType="fade"
+        onRequestClose={handleCancelPhotoEdit}>
+        {selectedImageUri ? (
+          <ProfilePhotoEdit
+            imageUri={selectedImageUri}
+            onBack={handleCancelPhotoEdit}
+            onSave={handleSaveProfilePhoto}
+          />
+        ) : null}
+      </Modal>
+
+      <Modal
+        visible={showQuizImageEditor && !!editingQuizImageUri}
+        animationType="fade"
+        onRequestClose={handleCancelQuizEdit}>
+        {editingQuizImageUri ? (
+          <CarouselImageEditor
+            imageUri={editingQuizImageUri}
+            onBack={handleCancelQuizEdit}
+            onSave={handleApplyQuizImage}
+            currentIndex={0}
+            totalImages={1}
+            thumbnails={[]}
+            onSelectImage={() => { }}
+            onTempSave={handleTempQuizEdit}
+            activeImageIndex={0}
+            initialAspectRatio={'3:4'}
+            allowAddMore={false}
+          />
+        ) : null}
+      </Modal>
+
+      <Modal
+        visible={showIntimidadesImageEditor && !!editingIntimidadesImageUri}
+        animationType="fade"
+        onRequestClose={handleCancelIntimidadesEdit}>
+        {editingIntimidadesImageUri ? (
+          <CarouselImageEditor
+            imageUri={editingIntimidadesImageUri}
+            onBack={handleCancelIntimidadesEdit}
+            onSave={handleApplyIntimidadesImage}
+            currentIndex={0}
+            totalImages={1}
+            thumbnails={[]}
+            onSelectImage={() => { }}
+            onTempSave={handleTempIntimidadesEdit}
+            activeImageIndex={0}
+            initialAspectRatio={'3:4'}
+            allowAddMore={false}
+          />
+        ) : null}
+      </Modal>
+
+      <Modal
+        visible={showSurveyImageEditor && !!editingSurveyImageUri}
+        animationType="fade"
+        onRequestClose={handleCancelSurveyEdit}>
+        {editingSurveyImageUri ? (
+          <CarouselImageEditor
+            imageUri={editingSurveyImageUri}
+            onBack={handleCancelSurveyEdit}
+            onSave={handleApplySurveyImage}
+            currentIndex={0}
+            totalImages={1}
+            thumbnails={[]}
+            onSelectImage={() => { }}
+            onTempSave={handleTempSurveyEdit}
+            activeImageIndex={0}
+            initialAspectRatio={'3:4'}
+            allowAddMore={false}
+          />
+        ) : null}
+      </Modal>
+
+      <Modal
+        visible={showCarouselImageEditor && !!editingCarouselImageUri}
+        animationType="fade"
+        onRequestClose={handleCancelCarouselEdit}>
+        {editingCarouselImageUri ? (
+          <CarouselImageEditor
+            imageUri={editingCarouselImageUri}
+            onBack={handleCancelCarouselEdit}
+            onSave={handleConfirmCarouselEdits}
+            currentIndex={currentImagePosition}
+            totalImages={totalImagesToEdit}
+            thumbnails={editorThumbnails}
+            onSelectImage={handleSelectPendingImageForEditing}
+            onTempSave={handleTempCarouselEdit}
+            activeImageIndex={currentEditingImageIndex}
+            initialAspectRatio={editedCarouselImages[currentEditingImageIndex]?.aspectRatio
+              ?? (isEditingExistingCarouselImage && editingCarouselImageIndex !== null
+                ? carouselImages[editingCarouselImageIndex]?.aspectRatio
+                : undefined)
+              ?? '3:4'}
+            onAddImage={handleAddMoreImages}
+            allowAddMore={currentTotalImages < 3}
+            onRemoveImage={handleRemoveImageFromEditor}
+          />
+        ) : null}
+      </Modal>
 
       {/* Modal de opciones */}
       < Modal
@@ -17730,20 +23635,54 @@ const FrontScreen = ({
                     activeOpacity={0.6}
                     onPress={() => {
                       closeSidePanel();
-                      setActiveBottomTab('notifications');
+                      _onNavigateToNotifications?.();
                     }}>
                     <View style={[styles.sidePanelOptionIconWrap, { position: 'relative' }]}>
                       <MaterialIcons name="notifications" size={20} color="#FFB74D" />
                       {unreadNotificationsCount > 0 && (
                         <View pointerEvents="none" style={styles.sidePanelBadge}>
-                          <Text style={styles.sidePanelBadgeText}>
-                            {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
-                          </Text>
+                          <Svg width={20} height={20} style={styles.sidePanelBadgeBorder} viewBox="0 0 20 20">
+                            <Defs>
+                              <LinearGradient id="side_panel_unread_badge_grad" x1="0" y1="0" x2="1" y2="1">
+                                <Stop offset="0" stopColor="#ff7a00" stopOpacity="1" />
+                                <Stop offset="1" stopColor="#ffe040" stopOpacity="1" />
+                              </LinearGradient>
+                            </Defs>
+                            <Circle
+                              cx="10"
+                              cy="10"
+                              r="9"
+                              fill="none"
+                              stroke="url(#side_panel_unread_badge_grad)"
+                              strokeWidth="1.5"
+                            />
+                          </Svg>
+                          <View style={styles.sidePanelBadgeBackground}>
+                            <Text style={styles.sidePanelBadgeText}>
+                              {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                            </Text>
+                          </View>
                         </View>
                       )}
                     </View>
                     <Text style={styles.sidePanelOptionText}>
                       {t('common.notifications')}
+                    </Text>
+                    <MaterialIcons name="chevron-right" size={18} color="rgba(255,255,255,0.2)" />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.sidePanelOption}
+                    activeOpacity={0.6}
+                    onPress={() => {
+                      closeSidePanel();
+                      onNavigateToKeys?.();
+                    }}>
+                    <View style={styles.sidePanelOptionIconWrap}>
+                      <MaterialCommunityIcons name="key-outline" size={20} color="#FFB74D" />
+                    </View>
+                    <Text style={styles.sidePanelOptionText}>
+                      {t('common.keys')}
                     </Text>
                     <MaterialIcons name="chevron-right" size={18} color="rgba(255,255,255,0.2)" />
                   </TouchableOpacity>
@@ -18015,8 +23954,8 @@ const FrontScreen = ({
                               onPress={() => {
                                 setSelectedGroupMemberKeys(prev => {
                                   const next = new Set(prev);
-                                  if (next.has(memberKey)) next.delete(memberKey);
-                                  else next.add(memberKey);
+                                  if (next.has(memberKey)) {next.delete(memberKey);}
+                                  else {next.add(memberKey);}
                                   return next;
                                 });
                               }}
@@ -18049,7 +23988,7 @@ const FrontScreen = ({
                   <TouchableOpacity
                     activeOpacity={0.85}
                     onPress={() => {
-                      if (groupMembers.length === 0) return;
+                      if (groupMembers.length === 0) {return;}
                       const allSelected = groupMembers.every(m => selectedGroupMemberKeys.has(getGroupMemberKey(m)));
                       if (allSelected) {
                         setSelectedGroupMemberKeys(new Set());
@@ -18074,15 +24013,15 @@ const FrontScreen = ({
                         || selectedGroupMemberKeys.size === 0
                       }
                       onPress={async () => {
-                        if (!authToken) return;
-                        if (!groupMembersPanelGroup) return;
-                        if (selectedGroupMemberKeys.size === 0) return;
+                        if (!authToken) {return;}
+                        if (!groupMembersPanelGroup) {return;}
+                        if (selectedGroupMemberKeys.size === 0) {return;}
 
                         const targetMembers = groupMembers
                           .filter(m => selectedGroupMemberKeys.has(getGroupMemberKey(m)))
                           .filter(m => typeof m.member_email === 'string' && m.member_email.trim().length > 0);
 
-                        if (targetMembers.length === 0) return;
+                        if (targetMembers.length === 0) {return;}
 
                         if (groupMembersSelectionMode === 'expel') {
                           setIsExpellingGroupMembers(true);
@@ -18120,8 +24059,8 @@ const FrontScreen = ({
                                 const normalizedNoAt = normalizedAt.replace(/^@/, '').trim();
                                 setSentGroupRequestStatusByTarget(prev => {
                                   const next: Record<string, 'pending' | 'accepted' | 'blocked'> = { ...prev };
-                                  if (normalizedAt) delete (next as any)[normalizedAt];
-                                  if (normalizedNoAt) delete (next as any)[normalizedNoAt];
+                                  if (normalizedAt) {delete (next as any)[normalizedAt];}
+                                  if (normalizedNoAt) {delete (next as any)[normalizedNoAt];}
                                   return next;
                                 });
                               })
@@ -18193,7 +24132,7 @@ const FrontScreen = ({
                           if (updates.size > 0) {
                             setGroupMembers(prev => prev.map(m => {
                               const key = getGroupMemberKey(m);
-                              if (!updates.has(key)) return m;
+                              if (!updates.has(key)) {return m;}
                               return { ...m, is_limited: updates.get(key) };
                             }));
                           }
@@ -18343,7 +24282,7 @@ const FrontScreen = ({
         transparent
         animationType="slide"
         onRequestClose={() => {
-          if (isSavingGroup) return;
+          if (isSavingGroup) {return;}
           setShowCreateGroupPanel(false);
           setEditingGroupId(null);
           setGroupImageUri(null);
@@ -18354,7 +24293,7 @@ const FrontScreen = ({
           style={styles.modalOverlay}
           activeOpacity={1}
           onPress={() => {
-            if (isSavingGroup) return;
+            if (isSavingGroup) {return;}
             setShowCreateGroupPanel(false);
             setEditingGroupId(null);
             setGroupImageUri(null);
@@ -18374,7 +24313,7 @@ const FrontScreen = ({
               borderTopColor: '#FFB74D',
               padding: 20,
               alignItems: 'center',
-              paddingBottom: 40
+              paddingBottom: 40,
             }}>
               <TouchableOpacity
                 onPress={handleSelectGroupImage}
@@ -18391,7 +24330,7 @@ const FrontScreen = ({
                       borderRadius: 25,
                       marginBottom: 20,
                       borderWidth: 2,
-                      borderColor: '#FFB74D'
+                      borderColor: '#FFB74D',
                     }}
                   />
                 ) : (
@@ -18416,7 +24355,7 @@ const FrontScreen = ({
                     color: '#FFFFFF',
                     fontSize: 16,
                     borderWidth: 1,
-                    borderColor: '#FFB74D'
+                    borderColor: '#FFB74D',
                   }}
                   placeholder="#Hashtag"
                   placeholderTextColor="rgba(255, 255, 255, 0.5)"
@@ -18456,7 +24395,7 @@ const FrontScreen = ({
                   <Text style={{
                     color: groupImageUri && groupHashtag.length >= 2 ? '#FFB74D' : 'rgba(255, 183, 77, 0.3)',
                     fontWeight: 'bold',
-                    fontSize: 16
+                    fontSize: 16,
                   }}>
                     {t('common.apply' as TranslationKey)}
                   </Text>
@@ -18542,7 +24481,7 @@ const FrontScreen = ({
                 style={[styles.deleteModalButton, styles.deleteModalButtonConfirm]}
                 onPress={() => {
                   const current = pendingExpel;
-                  if (!current) return;
+                  if (!current) {return;}
 
                   const reason = current.shouldBlock
                     ? (String(blockReasonText || '').trim().slice(0, 320) || 'Sin motivo')
@@ -18573,7 +24512,7 @@ const FrontScreen = ({
         transparent={true}
         animationType="fade"
         onRequestClose={() => {
-          if (isBlockingPublicationUser) return;
+          if (isBlockingPublicationUser) {return;}
           setShowPublicationBlockModal(false);
           setPendingPublicationBlock(null);
           setPublicationBlockReasonText('');
@@ -18583,7 +24522,7 @@ const FrontScreen = ({
           activeOpacity={1}
           style={styles.modalOverlay}
           onPress={() => {
-            if (isBlockingPublicationUser) return;
+            if (isBlockingPublicationUser) {return;}
             setShowPublicationBlockModal(false);
             setPendingPublicationBlock(null);
             setPublicationBlockReasonText('');
@@ -18634,7 +24573,7 @@ const FrontScreen = ({
                   style={[styles.deleteModalButton, styles.deleteModalButtonCancel, isBlockingPublicationUser ? { opacity: 0.6 } : null]}
                   disabled={isBlockingPublicationUser}
                   onPress={() => {
-                    if (isBlockingPublicationUser) return;
+                    if (isBlockingPublicationUser) {return;}
                     setShowPublicationBlockModal(false);
                     setPendingPublicationBlock(null);
                     setPublicationBlockReasonText('');
@@ -18653,7 +24592,7 @@ const FrontScreen = ({
                     }
 
                     const current = pendingPublicationBlock;
-                    if (!current?.email) return;
+                    if (!current?.email) {return;}
 
                     const reason = String(publicationBlockReasonText || '').trim().slice(0, 320);
 
@@ -18702,7 +24641,7 @@ const FrontScreen = ({
         transparent={true}
         animationType="fade"
         onRequestClose={() => {
-          if (isReportingPublicationUser) return;
+          if (isReportingPublicationUser) {return;}
           setShowPublicationReportModal(false);
           setPendingPublicationReport(null);
           setPublicationReportReason(null);
@@ -18712,7 +24651,7 @@ const FrontScreen = ({
           activeOpacity={1}
           style={styles.modalOverlay}
           onPress={() => {
-            if (isReportingPublicationUser) return;
+            if (isReportingPublicationUser) {return;}
             setShowPublicationReportModal(false);
             setPendingPublicationReport(null);
             setPublicationReportReason(null);
@@ -18754,7 +24693,7 @@ const FrontScreen = ({
                   style={[styles.deleteModalButton, styles.deleteModalButtonCancel, isReportingPublicationUser ? { opacity: 0.6 } : null]}
                   disabled={isReportingPublicationUser}
                   onPress={() => {
-                    if (isReportingPublicationUser) return;
+                    if (isReportingPublicationUser) {return;}
                     setShowPublicationReportModal(false);
                     setPendingPublicationReport(null);
                     setPublicationReportReason(null);
@@ -18773,8 +24712,8 @@ const FrontScreen = ({
                     }
 
                     const current = pendingPublicationReport;
-                    if (!current?.email) return;
-                    if (!publicationReportReason) return;
+                    if (!current?.email) {return;}
+                    if (!publicationReportReason) {return;}
 
                     setIsReportingPublicationUser(true);
                     try {
@@ -18822,7 +24761,7 @@ const FrontScreen = ({
         transparent={true}
         animationType="fade"
         onRequestClose={() => {
-          if (isLeavingAndBlocking) return;
+          if (isLeavingAndBlocking) {return;}
           setShowLeaveBlockModal(false);
           setPendingLeaveBlockGroup(null);
           setLeaveBlockReasonText('');
@@ -18832,7 +24771,7 @@ const FrontScreen = ({
           activeOpacity={1}
           style={styles.modalOverlay}
           onPress={() => {
-            if (isLeavingAndBlocking) return;
+            if (isLeavingAndBlocking) {return;}
             setShowLeaveBlockModal(false);
             setPendingLeaveBlockGroup(null);
             setLeaveBlockReasonText('');
@@ -18888,7 +24827,7 @@ const FrontScreen = ({
                       return;
                     }
                     const current = pendingLeaveBlockGroup;
-                    if (!current?.id) return;
+                    if (!current?.id) {return;}
 
                     const reason = String(leaveBlockReasonText || '').trim().slice(0, 320);
 
@@ -18960,7 +24899,7 @@ const FrontScreen = ({
               <TouchableOpacity
                 style={[styles.deleteModalButton, styles.deleteModalButtonConfirm]}
                 onPress={() => {
-                  void confirmDeletePublication('manual');
+                  confirmDeletePublication('manual').catch(() => {});
                 }}
               >
                 <Text style={styles.deleteModalButtonTextConfirm}>{t('common.confirm' as TranslationKey)}</Text>
@@ -19011,6 +24950,128 @@ const FrontScreen = ({
         )}
       </Modal>
 
+      <Modal
+        visible={!!expandedChannelReadingCitation}
+        transparent
+        animationType="fade"
+        onRequestClose={closeExpandedChannelReadingCitation}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={closeExpandedChannelReadingCitation}
+          style={styles.expandedChannelReadingCitationOverlay}
+        >
+          <TouchableOpacity
+            accessibilityRole="button"
+            activeOpacity={1}
+            onPress={() => undefined}
+            style={styles.expandedChannelReadingCitationSheet}
+          >
+            <View style={styles.expandedChannelReadingCitationHandle} />
+            <Text style={styles.expandedChannelReadingCitationSheetTitle}>Usuarios citados</Text>
+            <Text style={styles.expandedChannelReadingCitationSheetExcerpt}>{expandedChannelReadingCitation?.text || ''}</Text>
+
+            <ScrollView
+              style={styles.expandedChannelReadingCitationUsersList}
+              contentContainerStyle={styles.expandedChannelReadingCitationUsersListContent}
+              showsVerticalScrollIndicator={(expandedChannelReadingCitation?.users.length || 0) > 5}
+            >
+              {(expandedChannelReadingCitation?.users || []).map((user) => {
+                const displayUsername = user.username.startsWith('@') ? user.username : `@${user.username}`;
+                const normalizedUsername = String(displayUsername || '').trim().toLowerCase();
+                const avatarUri = user.profile_photo_uri ? getServerResourceUrl(String(user.profile_photo_uri)) : '';
+                const renderableSocials = getRenderableReadingCitationUserSocials(user.social_networks);
+                const socialViewportCount = Math.min(renderableSocials.length, READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT);
+                const socialViewportWidth = socialViewportCount > 0
+                  ? (socialViewportCount * READING_CITATION_USER_SOCIAL_ICON_SIZE) + ((socialViewportCount - 1) * READING_CITATION_USER_SOCIAL_ICON_GAP)
+                  : 0;
+
+                return (
+                  <View key={normalizedUsername} style={styles.expandedChannelReadingCitationUserRow}>
+                    {avatarUri ? (
+                      <Image source={{ uri: avatarUri }} style={styles.expandedChannelReadingCitationUserAvatar} resizeMode="cover" />
+                    ) : (
+                      <View style={styles.expandedChannelReadingCitationUserAvatarFallback}>
+                        <MaterialIcons name="person" size={18} color="#FFFFFF" />
+                      </View>
+                    )}
+                    <View style={styles.expandedChannelReadingCitationUserBody}>
+                      <Text style={styles.expandedChannelReadingCitationUserText}>{displayUsername}</Text>
+
+                      {renderableSocials.length > 0 ? (
+                        <View style={[styles.expandedChannelReadingCitationSocialViewport, { width: socialViewportWidth }]}>
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            scrollEnabled={renderableSocials.length > READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT}
+                            contentContainerStyle={styles.expandedChannelReadingCitationSocialRow}
+                          >
+                            {renderableSocials.map((social, socialIndex) => {
+                              const isLastSocial = socialIndex === renderableSocials.length - 1;
+
+                              return (
+                                <TouchableOpacity
+                                  key={`${normalizedUsername}-${social.key}`}
+                                  accessibilityRole="button"
+                                  activeOpacity={0.85}
+                                  onPress={() => openExternalLink(social.link)}
+                                  style={isLastSocial ? null : styles.expandedChannelReadingCitationSocialIconSpacing}
+                                >
+                                  <Image
+                                    source={social.iconSource}
+                                    style={styles.expandedChannelReadingCitationSocialIcon}
+                                    resizeMode="contain"
+                                  />
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </ScrollView>
+                        </View>
+                      ) : null}
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        visible={showChannelImageViewer}
+        transparent={false}
+        animationType="fade"
+        onRequestClose={closeChannelImageViewer}
+      >
+        <View style={{ flex: 1, backgroundColor: '#000' }}>
+          <View
+            style={{
+              height: 56,
+              paddingHorizontal: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backgroundColor: '#000',
+            }}
+          >
+            <TouchableOpacity onPress={closeChannelImageViewer} style={{ padding: 8 }}>
+              <MaterialIcons name="arrow-back" size={24} color="#FFF" />
+            </TouchableOpacity>
+            <View style={{ width: 36, height: 36 }} />
+          </View>
+
+          <View style={{ flex: 1, backgroundColor: '#000' }}>
+            {!!channelImageViewerUri && (
+              <Image
+                source={{ uri: channelImageViewerUri }}
+                style={{ flex: 1, width: '100%' }}
+                resizeMode="contain"
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
+
       {/* Full Screen Avatar Modal */}
       <Modal
         visible={!!fullScreenAvatarUri}
@@ -19042,6 +25103,38 @@ const FrontScreen = ({
           )}
         </View>
       </Modal>
+
+      {expandedChannelReading ? (
+        <View style={styles.expandedChannelReadingPortal}>
+          <SafeAreaView style={styles.expandedChannelReadingScreen} edges={['top', 'bottom']}>
+            <View style={styles.expandedChannelReadingHeader}>
+              <TouchableOpacity onPress={closeExpandedChannelReading} style={styles.expandedChannelReadingBackButton}>
+                <MaterialIcons name="arrow-back" size={24} color="#FFF" />
+              </TouchableOpacity>
+              <View style={styles.expandedChannelReadingHeaderSpacer} />
+            </View>
+
+            <View style={styles.expandedChannelReadingContent}>
+              <ScrollView
+                ref={expandedChannelReadingScrollRef}
+                key={expandedChannelReading?.message?.id ? `expanded-reading-${expandedChannelReading.message.id}` : `expanded-reading-${expandedChannelReading?.payload.title || ''}-${expandedChannelReading?.payload.date || ''}-${String(userEmail || '').trim().toLowerCase()}`}
+                style={styles.expandedChannelReadingScroll}
+                contentContainerStyle={[
+                  styles.expandedChannelReadingScrollContent,
+                  { paddingBottom: Math.max(36, bottomSystemOffset + 20) },
+                ]}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                <Text style={styles.expandedChannelReadingTitle}>{expandedChannelReading?.payload.title || ''}</Text>
+                <Text style={styles.expandedChannelReadingSubtitle}>{expandedChannelReading?.payload.subtitle || ''}</Text>
+                <Text style={styles.expandedChannelReadingLead}>{expandedChannelReading?.payload.lead || ''}</Text>
+                {renderExpandedChannelReadingContent()}
+              </ScrollView>
+            </View>
+          </SafeAreaView>
+        </View>
+      ) : null}
     </View>
   );
 };
@@ -19143,13 +25236,23 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -4,
     right: -4,
-    minWidth: 16,
-    height: 16,
-    paddingHorizontal: 4,
-    borderRadius: 8,
+    width: 20,
+    height: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#ffb941d7',
+  },
+  unreadCountBadgeBorder: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+  },
+  unreadCountBadgeBackground: {
+    width: 17,
+    height: 17,
+    borderRadius: 8.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
   },
   unreadCountBadgeText: {
     color: '#ffffffff',
@@ -19183,6 +25286,52 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
   },
+  hypeHeaderOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 20,
+    alignItems: 'center',
+  },
+  hypeHeaderContent: {
+    width: '100%',
+    alignItems: 'center',
+    paddingTop: CHAT_TABS_TOP,
+  },
+  hypeTopTabsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    width: '86%',
+  },
+  hypeTopSideTab: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hypeTopSideTabText: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    marginBottom: 6,
+  },
+  hypeTopSideTabTextActive: {
+    color: '#FFFFFF',
+  },
+  hypeTopSideTabTextInactive: {
+    color: 'rgba(255, 255, 255, 0.5)',
+  },
+  hypeTopCenterTab: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: 6,
+  },
+  hypeTopCenterLabel: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginTop: 4,
+  },
   scrollContainer: {
     paddingTop: 80,
     paddingBottom: 80,
@@ -19191,6 +25340,306 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingTop: 64,
     paddingBottom: 0,
+  },
+  hypeScreenContainer: {
+    flex: 1,
+    paddingBottom: 0,
+  },
+  hypeCategoryRail: {
+    width: '100%',
+    marginTop: 14,
+  },
+  hypeCategoryRowContent: {
+    alignItems: 'center',
+    paddingLeft: 20,
+    paddingRight: 28,
+    paddingVertical: 2,
+  },
+  hypeCategoryChip: {
+    minHeight: 42,
+    borderRadius: 21,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.035)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    marginRight: 12,
+    overflow: 'hidden',
+  },
+  hypeCategoryChipActive: {
+    borderColor: 'transparent',
+    backgroundColor: 'rgba(255, 183, 77, 0.14)',
+  },
+  hypeCategoryChipText: {
+    color: 'rgba(255,255,255,0.84)',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  hypeCategoryChipTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  hypeScreenBody: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: BOTTOM_NAV_OVERLAY_HEIGHT,
+  },
+  hypeScreenBodyLabel: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  hypeStateContainer: {
+    width: '100%',
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+  },
+  hypeEmptyStateText: {
+    color: 'rgba(255,255,255,0.62)',
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 19,
+  },
+  hypeEventsList: {
+    flex: 1,
+    width: '100%',
+  },
+  hypeEventsListContent: {
+    paddingTop: 24,
+    paddingHorizontal: 20,
+  },
+  hypeEventItem: {
+    width: '100%',
+    maxWidth: 430,
+    alignSelf: 'center',
+    marginBottom: 24,
+  },
+  hypeEventItemElevated: {
+    zIndex: 20,
+    elevation: 20,
+  },
+  hypeEventHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 10,
+    paddingHorizontal: 4,
+  },
+  hypeEventHeaderAvatarButton: {
+    marginRight: 10,
+    alignSelf: 'center',
+  },
+  hypeEventHeaderAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+  },
+  hypeEventHeaderAvatarFallback: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  hypeEventHeaderTextWrap: {
+    flex: 1,
+  },
+  hypeEventHeaderRight: {
+    marginLeft: 10,
+    minWidth: 92,
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+  },
+  hypeEventHeaderRankRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 18,
+    justifyContent: 'flex-end',
+  },
+  hypeEventHeaderRankText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  hypeEventHeaderMetaRowRight: {
+    minHeight: 24,
+    justifyContent: 'center',
+  },
+  hypeEventHeaderRemainingText: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 11,
+    lineHeight: 14,
+    textAlign: 'right',
+  },
+  hypeEventHeaderHandleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 18,
+  },
+  hypeEventHeaderMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 24,
+  },
+  hypeEventHeaderVerifiedBadge: {
+    marginRight: 6,
+  },
+  hypeEventHeaderHandle: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  hypeEventHeaderCaption: {
+    color: 'rgba(255,255,255,0.56)',
+    fontSize: 11,
+    marginTop: 2,
+  },
+  hypeEventHeaderSocialCount: {
+    marginLeft: 6,
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 12,
+  },
+  hypeEventHeaderSocialFallbackText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  hypeEventBubble: {
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  hypeEventBubbleOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  hypeEventBubbleContent: {
+    padding: 10,
+    position: 'relative',
+    zIndex: 1,
+    elevation: 1,
+  },
+  hypeEventFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 4,
+    position: 'relative',
+    zIndex: 1,
+  },
+  hypeEventFooterRowElevated: {
+    zIndex: 6,
+  },
+  hypeEventCounterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  hypeEventCounterText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+    marginLeft: 6,
+  },
+  hypeEventDonationTriggerWrap: {
+    alignItems: 'flex-end',
+    position: 'relative',
+  },
+  hypeEventDonationTriggerInner: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 11,
+    backgroundColor: 'transparent',
+    minWidth: 92,
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+  },
+  hypeEventDonationTriggerText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  hypeEventDonationPanelWrap: {
+    position: 'absolute',
+    bottom: 28,
+    right: 0,
+    zIndex: 8,
+    alignItems: 'center',
+  },
+  hypeEventDonationPanel: {
+    width: 170,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: 'rgba(10,10,10,0.97)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    elevation: 8,
+  },
+  hypeEventDonationPanelTitle: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '400',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  hypeEventDonationButton: {
+    minHeight: 58,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  hypeEventDonationButtonInner: {
+    flex: 1,
+    minHeight: 55,
+    borderRadius: 11,
+    backgroundColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  hypeEventDonationButtonLabel: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 5,
+  },
+  hypeEventDonationButtonAmountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hypeEventDonationButtonAmountText: {
+    color: 'rgba(255,255,255,0.88)',
+    fontSize: 12,
+    marginLeft: 6,
+  },
+  hypeEventDonationErrorText: {
+    color: '#FFB74D',
+    fontSize: 11,
+    fontWeight: '400',
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  hypeEventDonationBalanceRow: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hypeEventDonationBalanceText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '400',
+    marginLeft: 6,
   },
   homeEmptyStateWrap: {
     flex: 1,
@@ -19462,11 +25911,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bottomNavDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: '#FFB74D',
+  bottomNavGradientIconMask: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bottomNavIndicatorWrap: {
+    width: 32,
+    height: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   bottomNavLabel: {
     color: 'rgba(255,255,255,0.45)',
@@ -19616,10 +26071,21 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -4,
     right: -4,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#FF5252',
+    width: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sidePanelBadgeBorder: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+  },
+  sidePanelBadgeBackground: {
+    width: 17,
+    height: 17,
+    borderRadius: 8.5,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 3,
@@ -21376,6 +27842,1533 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
+  channelEventModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  channelEventModalCard: {
+    width: '100%',
+    maxWidth: 430,
+    maxHeight: '84%',
+    minHeight: 320,
+    backgroundColor: '#181818',
+    borderRadius: 26,
+    overflow: 'hidden',
+    zIndex: 1,
+    elevation: 8,
+  },
+  channelEventMinimizedPill: {
+    position: 'absolute',
+    alignSelf: 'center',
+    minWidth: 132,
+    maxWidth: 220,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#181818',
+    paddingLeft: 14,
+    paddingRight: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    zIndex: 1,
+    elevation: 8,
+  },
+  channelEventMinimizedTitleText: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+    marginRight: 10,
+  },
+  channelEventPanelTopActions: {
+    position: 'absolute',
+    top: 12,
+    right: 14,
+    zIndex: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  channelEventWhiteKeysBadge: {
+    minHeight: 28,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.34)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  channelEventWhiteKeysBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  channelEventPanelMinimizeButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.34)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelEventInfoBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 4,
+  },
+  channelEventScrollView: {
+    width: '100%',
+  },
+  channelEventScrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 46,
+    paddingBottom: 22,
+    flexGrow: 1,
+  },
+  channelEventToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  channelEventTogglePressable: {
+    marginRight: 10,
+    paddingVertical: 2,
+    paddingRight: 2,
+  },
+  channelEventToggleDot: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    overflow: 'hidden',
+    backgroundColor: '#000000',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    marginRight: 10,
+  },
+  channelEventDisabled: {
+    opacity: 0.5,
+  },
+  channelEventPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  channelEventSectionBlock: {
+    marginTop: 2,
+    marginBottom: 8,
+  },
+  channelEventTypeTrigger: {
+    borderRadius: 14,
+  },
+  channelEventAddImageRow: {
+    minHeight: 48,
+    borderRadius: 18,
+    backgroundColor: '#000000',
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    justifyContent: 'center',
+  },
+  channelEventAddImageLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  channelEventImagePreviewShell: {
+    alignSelf: 'flex-start',
+    position: 'relative',
+    marginBottom: 12,
+  },
+  channelEventImagePreview: {
+    width: 300,
+    height: 228,
+    borderRadius: 18,
+    backgroundColor: '#000000',
+  },
+  channelEventImageRemoveButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.58)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelEventSectionTitle: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  channelEventInlineLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  channelEventHypeCostLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+    zIndex: 6,
+  },
+  channelEventHypeCostInfoAnchor: {
+    position: 'relative',
+    zIndex: 6,
+  },
+  channelEventHypeCostLabelLeftRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  channelEventHypeCostInfoButton: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelEventHypeCostInfoPanel: {
+    position: 'absolute',
+    top: 28,
+    right: 0,
+    maxWidth: 260,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: 'rgba(10,10,10,0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    zIndex: 6,
+    elevation: 8,
+  },
+  channelEventHypeCostInfoText: {
+    color: 'rgba(255,255,255,0.88)',
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'justify',
+  },
+  channelEventField: {
+    minHeight: 48,
+    borderRadius: 18,
+    backgroundColor: '#000000',
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  channelEventFieldMultiline: {
+    minHeight: 92,
+    maxHeight: 112,
+    alignItems: 'flex-start',
+    paddingTop: 16,
+    overflow: 'hidden',
+  },
+  channelEventFieldText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+    flexShrink: 1,
+  },
+  channelEventFieldWrapper: {
+    marginBottom: 12,
+  },
+  channelEventFieldWithExternalCounter: {
+    marginBottom: 0,
+  },
+  channelEventFieldInput: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+    paddingVertical: 0,
+    margin: 0,
+  },
+  channelEventFieldInputMultiline: {
+    minHeight: 60,
+    maxHeight: 80,
+    lineHeight: 16,
+  },
+  channelEventFieldError: {
+    borderWidth: 1,
+    borderColor: '#D84315',
+  },
+  channelEventFieldCharacterCount: {
+    alignSelf: 'flex-end',
+    marginTop: 5,
+    marginRight: 4,
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 8,
+    fontWeight: '600',
+  },
+  channelEventDateErrorText: {
+    color: '#D84315',
+    fontSize: 12,
+    marginTop: -6,
+    marginBottom: 10,
+    marginLeft: 4,
+  },
+  channelEventTaskField: {
+    marginTop: -2,
+  },
+  channelEventTaskDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: -2,
+  },
+  channelEventTaskAssigneeField: {
+    flex: 1,
+    marginBottom: 12,
+  },
+  channelEventTaskAssigneeSuggestionsCard: {
+    marginTop: -4,
+    marginBottom: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.18)',
+    backgroundColor: '#0F0F0F',
+    overflow: 'hidden',
+  },
+  channelEventTaskAssigneeSuggestionRow: {
+    minHeight: 40,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
+  },
+  channelEventTaskAssigneeSuggestionText: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  channelEventTaskAssigneeVerifyButton: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelEventTaskAssigneeErrorText: {
+    color: '#D84315',
+    fontSize: 12,
+    marginTop: -6,
+    marginBottom: 10,
+    marginLeft: 4,
+  },
+  channelEventTaskAssignmentsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    marginTop: -2,
+    marginBottom: 12,
+  },
+  channelEventTaskAssignmentChip: {
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 183, 77, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.24)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 9,
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  channelEventTaskAssignmentChipText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+    marginRight: 4,
+  },
+  channelEventTaskRewardField: {
+    width: 120,
+    marginLeft: 10,
+    marginBottom: 12,
+  },
+  channelEventTaskRewardFieldBelow: {
+    width: 132,
+    marginTop: -2,
+    marginBottom: 12,
+  },
+  channelEventTaskRewardHintText: {
+    color: 'rgba(255,255,255,0.66)',
+    fontSize: 12,
+    marginTop: -2,
+    marginBottom: 12,
+    marginLeft: 4,
+  },
+  channelEventTaskRewardErrorText: {
+    color: '#D84315',
+    fontSize: 12,
+    marginTop: -6,
+    marginBottom: 10,
+    marginLeft: 4,
+  },
+  channelEventTypeOptionsPanel: {
+    marginTop: 8,
+    backgroundColor: '#101010',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  channelEventTypeSearchInput: {
+    height: 44,
+    margin: 10,
+    marginBottom: 4,
+    borderRadius: 14,
+    backgroundColor: '#000000',
+    color: '#FFFFFF',
+    paddingHorizontal: 14,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  channelEventTypeOption: {
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  channelEventTypeOptionText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  channelEventTypeOptionTextSelected: {
+    color: '#FFB74D',
+    fontWeight: '700',
+  },
+  channelEventSocialTrigger: {
+    borderRadius: 14,
+  },
+  channelEventSocialTriggerLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 1,
+  },
+  channelEventSelectedSocialIcon: {
+    width: 18,
+    height: 18,
+    resizeMode: 'contain',
+    marginRight: 10,
+  },
+  channelEventSocialOptionsPanel: {
+    marginTop: 2,
+    marginBottom: 12,
+    backgroundColor: '#101010',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+  },
+  channelEventSocialGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+  },
+  channelEventSocialOption: {
+    width: 52,
+    height: 52,
+    marginHorizontal: 4,
+    marginVertical: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#000000',
+  },
+  channelEventSocialOptionSelected: {
+    borderColor: '#FFB74D',
+    backgroundColor: 'rgba(255, 183, 77, 0.08)',
+  },
+  channelEventSocialOptionIcon: {
+    width: 28,
+    height: 28,
+    resizeMode: 'contain',
+  },
+  channelEventLinkInputShell: {
+    minHeight: 48,
+    borderRadius: 18,
+    backgroundColor: '#000000',
+    paddingLeft: 16,
+    paddingRight: 12,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  channelEventLinkInputShellDisabled: {
+    backgroundColor: 'rgba(255, 152, 0, 0.05)',
+  },
+  channelEventLinkInputShellError: {
+    borderColor: '#D84315',
+  },
+  channelEventLinkInput: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+    paddingVertical: 13,
+    paddingRight: 12,
+  },
+  channelEventLinkApplyAction: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelEventLinkErrorText: {
+    color: '#D84315',
+    fontSize: 12,
+    marginTop: -6,
+    marginBottom: 10,
+    marginLeft: 4,
+  },
+  channelEventAppliedSocialsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginTop: -2,
+    marginBottom: 12,
+  },
+  channelEventAppliedSocialButton: {
+    width: 36,
+    height: 36,
+    marginRight: 10,
+    marginBottom: 8,
+    borderRadius: 10,
+    backgroundColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelEventAppliedSocialIcon: {
+    width: 22,
+    height: 22,
+    resizeMode: 'contain',
+  },
+  channelEventLocationTrigger: {
+    borderRadius: 18,
+  },
+  channelEventLocationPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: -4,
+    marginBottom: 12,
+    gap: 8,
+    paddingRight: 6,
+  },
+  channelEventLocationPreviewAction: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  channelEventSubsectionTitle: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  channelEventSplitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  channelEventDatePickerPanel: {
+    marginTop: -4,
+    marginBottom: 12,
+    borderRadius: 16,
+    backgroundColor: '#101010',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: Platform.OS === 'ios' ? 8 : 0,
+  },
+  channelEventPickerModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  channelEventPickerModalCard: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#181818',
+    borderRadius: 24,
+    overflow: 'hidden',
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 16,
+  },
+  channelEventPickerModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  channelEventPickerModalTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  channelEventPickerModalBody: {
+    backgroundColor: '#101010',
+    borderRadius: 18,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: Platform.OS === 'ios' ? 10 : 2,
+    marginBottom: 14,
+  },
+  channelEventTimePickerBody: {
+    backgroundColor: '#101010',
+    borderRadius: 18,
+    overflow: 'hidden',
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 10,
+    marginBottom: 14,
+  },
+  channelEventCalendarShell: {
+    width: '100%',
+    borderRadius: 20,
+    overflow: 'hidden',
+    backgroundColor: '#101010',
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 6,
+  },
+  channelEventTimePreviewCard: {
+    minHeight: 54,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 183, 77, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.18)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+    gap: 10,
+  },
+  channelEventTimePreviewText: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+  },
+  channelEventTimeFormatToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+    gap: 10,
+  },
+  channelEventTimeFormatToggleButton: {
+    minHeight: 36,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: '#161616',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelEventTimeFormatToggleButtonSelected: {
+    backgroundColor: '#FFB74D',
+    borderColor: '#FFB74D',
+  },
+  channelEventTimeFormatToggleText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  channelEventTimeFormatToggleTextSelected: {
+    color: '#000000',
+    fontWeight: '800',
+  },
+  channelEventTimeColumns: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  channelEventTimeColumn: {
+    flex: 1,
+  },
+  channelEventTimeColumnMeridiem: {
+    width: 76,
+  },
+  channelEventTimeColumnDivider: {
+    width: 1,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    marginHorizontal: 12,
+    borderRadius: 999,
+  },
+  channelEventTimeColumnTitle: {
+    color: 'rgba(255,255,255,0.62)',
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  channelEventTimeOptionsScroll: {
+    maxHeight: 248,
+  },
+  channelEventTimeOptionsContent: {
+    paddingBottom: 4,
+  },
+  channelEventTimeOption: {
+    minHeight: 42,
+    borderRadius: 14,
+    backgroundColor: '#161616',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  channelEventTimeOptionSelected: {
+    backgroundColor: '#FFB74D',
+    borderColor: '#FFB74D',
+    shadowColor: '#FF9800',
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  channelEventTimeOptionText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  channelEventTimeOptionTextSelected: {
+    color: '#000000',
+    fontWeight: '800',
+  },
+  channelEventPickerModalActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  channelEventPickerActionButton: {
+    minWidth: 108,
+    height: 40,
+    borderRadius: 16,
+    backgroundColor: '#FFB74D',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 10,
+  },
+  channelEventPickerActionButtonSecondary: {
+    backgroundColor: '#000000',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  channelEventPickerActionText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  channelEventPickerActionTextPrimary: {
+    color: '#000000',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  channelEventDateField: {
+    flex: 1.25,
+    marginBottom: 0,
+    marginRight: 10,
+  },
+  channelEventTimeField: {
+    flex: 0.9,
+    marginBottom: 0,
+  },
+  channelEventTimeFieldInner: {
+    marginBottom: 0,
+  },
+  channelEventDurationField: {
+    width: 132,
+  },
+  channelEventDurationFieldInner: {
+    marginBottom: 0,
+  },
+  channelEventDurationHintText: {
+    color: 'rgba(255,255,255,0.56)',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: -6,
+    marginBottom: 12,
+    marginLeft: 4,
+  },
+  channelEventDurationModalHint: {
+    color: 'rgba(255,255,255,0.58)',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 14,
+    paddingHorizontal: 10,
+    lineHeight: 17,
+  },
+  channelEventDurationOptionDisabled: {
+    backgroundColor: '#121212',
+    borderColor: 'rgba(255,255,255,0.03)',
+    opacity: 0.38,
+  },
+  channelEventDurationOptionTextDisabled: {
+    color: 'rgba(255,255,255,0.3)',
+  },
+  channelEventApplyButtonShell: {
+    alignSelf: 'center',
+    width: 176,
+    marginTop: 6,
+    opacity: 1,
+  },
+  channelEventApplyButtonShellDisabled: {
+    opacity: 0.5,
+  },
+  channelEventApplyButtonInner: {
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  channelEventApplyButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  channelReadingMessageCard: {
+    width: '100%',
+    maxWidth: '100%',
+  },
+  channelReadingMessageImagesScroller: {
+    marginBottom: 10,
+  },
+  channelReadingMessageImagesRow: {
+    paddingRight: 4,
+  },
+  channelReadingMessageImageTouchable: {
+    marginRight: 10,
+  },
+  channelReadingMessageImage: {
+    width: 220,
+    height: 180,
+    borderRadius: 10,
+  },
+  channelReadingMessageContent: {
+    width: '100%',
+  },
+  channelReadingMessageTitle: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '800',
+    flexShrink: 1,
+  },
+  channelReadingMessageSubtitle: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 4,
+    flexShrink: 1,
+  },
+  channelReadingMessageLead: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 8,
+    fontStyle: 'italic',
+    flexShrink: 1,
+  },
+  channelReadingMessageFooter: {
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    marginTop: 14,
+  },
+  channelReadingMessageFooterHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  channelReadingMessageFooterLabel: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+    marginLeft: 6,
+  },
+  channelReadingMessagePublishedDate: {
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  channelReadingMessageCategory: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  expandedChannelReadingScreen: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  expandedChannelReadingPortal: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000000',
+    zIndex: 10001,
+    elevation: 10001,
+  },
+  expandedChannelReadingHeader: {
+    height: 56,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#000000',
+  },
+  expandedChannelReadingBackButton: {
+    padding: 8,
+  },
+  expandedChannelReadingHeaderSpacer: {
+    width: 36,
+    height: 36,
+  },
+  expandedChannelReadingContent: {
+    flex: 1,
+  },
+  expandedChannelReadingScroll: {
+    flex: 1,
+  },
+  expandedChannelReadingScrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 36,
+  },
+  expandedChannelReadingTitle: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '800',
+    textAlign: 'justify',
+  },
+  expandedChannelReadingSubtitle: {
+    color: '#FFFFFF',
+    fontSize: 21,
+    fontWeight: '700',
+    marginTop: 8,
+    textAlign: 'justify',
+  },
+  expandedChannelReadingLead: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    lineHeight: 28,
+    fontStyle: 'italic',
+    marginTop: 14,
+    textAlign: 'justify',
+  },
+  expandedChannelReadingSectionBlock: {
+    marginTop: 18,
+  },
+  expandedChannelReadingBodyText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    lineHeight: 28,
+    textAlign: 'justify',
+  },
+  expandedChannelReadingBodyFlow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+  },
+  expandedChannelReadingIntertitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '800',
+    marginTop: 22,
+    textAlign: 'justify',
+  },
+  expandedChannelReadingImageTouchable: {
+    marginTop: 18,
+  },
+  expandedChannelReadingImage: {
+    width: '100%',
+    height: 260,
+    borderRadius: 18,
+  },
+  expandedChannelReadingPublishedDate: {
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 13,
+    lineHeight: 20,
+    fontWeight: '600',
+    marginTop: 22,
+  },
+  expandedChannelReadingCategory: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 13,
+    lineHeight: 20,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  expandedChannelReadingHostCard: {
+    marginTop: 8,
+    paddingHorizontal: 0,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  expandedChannelReadingHostAvatarButton: {
+    alignSelf: 'center',
+  },
+  expandedChannelReadingHostAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+  },
+  expandedChannelReadingHostAvatarFallback: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  expandedChannelReadingHostBody: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  expandedChannelReadingHostUsernameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  expandedChannelReadingHostVerifiedBadge: {
+    marginRight: 6,
+  },
+  expandedChannelReadingHostKeintiBadge: {
+    marginLeft: 6,
+  },
+  expandedChannelReadingHostUsername: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  expandedChannelReadingHostSocialViewport: {
+    height: 18,
+    overflow: 'hidden',
+    marginTop: 6,
+  },
+  expandedChannelReadingHostSocialRow: {
+    alignItems: 'center',
+  },
+  expandedChannelReadingHostSocialIcon: {
+    width: READING_CITATION_USER_SOCIAL_ICON_SIZE,
+    height: READING_CITATION_USER_SOCIAL_ICON_SIZE,
+  },
+  expandedChannelReadingHostSocialIconSpacing: {
+    marginRight: READING_CITATION_USER_SOCIAL_ICON_GAP,
+  },
+  expandedChannelReadingCitationTouchable: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  expandedChannelReadingCitationTextWhite: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    lineHeight: 28,
+    fontWeight: '800',
+    textAlign: 'justify',
+  },
+  expandedChannelReadingCitationTextGradient: {
+    color: READING_ACCENT_GRADIENT_COLORS[0],
+    fontSize: 16,
+    lineHeight: 28,
+    fontWeight: '800',
+    textAlign: 'justify',
+    textShadowColor: READING_ACCENT_GRADIENT_COLORS[1],
+    textShadowRadius: 1.1,
+    textShadowOffset: { width: 0, height: 0 },
+  },
+  expandedChannelReadingCitationMaskText: {
+    color: '#000000',
+    fontSize: 16,
+    lineHeight: 28,
+    fontWeight: '800',
+    textAlign: 'justify',
+  },
+  expandedChannelReadingCitationMeasureText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    lineHeight: 28,
+    fontWeight: '800',
+    opacity: 0,
+    textAlign: 'justify',
+  },
+  expandedChannelReadingCitationOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.52)',
+    justifyContent: 'flex-end',
+  },
+  expandedChannelReadingCitationSheet: {
+    backgroundColor: '#080808',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 12,
+    paddingHorizontal: 18,
+    paddingBottom: 20,
+    borderTopWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    maxHeight: '60%',
+  },
+  expandedChannelReadingCitationHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    marginBottom: 14,
+  },
+  expandedChannelReadingCitationSheetTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  expandedChannelReadingCitationSheetExcerpt: {
+    color: '#CFCFCF',
+    fontSize: 13,
+    lineHeight: 19,
+    marginBottom: 14,
+  },
+  expandedChannelReadingCitationUsersList: {
+    maxHeight: 260,
+  },
+  expandedChannelReadingCitationUsersListContent: {
+    paddingBottom: 4,
+  },
+  expandedChannelReadingCitationUserRow: {
+    minHeight: 56,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  expandedChannelReadingCitationUserAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+  },
+  expandedChannelReadingCitationUserAvatarFallback: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  expandedChannelReadingCitationUserBody: {
+    flex: 1,
+    justifyContent: 'flex-start',
+  },
+  expandedChannelReadingCitationUserText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  expandedChannelReadingCitationSocialViewport: {
+    height: 18,
+    overflow: 'hidden',
+    marginTop: 3,
+  },
+  expandedChannelReadingCitationSocialRow: {
+    alignItems: 'center',
+  },
+  expandedChannelReadingCitationSocialIcon: {
+    width: READING_CITATION_USER_SOCIAL_ICON_SIZE,
+    height: READING_CITATION_USER_SOCIAL_ICON_SIZE,
+  },
+  expandedChannelReadingCitationSocialIconSpacing: {
+    marginRight: READING_CITATION_USER_SOCIAL_ICON_GAP,
+  },
+  channelEventMessageCard: {
+    width: '100%',
+    maxWidth: '100%',
+  },
+  channelEventMessageImage: {
+    width: '100%',
+    height: 180,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  channelEventMessageContent: {
+    width: '100%',
+  },
+  channelEventMessageName: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '800',
+    flexShrink: 1,
+  },
+  channelEventMessageDescription: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 6,
+    flexShrink: 1,
+  },
+  channelEventMessageWeekday: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: 12,
+  },
+  channelEventMessageDateTime: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  channelEventMessageSocialSection: {
+    marginTop: 12,
+  },
+  channelEventMessageSocialRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  channelEventMessageSocialButton: {
+    marginRight: 10,
+    marginBottom: 8,
+  },
+  channelEventMessageSocialIcon: {
+    width: 22,
+    height: 22,
+    resizeMode: 'contain',
+  },
+  channelEventMessageLocationSection: {
+    marginTop: 4,
+  },
+  channelEventMessageLocation: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
+  },
+  channelEventMessageFooter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+  },
+  channelEventMessageFooterLabel: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  channelEventMessageFooterType: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  channelEventMessageHypeIconRow: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  channelEventMessageTasksSection: {
+    marginTop: 12,
+  },
+  channelEventMessageDivider: {
+    height: 2,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    width: '100%',
+  },
+  channelEventMessageTasksList: {
+    marginTop: 12,
+    gap: 10,
+  },
+  channelEventMessageTaskRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  channelEventMessageTaskContent: {
+    flex: 1,
+  },
+  channelEventMessageTaskHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  channelEventMessageTaskCheckbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.92)',
+    marginRight: 10,
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelEventMessageTaskCheckboxActionable: {
+    borderColor: '#FFB74D',
+  },
+  channelEventMessageTaskCheckboxCompleted: {
+    backgroundColor: '#FFB74D',
+    borderColor: '#FFB74D',
+  },
+  channelEventMessageTaskCheckboxRefunded: {
+    borderColor: 'rgba(255,255,255,0.32)',
+  },
+  channelEventMessageTaskAssignee: {
+    color: '#FFB74D',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  channelEventMessageTaskRewardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingLeft: 28,
+    marginTop: -1,
+    marginBottom: 4,
+  },
+  channelEventMessageTaskRewardText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  channelEventMessageTaskRewardTextRefunded: {
+    color: 'rgba(255,255,255,0.58)',
+  },
+  channelEventMessageTaskText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    lineHeight: 18,
+    paddingLeft: 28,
+  },
+  channelEventMessageTaskTextWithoutCheckbox: {
+    paddingLeft: 0,
+  },
+  channelEventMessageDurationText: {
+    marginTop: 14,
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  channelEventMessageDurationPrefix: {
+    fontWeight: '400',
+  },
+  channelEventSectionTitleSuffix: {
+    fontWeight: '400',
+  },
 });
+
+function parseReadingGradientHexColor(value: string) {
+  const normalized = String(value || '').trim().replace('#', '');
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) {
+    return { red: 255, green: 255, blue: 255 };
+  }
+
+  return {
+    red: parseInt(normalized.slice(0, 2), 16),
+    green: parseInt(normalized.slice(2, 4), 16),
+    blue: parseInt(normalized.slice(4, 6), 16),
+  };
+}
+
+function interpolateReadingGradientColor(startColor: string, endColor: string, ratio: number) {
+  const start = parseReadingGradientHexColor(startColor);
+  const end = parseReadingGradientHexColor(endColor);
+  const clampedRatio = Math.max(0, Math.min(1, ratio));
+  const channelToHex = (value: number) => Math.round(value).toString(16).padStart(2, '0');
+
+  const red = start.red + ((end.red - start.red) * clampedRatio);
+  const green = start.green + ((end.green - start.green) * clampedRatio);
+  const blue = start.blue + ((end.blue - start.blue) * clampedRatio);
+
+  return `#${channelToHex(red)}${channelToHex(green)}${channelToHex(blue)}`;
+}
+
+function renderExpandedGradientTextContent({
+  text,
+  keyPrefix,
+  startColor,
+  endColor,
+}: {
+  text: string;
+  keyPrefix: string;
+  startColor: string;
+  endColor: string;
+}) {
+  const characters = Array.from(String(text || ''));
+  const denominator = Math.max(1, characters.length - 1);
+
+  return characters.map((character, index) => (
+    <Text
+      key={`${keyPrefix}-${index}`}
+      style={{ color: interpolateReadingGradientColor(startColor, endColor, index / denominator) }}
+    >
+      {character}
+    </Text>
+  ));
+}
+
+function renderExpandedReadingTextFragments({
+  text,
+  citations,
+  keyPrefix,
+  plainTextStyle,
+  whiteCitationStyle,
+  gradientCitationStyle,
+  onPressCitation,
+}: {
+  text: string;
+  citations: ChannelReadingCitation[];
+  keyPrefix: string;
+  plainTextStyle: any;
+  whiteCitationStyle: any;
+  gradientCitationStyle: any;
+  onPressCitation?: (citation: ChannelReadingCitation) => void;
+}) {
+  if (!citations.length) {
+    return text;
+  }
+
+  const fragments: React.ReactNode[] = [];
+  let cursor = 0;
+
+  citations.forEach((citation, citationIndex) => {
+    if (cursor < citation.start) {
+      fragments.push(
+        <Text
+          key={`${keyPrefix}-plain-${citationIndex}-${cursor}`}
+          style={plainTextStyle}
+        >
+          {text.slice(cursor, citation.start)}
+        </Text>
+      );
+    }
+
+    fragments.push(
+      <Text
+        key={`${keyPrefix}-citation-${citation.id}`}
+        style={citation.appearance === 'gradient' ? gradientCitationStyle : whiteCitationStyle}
+        onPress={onPressCitation ? () => onPressCitation(citation) : undefined}
+        suppressHighlighting={!!onPressCitation}
+      >
+        {citation.appearance === 'gradient'
+          ? renderExpandedGradientTextContent({
+            text: text.slice(citation.start, citation.end),
+            keyPrefix: `${keyPrefix}-gradient-${citation.id}`,
+            startColor: READING_ACCENT_GRADIENT_COLORS[0],
+            endColor: READING_ACCENT_GRADIENT_COLORS[1],
+          })
+          : text.slice(citation.start, citation.end)}
+      </Text>
+    );
+
+    cursor = citation.end;
+  });
+
+  if (cursor < text.length) {
+    fragments.push(
+      <Text key={`${keyPrefix}-plain-tail-${cursor}`} style={plainTextStyle}>
+        {text.slice(cursor)}
+      </Text>
+    );
+  }
+
+  return fragments;
+}
+
+function FrontScreenGradientCitationText({
+  text,
+  onPress,
+  textStyle,
+  maskTextStyle,
+  measureTextStyle,
+}: {
+  text: string;
+  onPress: () => void;
+  textStyle: any;
+  maskTextStyle: any;
+  measureTextStyle: any;
+}) {
+  const [layout, setLayout] = useState<{ width: number; height: number } | null>(null);
+
+  return (
+    <TouchableOpacity
+      accessibilityRole="button"
+      activeOpacity={0.85}
+      onPress={onPress}
+      style={{ position: 'relative', alignSelf: 'flex-start', flexShrink: 1, maxWidth: '100%' }}
+    >
+      <Text
+        style={measureTextStyle}
+        onLayout={(event) => {
+          const nextWidth = Math.ceil(event.nativeEvent.layout.width);
+          const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+          if (!nextWidth || !nextHeight) {
+            return;
+          }
+
+          setLayout((previous) => {
+            if (previous?.width === nextWidth && previous?.height === nextHeight) {
+              return previous;
+            }
+
+            return {
+              width: nextWidth,
+              height: nextHeight,
+            };
+          });
+        }}
+      >
+        {text}
+      </Text>
+
+      {layout ? (
+        <View style={{ position: 'absolute', top: 0, left: 0 }} pointerEvents="none">
+          <MaskedView
+            style={{ width: layout.width, height: layout.height }}
+            maskElement={
+              <View style={{ width: layout.width, height: layout.height }}>
+                <Text style={maskTextStyle}>{text}</Text>
+              </View>
+            }
+          >
+            <Svg width={layout.width} height={layout.height}>
+              <Defs>
+                <LinearGradient id="frontscreen_expanded_reading_citation_gradient" x1="0" y1="0" x2="1" y2="0">
+                  <Stop offset="0" stopColor={READING_ACCENT_GRADIENT_COLORS[0]} stopOpacity="1" />
+                  <Stop offset="1" stopColor={READING_ACCENT_GRADIENT_COLORS[1]} stopOpacity="1" />
+                </LinearGradient>
+              </Defs>
+              <Rect x="0" y="0" width={layout.width} height={layout.height} fill="url(#frontscreen_expanded_reading_citation_gradient)" />
+            </Svg>
+          </MaskedView>
+        </View>
+      ) : null}
+
+      <Text style={textStyle}>{text}</Text>
+    </TouchableOpacity>
+  );
+}
 
 export default FrontScreen;

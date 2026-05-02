@@ -15,10 +15,10 @@ jest.mock('react-native/Libraries/Linking/Linking', () => ({
 // Some React Native versions / Jest environments can end up with missing core exports.
 // Provide safe fallbacks to avoid crashing snapshot/render tests.
 try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+
   const RN = require('react-native');
-  if (!RN.SafeAreaView) RN.SafeAreaView = RN.View;
-  if (!RN.KeyboardAvoidingView) RN.KeyboardAvoidingView = RN.View;
+  if (!RN.SafeAreaView) {RN.SafeAreaView = RN.View;}
+  if (!RN.KeyboardAvoidingView) {RN.KeyboardAvoidingView = RN.View;}
 
   // In some Jest environments, the RN preset provides a partial Linking mock
   // without addEventListener/getInitialURL. Patch the instance directly.

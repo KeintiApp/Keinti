@@ -62,6 +62,9 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_auth_user();
 
+-- Internal trigger function: do not expose as a callable RPC.
+revoke execute on function public.handle_new_auth_user() from public, anon, authenticated;
+
 -- Backfill: create missing public.users rows for existing auth.users
 insert into public.users (
   email,
@@ -266,6 +269,10 @@ begin
   return new;
 end;
 $$;
+
+-- Internal trigger functions: do not expose as callable RPCs.
+revoke execute on function public.trg_set_rectification_review_fields() from public, anon, authenticated;
+revoke execute on function public.trg_unlock_email_on_rectification_accept() from public, anon, authenticated;
 
 -- =========================================================
 -- NOTE about the rest of your app tables

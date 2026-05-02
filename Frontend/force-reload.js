@@ -13,7 +13,7 @@ const options = {
 
 const req = http.request(options, (res) => {
   console.log(`✅ Respuesta del servidor: ${res.statusCode}`);
-  
+
   res.on('data', (d) => {
     process.stdout.write(d);
   });

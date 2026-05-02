@@ -17,7 +17,7 @@ const normalizeAccountKey = (value?: string | null) => String(value || '').trim(
 const loadHandledAccounts = async (): Promise<Record<string, true>> => {
   try {
     const raw = await AsyncStorage.getItem(ADS_CONSENT_HANDLED_ACCOUNTS_STORAGE_KEY);
-    if (!raw) return {};
+    if (!raw) {return {};}
 
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -38,7 +38,7 @@ const loadHandledAccounts = async (): Promise<Record<string, true>> => {
 
 const hasHandledAdsConsentForAccount = async (accountKey?: string | null) => {
   const normalizedKey = normalizeAccountKey(accountKey);
-  if (!normalizedKey) return true;
+  if (!normalizedKey) {return true;}
 
   const handledAccounts = await loadHandledAccounts();
   return handledAccounts[normalizedKey] === true;
@@ -46,17 +46,17 @@ const hasHandledAdsConsentForAccount = async (accountKey?: string | null) => {
 
 const markAdsConsentHandledForAccount = async (accountKey?: string | null) => {
   const normalizedKey = normalizeAccountKey(accountKey);
-  if (!normalizedKey) return;
+  if (!normalizedKey) {return;}
 
   const handledAccounts = await loadHandledAccounts();
-  if (handledAccounts[normalizedKey] === true) return;
+  if (handledAccounts[normalizedKey] === true) {return;}
 
   handledAccounts[normalizedKey] = true;
   await AsyncStorage.setItem(ADS_CONSENT_HANDLED_ACCOUNTS_STORAGE_KEY, JSON.stringify(handledAccounts));
 };
 
 const initializeAdsSdkIfNeeded = async (adsSdkReady: boolean) => {
-  if (!adsSdkReady) return;
+  if (!adsSdkReady) {return;}
 
   if (!adsSdkInitPromise) {
     adsSdkInitPromise = mobileAds()

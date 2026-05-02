@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,6 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import Svg, { Defs, LinearGradient, Stop, Rect, Circle } from 'react-native-svg';
-import { COUNTRIES } from '../constants/countries';
 import {
   submitEmailRectification,
   checkUsernameRegistered,
@@ -29,6 +28,7 @@ import {
   checkSignupEmailStatus,
 } from '../services/userService';
 import { useI18n } from '../i18n/I18nProvider';
+import { getLocalizedNationalityName, getLocalizedNationalityOptions } from '../i18n/nationalities';
 import {
   COOKIES_ADVERTISING_POLICY_MD,
   PRIVACY_POLICY_MD,
@@ -167,7 +167,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
   const persistPendingSignup = async (options?: { verificationDeadline?: number }) => {
     const e = String(email || '').trim().toLowerCase();
-    if (!e) return;
+    if (!e) {return;}
 
     const existingRaw = await AsyncStorage.getItem(pendingKeyForEmail(e)).catch(() => null);
     let existing: any = null;
@@ -197,16 +197,16 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
     await AsyncStorage.setItem(pendingKeyForEmail(e), JSON.stringify(payload));
   };
 
-  const loadPendingSignup = async () => {
+  const _loadPendingSignup = async () => {
     const e = String(email || '').trim().toLowerCase();
-    if (!e) return null;
+    if (!e) {return null;}
 
     const raw = await AsyncStorage.getItem(pendingKeyForEmail(e));
-    if (!raw) return null;
+    if (!raw) {return null;}
     try {
       const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return null;
-      if (String(parsed.email || '').trim().toLowerCase() !== e) return null;
+      if (!parsed || typeof parsed !== 'object') {return null;}
+      if (String(parsed.email || '').trim().toLowerCase() !== e) {return null;}
       return parsed as {
         email: string;
         username?: string;
@@ -223,7 +223,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
   const clearPendingSignup = async () => {
     const e = String(email || '').trim().toLowerCase();
-    if (!e) return;
+    if (!e) {return;}
     await AsyncStorage.removeItem(pendingKeyForEmail(e)).catch(() => {});
   };
 
@@ -244,12 +244,12 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
       const entries = await Promise.all(
         pendingKeys.map(async (k) => {
           const raw = await AsyncStorage.getItem(k).catch(() => null);
-          if (!raw) return null;
+          if (!raw) {return null;}
           try {
             const parsed = JSON.parse(raw);
-            if (!parsed || typeof parsed !== 'object') return null;
+            if (!parsed || typeof parsed !== 'object') {return null;}
             const parsedEmail = String(parsed.email || '').trim().toLowerCase();
-            if (!parsedEmail) return null;
+            if (!parsedEmail) {return null;}
             return {
               email: parsedEmail,
               username: String(parsed.username || '').trim(),
@@ -277,7 +277,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
       }
 
       const status = await checkSignupEmailStatus(selected.email).catch(() => null);
-      if (cancelled) return;
+      if (cancelled) {return;}
 
       if (status?.status === 'rectification_pending') {
         // While admins review the claim, do not return to verification step.
@@ -323,9 +323,9 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   const bottomInset = Math.max(safeAreaInsets.bottom, Platform.OS === 'android' ? 12 : 0);
 
   const getActivePolicyMd = () => {
-    if (activePolicy === 'privacy') return PRIVACY_POLICY_MD;
-    if (activePolicy === 'cookiesAds') return COOKIES_ADVERTISING_POLICY_MD;
-    if (activePolicy === 'terms') return TERMS_OF_USE_MD;
+    if (activePolicy === 'privacy') {return PRIVACY_POLICY_MD;}
+    if (activePolicy === 'cookiesAds') {return COOKIES_ADVERTISING_POLICY_MD;}
+    if (activePolicy === 'terms') {return TERMS_OF_USE_MD;}
     return '';
   };
 
@@ -339,10 +339,10 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
   const getLocalizedGender = (rawGender: string) => {
     const normalized = String(rawGender || '').trim().toLowerCase();
-    if (!normalized) return '';
+    if (!normalized) {return '';}
 
-    if (['hombre', 'man', 'male', 'm'].includes(normalized)) return t('gender.male');
-    if (['mujer', 'woman', 'female', 'f'].includes(normalized)) return t('gender.female');
+    if (['hombre', 'man', 'male', 'm'].includes(normalized)) {return t('gender.male');}
+    if (['mujer', 'woman', 'female', 'f'].includes(normalized)) {return t('gender.female');}
     if (
       [
         'no especificar',
@@ -403,19 +403,19 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
   const formatBirthDateDigits = (digits: string) => {
     const cleaned = String(digits || '').replace(/[^0-9]/g, '').slice(0, 8);
-    if (cleaned.length <= 2) return cleaned;
-    if (cleaned.length <= 4) return `${cleaned.slice(0, 2)}/${cleaned.slice(2)}`;
+    if (cleaned.length <= 2) {return cleaned;}
+    if (cleaned.length <= 4) {return `${cleaned.slice(0, 2)}/${cleaned.slice(2)}`;}
     return `${cleaned.slice(0, 2)}/${cleaned.slice(2, 4)}/${cleaned.slice(4)}`;
   };
 
   const parseBirthDateToDate = (value: string) => {
     const match = String(value || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-    if (!match) return null;
+    if (!match) {return null;}
     const day = parseInt(match[1], 10);
     const month = parseInt(match[2], 10);
     const year = parseInt(match[3], 10);
-    if (year < 1900) return null;
-    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    if (year < 1900) {return null;}
+    if (month < 1 || month > 12 || day < 1 || day > 31) {return null;}
     const date = new Date(year, month - 1, day);
     if (
       date.getFullYear() !== year ||
@@ -436,11 +436,11 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   const birthDatePickerMaxDate = getDefaultBirthDate();
 
   const getLocaleTag = () => {
-    if (language === 'en') return 'en-US';
-    if (language === 'fr') return 'fr-FR';
-    if (language === 'pt') return 'pt-PT';
-    if (language === 'de') return 'de-DE';
-    if (language === 'it') return 'it-IT';
+    if (language === 'en') {return 'en-US';}
+    if (language === 'fr') {return 'fr-FR';}
+    if (language === 'pt') {return 'pt-PT';}
+    if (language === 'de') {return 'de-DE';}
+    if (language === 'it') {return 'it-IT';}
     return 'es-ES';
   };
 
@@ -678,8 +678,8 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
 
   const isValidPassword = (pass: string) => {
     const value = String(pass || '');
-    if (value.length < 10) return false;
-    if (value.length > 20) return false;
+    if (value.length < 10) {return false;}
+    if (value.length > 20) {return false;}
     const letterRegex = /[a-zA-Z]/;
     const numberRegex = /\d/;
     const specialCharRegex = /[!@#$%^&*(),.?":{}|<>]/;
@@ -823,13 +823,13 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
   // completed), call the backend to record the failed attempt, delete the
   // unconfirmed Supabase user, and reset the form back to step 1.
   useEffect(() => {
-    if (step !== 5) return;
-    if (verificationSecondsLeft > 0) return;
-    if (verificationDeadline <= 0) return; // timer was never started
-    if (isEmailLocked) return;
-    if (showSuccessMessage) return; // registration already succeeded
-    if (deepLinkHandledRef.current) return; // callback already processed
-    if (expiryHandledRef.current) return; // already handling this expiry
+    if (step !== 5) {return;}
+    if (verificationSecondsLeft > 0) {return;}
+    if (verificationDeadline <= 0) {return;} // timer was never started
+    if (isEmailLocked) {return;}
+    if (showSuccessMessage) {return;} // registration already succeeded
+    if (deepLinkHandledRef.current) {return;} // callback already processed
+    if (expiryHandledRef.current) {return;} // already handling this expiry
 
     expiryHandledRef.current = true;
 
@@ -886,9 +886,14 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, verificationSecondsLeft, verificationDeadline, isEmailLocked, showSuccessMessage]);
 
-  // Filtrar países según la búsqueda
-  const filteredCountries = COUNTRIES.filter(country =>
-    country.toLowerCase().includes(nationalitySearch.toLowerCase())
+  const localizedSelectedNationality = useMemo(
+    () => getLocalizedNationalityName(nationality, language),
+    [language, nationality],
+  );
+
+  const filteredCountries = useMemo(
+    () => getLocalizedNationalityOptions(language, nationalitySearch),
+    [language, nationalitySearch],
   );
 
   const handleNext = async () => {
@@ -1274,7 +1279,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
                     )}
 
                     {signupExpiredNotice !== '' && (
-                      <Text style={[styles.errorText, { color: '#FFB74D', marginTop: 10 }]}>
+                      <Text style={[styles.errorText, styles.signupExpiredNoticeText]}>
                         {signupExpiredNotice}
                       </Text>
                     )}
@@ -1297,7 +1302,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
                       onChangeText={handleUsernameChange}
                       maxLength={USERNAME_MAX_LENGTH}
                       onBlur={() => {
-                        void validateUsernameAvailability(username);
+                        validateUsernameAvailability(username).catch(() => {});
                       }}
                       autoCapitalize="none"
                     />
@@ -1378,7 +1383,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
                       onPress={() => setShowNationalityPicker(!showNationalityPicker)}
                       activeOpacity={0.7}>
                       <Text style={[styles.pickerButtonText, nationality === '' && styles.pickerPlaceholder]}>
-                        {nationality || t('register.selectNationality')}
+                        {localizedSelectedNationality || t('register.selectNationality')}
                       </Text>
                       <Icon name={showNationalityPicker ? 'expand-less' : 'expand-more'} size={24} color="#ffffffff" />
                     </TouchableOpacity>
@@ -1397,15 +1402,15 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
                           {filteredCountries.length > 0 ? (
                             filteredCountries.map((country) => (
                               <TouchableOpacity
-                                key={country}
+                                key={country.value}
                                 style={styles.nationalityItem}
                                 onPress={() => {
-                                  setNationality(country);
+                                  setNationality(country.value);
                                   setShowNationalityPicker(false);
                                   setNationalitySearch('');
                                 }}
                                 activeOpacity={0.7}>
-                                <Text style={styles.nationalityItemText}>{country}</Text>
+                                <Text style={styles.nationalityItemText}>{country.label}</Text>
                               </TouchableOpacity>
                             ))
                           ) : (
@@ -1634,7 +1639,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
                         (step === 2 && !isStep2Valid) ||
                         (step === 3 && !isStep3Valid) ||
                         (step === 4 && (!isStep4Valid || isSubmitting)) ||
-                        (step === 1 && isCheckingEmail)) && styles.nextButtonTextDisabled
+                        (step === 1 && isCheckingEmail)) && styles.nextButtonTextDisabled,
                     ]}>
                       {step === 4
                         ? (isSubmitting ? t('register.registering') : t('register.signUp'))
@@ -2144,6 +2149,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 6,
     marginLeft: 4,
+  },
+  signupExpiredNoticeText: {
+    color: '#FFB74D',
+    marginTop: 10,
   },
   verificationHint: {
     color: '#ffffffff',

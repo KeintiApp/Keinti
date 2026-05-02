@@ -21,7 +21,7 @@ export const isSupabaseConfigured = () => Boolean(supabaseUrl && supabaseAnonKey
 if (__DEV__) {
   // Do not log keys. Length is enough for diagnostics.
   const host = supabaseUrl.replace(/^https?:\/\//, '').split('/')[0];
-  // eslint-disable-next-line no-console
+
   console.log(`[supabase] configured=${isSupabaseConfigured()} host=${host} anonKeyLength=${supabaseAnonKey.length}`);
 }
 

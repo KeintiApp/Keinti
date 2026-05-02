@@ -15,6 +15,9 @@ async function initDatabase() {
         social_networks JSONB DEFAULT '[]',
         preferred_language VARCHAR(5) NOT NULL DEFAULT 'es',
         balance INTEGER DEFAULT 0,
+        white_keys_balance INTEGER NOT NULL DEFAULT 0,
+        gradient_keys_balance INTEGER NOT NULL DEFAULT 0,
+        white_keys_daily_goals_state JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -93,6 +96,17 @@ async function initDatabase() {
     // UI hints (migración suave)
     await pool.query(
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS home_swipe_tutorial_seen BOOLEAN NOT NULL DEFAULT FALSE;`
+    ).catch(() => {});
+
+    // Llaves y progreso diario (migración suave)
+    await pool.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS white_keys_balance INTEGER NOT NULL DEFAULT 0;`
+    ).catch(() => {});
+    await pool.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS gradient_keys_balance INTEGER NOT NULL DEFAULT 0;`
+    ).catch(() => {});
+    await pool.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS white_keys_daily_goals_state JSONB NOT NULL DEFAULT '{}'::jsonb;`
     ).catch(() => {});
 
     // Verificación de email (registro): códigos temporales y bloqueos por intentos.
@@ -286,14 +300,111 @@ async function initDatabase() {
         post_id INTEGER REFERENCES Post_users(id) ON DELETE CASCADE,
         sender_email VARCHAR(255) REFERENCES users(email) ON DELETE CASCADE,
         message TEXT NOT NULL,
+        hidden BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    await pool.query(
+      `ALTER TABLE channel_messages
+       ADD COLUMN IF NOT EXISTS hidden BOOLEAN NOT NULL DEFAULT FALSE;`
+    ).catch(() => {});
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS channel_reply_notifications (
+        id SERIAL PRIMARY KEY,
+        post_id INTEGER NOT NULL REFERENCES Post_users(id) ON DELETE CASCADE,
+        channel_message_id INTEGER NOT NULL UNIQUE REFERENCES channel_messages(id) ON DELETE CASCADE,
+        publisher_email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+        viewer_email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+        read_at TIMESTAMP,
+        dismissed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await pool.query(
+      `ALTER TABLE channel_reply_notifications
+       ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMP;`
+    ).catch(() => {});
 
     // Índices útiles
     await pool.query(
       `CREATE INDEX IF NOT EXISTS idx_channel_messages_post_id_id
        ON channel_messages (post_id, id);`
+    ).catch(() => {});
+
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_channel_reply_notifications_viewer_read
+       ON channel_reply_notifications (viewer_email, read_at, created_at DESC);`
+    ).catch(() => {});
+
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_channel_reply_notifications_viewer_dismissed
+       ON channel_reply_notifications (viewer_email, dismissed_at, created_at DESC);`
+    ).catch(() => {});
+
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_channel_reply_notifications_post_id
+       ON channel_reply_notifications (post_id);`
+    ).catch(() => {});
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS channel_event_task_rewards (
+        id SERIAL PRIMARY KEY,
+        channel_message_id INTEGER NOT NULL REFERENCES channel_messages(id) ON DELETE CASCADE,
+        post_id INTEGER NOT NULL REFERENCES Post_users(id) ON DELETE CASCADE,
+        task_index INTEGER NOT NULL,
+        host_email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+        assignee_email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+        assignee_username VARCHAR(50) NOT NULL,
+        reward_amount INTEGER NOT NULL DEFAULT 0,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        completed_by_email VARCHAR(255) NULL REFERENCES users(email) ON DELETE SET NULL,
+        expires_at TIMESTAMP NOT NULL,
+        completed_at TIMESTAMP NULL,
+        refunded_at TIMESTAMP NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(channel_message_id, task_index)
+      );
+    `).catch(() => {});
+
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_channel_event_task_rewards_message_id
+       ON channel_event_task_rewards (channel_message_id, task_index);`
+    ).catch(() => {});
+
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_channel_event_task_rewards_pending_expiry
+       ON channel_event_task_rewards (status, expires_at);`
+    ).catch(() => {});
+
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_channel_event_task_rewards_post_id
+       ON channel_event_task_rewards (post_id);`
+    ).catch(() => {});
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS channel_event_donations (
+        id SERIAL PRIMARY KEY,
+        channel_message_id INTEGER NOT NULL REFERENCES channel_messages(id) ON DELETE CASCADE,
+        post_id INTEGER NOT NULL REFERENCES Post_users(id) ON DELETE CASCADE,
+        donor_email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+        host_email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+        donation_amount INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `).catch(() => {});
+
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_channel_event_donations_message_id
+       ON channel_event_donations (channel_message_id, created_at DESC);`
+    ).catch(() => {});
+
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_channel_event_donations_post_id
+       ON channel_event_donations (post_id);`
     ).catch(() => {});
 
     await pool.query(
@@ -643,6 +754,7 @@ async function initDatabase() {
         status VARCHAR(20) NOT NULL DEFAULT 'pending',
         block_reason TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        read_at TIMESTAMP,
         responded_at TIMESTAMP,
         UNIQUE (group_id, requester_email, target_email)
       );
@@ -656,6 +768,10 @@ async function initDatabase() {
     // Migración suave: añadir block_reason si la tabla existía sin esa columna
     await pool
       .query(`ALTER TABLE group_join_requests ADD COLUMN IF NOT EXISTS block_reason TEXT;`)
+      .catch(() => {});
+
+    await pool
+      .query(`ALTER TABLE group_join_requests ADD COLUMN IF NOT EXISTS read_at TIMESTAMP;`)
       .catch(() => {});
 
     // Migración suave: si ya existía la FK con ON DELETE CASCADE, cambiarla a ON DELETE SET NULL

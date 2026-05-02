@@ -119,7 +119,7 @@ router.post('/', authenticateToken, async (req, res) => {
       `INSERT INTO group_join_requests (group_id, post_id, requester_email, target_email, status, created_at, responded_at)
        VALUES ($1, $2, $3, $4, 'pending', CURRENT_TIMESTAMP, NULL)
        ON CONFLICT (group_id, requester_email, target_email)
-       DO UPDATE SET status = 'pending', created_at = CURRENT_TIMESTAMP, responded_at = NULL, post_id = EXCLUDED.post_id
+       DO UPDATE SET status = 'pending', created_at = CURRENT_TIMESTAMP, responded_at = NULL, post_id = EXCLUDED.post_id, read_at = NULL
        RETURNING id, group_id, post_id, requester_email, target_email, status, created_at`,
       [groupId, postId, requesterEmail, targetUser.email]
     );

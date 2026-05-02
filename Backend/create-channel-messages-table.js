@@ -20,11 +20,16 @@ async function createChannelMessagesTable() {
         post_id INTEGER REFERENCES Post_users(id) ON DELETE CASCADE,
         sender_email VARCHAR(255) REFERENCES users(email) ON DELETE CASCADE,
         message TEXT NOT NULL,
+                hidden BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `;
 
         await client.query(createTableQuery);
+                await client.query(`
+            ALTER TABLE channel_messages
+            ADD COLUMN IF NOT EXISTS hidden BOOLEAN NOT NULL DEFAULT FALSE;
+        `);
         console.log('✅ Tabla "channel_messages" creada o verificada exitosamente');
 
     } catch (error) {

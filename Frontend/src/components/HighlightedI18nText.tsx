@@ -7,7 +7,7 @@ type Segment = { text: string; kind: 'normal' | 'highlight' };
 
 const parseMarkedText = (raw: string): Segment[] => {
   const value = String(raw ?? '');
-  if (!value) return [{ text: '', kind: 'normal' }];
+  if (!value) {return [{ text: '', kind: 'normal' }];}
 
   const segments: Segment[] = [];
   const re = /\[\[(.+?)\]\]/g;

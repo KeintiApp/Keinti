@@ -18,7 +18,7 @@ export const API_URL = (() => {
 })();
 
 export const getServerResourceUrl = (path: string) => {
-  if (!path) return '';
+  if (!path) {return '';}
 
   const raw = String(path);
 
@@ -26,7 +26,7 @@ export const getServerResourceUrl = (path: string) => {
   // This makes stored URLs resilient if the backend disables the legacy id route.
   const normalizeLegacyImageUrl = (value: string) => {
     const v = String(value || '').trim();
-    if (!v) return v;
+    if (!v) {return v;}
 
     // Absolute URL case
     if (v.startsWith('http://') || v.startsWith('https://')) {

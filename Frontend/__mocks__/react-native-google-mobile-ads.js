@@ -14,7 +14,7 @@ const createMockAd = () => {
     // Test helper (not used by app code): trigger an event.
     __emit: (type, payload) => {
       const handler = listeners.get(type);
-      if (typeof handler === 'function') handler(payload);
+      if (typeof handler === 'function') {handler(payload);}
     },
   };
 };

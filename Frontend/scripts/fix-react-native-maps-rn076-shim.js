@@ -44,9 +44,9 @@ public interface ViewManagerWithGeneratedInterface {}
 try {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, content, 'utf8');
-  // eslint-disable-next-line no-console
+
   console.log(`[postinstall] Wrote RN maps shim: ${targetPath}`);
 } catch (err) {
-  // eslint-disable-next-line no-console
+
   console.warn('[postinstall] Failed to write RN maps shim:', err && err.message ? err.message : err);
 }

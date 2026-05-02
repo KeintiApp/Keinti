@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, GestureResponderEvent, Image, Keyboard, Linking, Modal, PermissionsAndroid, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, GestureResponderEvent, Image, Keyboard, Linking, Modal, PermissionsAndroid, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -10,17 +10,18 @@ import Clipboard from '@react-native-clipboard/clipboard';
 import { API_URL, getServerResourceUrl } from '../config/api';
 import { POLICY_URLS, type PolicyUrlKey } from '../config/policies';
 import { useI18n } from '../i18n/I18nProvider';
+import { getLocalizedNationalityName, getLocalizedNationalityOptions } from '../i18n/nationalities';
 import type { Language, TranslationKey } from '../i18n/translations';
 import { loadKeintiAuthSession, saveKeintiAuthSession } from '../services/authSessionStorage';
 import { adminReviewAccountSelfie, changeMyPassword, deleteMyAccount, getAccountAuthStatus, getAdminBlockedAccountSelfies, getAdminPendingAccountSelfies, getMyChannelJoinsProgress, getMyDevicePermissions, getMyGroupsActiveMembersProgress, getMyIntimidadesOpensProgress, getMyPersonalData, getMyProfilePublishesProgress, getTotpSetup, setMyDevicePermissions, updateMyNationality, updatePreferredLanguage, uploadAccountSelfie, verifyKeintiAccount, verifyMyPassword, verifyTotpCode } from '../services/userService';
 import PasswordResetModal, { PASSWORD_RESET_DRAFT_STORAGE_KEY } from '../components/PasswordResetModal';
 import HighlightedI18nText from '../components/HighlightedI18nText';
 import LanguageSelector from '../components/LanguageSelector';
-import { COUNTRIES } from '../constants/countries';
 
 interface ConfigurationProps {
   onBack: () => void;
   authToken: string;
+  initialScreen?: Screen;
   onLogout: () => void;
   onAccountVerifiedChange?: (verified: boolean) => void;
 }
@@ -173,7 +174,7 @@ const SimpleSettingRow = ({
       <Text style={styles.rowTitle}>{title}</Text>
       {right ??
         (rightIconName ? (
-          <MaterialIcons name={rightIconName as any} size={22} color="#FFFFFF" style={{ opacity: 0.6 }} />
+          <MaterialIcons name={rightIconName as any} size={22} color="#FFFFFF" style={styles.rowRightIconMuted} />
         ) : showChevron ? (
           <MaterialIcons name="chevron-right" size={24} color="#FFFFFF" />
         ) : null)}
@@ -209,13 +210,13 @@ const PersonalDataItem = ({
   );
 };
 
-const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }: ConfigurationProps) => {
+const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, onAccountVerifiedChange }: ConfigurationProps) => {
   const { language, setLanguage, t } = useI18n();
   const safeAreaInsets = useSafeAreaInsets();
   const localize = (messages: Partial<Record<Language, string>> & { es: string }) => (
     messages[language] || messages.pt || messages.en || messages.fr || messages.es
   );
-  const [screen, setScreen] = useState<Screen>('main');
+  const [screen, setScreen] = useState<Screen>(initialScreen);
   const [verifyTab, setVerifyTab] = useState<'objectives' | 'benefits'>('objectives');
   const [showImportantNoticePanel, setShowImportantNoticePanel] = useState(false);
   const [verifyBottomBarHeight, setVerifyBottomBarHeight] = useState(0);
@@ -241,7 +242,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   );
 
   const ensureChangePasswordInputVisible = () => {
-    if (screen !== 'changePassword') return;
+    if (screen !== 'changePassword') {return;}
 
     setTimeout(() => {
       changePasswordScrollRef.current?.scrollToEnd({ animated: true });
@@ -348,12 +349,12 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
   const getLocalizedGender = (rawGender: string) => {
     const normalized = String(rawGender || '').trim().toLowerCase();
-    if (!normalized) return '';
+    if (!normalized) {return '';}
 
     // Backend might store Spanish values from registration (e.g. Hombre/Mujer/No especificar)
     // or canonical-ish values. We map known values to translated labels.
-    if (['hombre', 'man', 'male', 'm'].includes(normalized)) return t('gender.male');
-    if (['mujer', 'woman', 'female', 'f'].includes(normalized)) return t('gender.female');
+    if (['hombre', 'man', 'male', 'm'].includes(normalized)) {return t('gender.male');}
+    if (['mujer', 'woman', 'female', 'f'].includes(normalized)) {return t('gender.female');}
     if (
       [
         'no especificar',
@@ -375,7 +376,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   const [galleryPermissionStatus, setGalleryPermissionStatus] = useState<GalleryPermissionStatus>('unknown');
   const [isCheckingDevicePermissions, setIsCheckingDevicePermissions] = useState(false);
   const lastSyncedGalleryPermissionRef = useRef<GalleryPermissionStatus>('unknown');
-  
+
   const [privacyOptionsRequired, setPrivacyOptionsRequired] = useState(false);
   const [isOpeningPrivacyOptions, setIsOpeningPrivacyOptions] = useState(false);
 
@@ -399,7 +400,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   }, []);
 
   const openPrivacyOptions = async () => {
-    if (isOpeningPrivacyOptions) return;
+    if (isOpeningPrivacyOptions) {return;}
     setIsOpeningPrivacyOptions(true);
 
     try {
@@ -484,7 +485,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   const [showCurrentPasswordError, setShowCurrentPasswordError] = useState(false);
   const [currentPasswordAttemptsRemaining, setCurrentPasswordAttemptsRemaining] = useState<number | null>(null);
   const [currentPasswordLockUntil, setCurrentPasswordLockUntil] = useState<string | null>(null);
-  const [lockNowTick, setLockNowTick] = useState(0);
+  const [, setLockNowTick] = useState(0);
   const [newPassword, setNewPassword] = useState('');
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [repeatNewPassword, setRepeatNewPassword] = useState('');
@@ -555,15 +556,10 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
     refreshAccountAuth();
   };
 
-  const languageLabel = useMemo(
-    () => (language === 'es' ? t('language.spanish') : language === 'fr' ? t('language.french') : language === 'pt' ? t('language.portuguese') : t('language.english')),
-    [language, t]
-  );
-
   const persistPreferredLanguageLocally = async (nextLanguage: Language) => {
     try {
       const storedSession = await loadKeintiAuthSession();
-      if (!storedSession?.token || !storedSession?.user?.email) return;
+      if (!storedSession?.token || !storedSession?.user?.email) {return;}
 
       await saveKeintiAuthSession({
         token: storedSession.token,
@@ -579,12 +575,12 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   };
 
   const handleLanguageSelect = async (nextLanguage: Language) => {
-    if (language === nextLanguage) return;
+    if (language === nextLanguage) {return;}
 
     setLanguage(nextLanguage);
-    void persistPreferredLanguageLocally(nextLanguage);
+    persistPreferredLanguageLocally(nextLanguage).catch(() => {});
 
-    if (!authToken) return;
+    if (!authToken) {return;}
     try {
       await updatePreferredLanguage({ token: authToken, language: nextLanguage });
     } catch {
@@ -662,8 +658,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   };
 
   const refreshAccountAuth = async () => {
-    if (!authToken) return;
-    if (screen !== 'accountAuth' && screen !== 'verifyKeinti') return;
+    if (!authToken) {return;}
+    if (screen !== 'accountAuth' && screen !== 'verifyKeinti') {return;}
 
     setIsLoadingAccountAuth(true);
     try {
@@ -727,9 +723,9 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   };
 
   const handleVerifyKeinti = async () => {
-    if (!authToken) return;
-    if (!canVerifyKeinti) return;
-    if (isVerifyingKeinti || keintiVerified) return;
+    if (!authToken) {return;}
+    if (!canVerifyKeinti) {return;}
+    if (isVerifyingKeinti || keintiVerified) {return;}
 
     setIsVerifyingKeinti(true);
     try {
@@ -746,10 +742,10 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   };
 
   const refreshVerifyKeintiProgress = async () => {
-    if (!authToken) return;
-    if (screen !== 'verifyKeinti') return;
+    if (!authToken) {return;}
+    if (screen !== 'verifyKeinti') {return;}
     // Once Keinti is verified, keep objectives fixed (no more resets due to refreshes).
-    if (keintiVerified) return;
+    if (keintiVerified) {return;}
 
     try {
       const [intimidades, profilePublishes, joins, groups] = await Promise.all([
@@ -779,21 +775,21 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
   // If the backend reports Keinti already verified, lock the UI objectives as completed.
   useEffect(() => {
-    if (!keintiVerified) return;
+    if (!keintiVerified) {return;}
     lockVerifyKeintiObjectivesAsCompleted();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [keintiVerified]);
 
   // Tick del contador de expiración mientras esté verificado.
   useEffect(() => {
-    if (!accountVerified || !accountVerifiedExpiresAtMs) return;
+    if (!accountVerified || !accountVerifiedExpiresAtMs) {return;}
     const id = setInterval(() => setAccountVerifiedCountdownNowMs(Date.now()), 1000);
     return () => clearInterval(id);
   }, [accountVerified, accountVerifiedExpiresAtMs]);
 
   // Expira exactamente al finalizar la cuenta atrás.
   useEffect(() => {
-    if (!accountVerified || !accountVerifiedExpiresAtMs) return;
+    if (!accountVerified || !accountVerifiedExpiresAtMs) {return;}
 
     const msLeft = accountVerifiedExpiresAtMs - Date.now();
     if (msLeft <= 0) {
@@ -811,7 +807,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   }, [accountVerified, accountVerifiedExpiresAtMs]);
 
   const refreshDevicePermissions = async () => {
-    if (screen !== 'devicePermissions') return;
+    if (screen !== 'devicePermissions') {return;}
 
     setIsCheckingDevicePermissions(true);
     try {
@@ -876,7 +872,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
 
   useEffect(() => {
-    if (screen !== 'devicePermissions') return;
+    if (screen !== 'devicePermissions') {return;}
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         refreshDevicePermissions();
@@ -972,7 +968,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
   useEffect(() => {
     const fetchBlockedUsers = async () => {
-      if (screen !== 'blockedUsers') return;
+      if (screen !== 'blockedUsers') {return;}
       if (!authToken) {
         setBlockedUsers([]);
         setExpandedBlockedReasons({});
@@ -1024,7 +1020,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
   useEffect(() => {
     const fetchMyPersonalData = async () => {
-      if (screen !== 'personalData') return;
+      if (screen !== 'personalData') {return;}
       if (!authToken) {
         setMyEmail('');
         setMyBirthDate('');
@@ -1091,13 +1087,13 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
   useEffect(() => {
     const ensureUsernameLoaded = async () => {
-      if (screen !== 'changePassword') return;
+      if (screen !== 'changePassword') {return;}
       if (!authToken) {
         setMyUsername('');
         return;
       }
 
-      if (myUsername.trim().length > 0) return;
+      if (myUsername.trim().length > 0) {return;}
       try {
         const data = await getMyPersonalData(authToken);
         setMyUsername(String(data?.username || '').trim());
@@ -1141,9 +1137,9 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
   useEffect(() => {
     const fetchAdminSelfies = async () => {
-      if (screen !== 'adminSelfies') return;
-      if (!authToken) return;
-      if (!isBackendAdmin) return;
+      if (screen !== 'adminSelfies') {return;}
+      if (!authToken) {return;}
+      if (!isBackendAdmin) {return;}
 
       const normalizeEmail = (v: unknown) => String(v || '').trim().toLowerCase();
 
@@ -1151,7 +1147,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
         const map = new Map<string, any>();
         for (const item of Array.isArray(items) ? items : []) {
           const email = normalizeEmail(item?.email);
-          if (!email) continue;
+          if (!email) {continue;}
 
           const existing = map.get(email);
           if (!existing) {
@@ -1161,7 +1157,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
           const existingTime = existing?.[dateField] ? new Date(String(existing[dateField])).getTime() : 0;
           const itemTime = item?.[dateField] ? new Date(String(item[dateField])).getTime() : 0;
-          if (itemTime >= existingTime) map.set(email, { ...existing, ...item });
+          if (itemTime >= existingTime) {map.set(email, { ...existing, ...item });}
         }
 
         const list = Array.from(map.values());
@@ -1195,23 +1191,23 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   }, [screen, authToken, isBackendAdmin]);
 
   useEffect(() => {
-    if (screen !== 'adminSelfies' && adminSelfiePreviewUri) setAdminSelfiePreviewUri(null);
+    if (screen !== 'adminSelfies' && adminSelfiePreviewUri) {setAdminSelfiePreviewUri(null);}
   }, [screen, adminSelfiePreviewUri]);
 
   useEffect(() => {
-    if (!currentPasswordLockUntil) return;
+    if (!currentPasswordLockUntil) {return;}
     const until = new Date(currentPasswordLockUntil);
-    if (isNaN(until.getTime())) return;
-    if (until.getTime() <= Date.now()) return;
+    if (isNaN(until.getTime())) {return;}
+    if (until.getTime() <= Date.now()) {return;}
 
     const id = setInterval(() => setLockNowTick((v) => v + 1), 15_000);
     return () => clearInterval(id);
   }, [currentPasswordLockUntil]);
 
   const isCurrentPasswordFieldLocked = (() => {
-    if (!currentPasswordLockUntil) return false;
+    if (!currentPasswordLockUntil) {return false;}
     const until = new Date(currentPasswordLockUntil);
-    if (isNaN(until.getTime())) return false;
+    if (isNaN(until.getTime())) {return false;}
     return until.getTime() > Date.now();
   })();
 
@@ -1438,10 +1434,13 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   }, [language]);
 
   const filteredNationalities = useMemo(() => {
-    const q = nationalitySearch.trim().toLowerCase();
-    if (!q) return COUNTRIES;
-    return COUNTRIES.filter((country) => country.toLowerCase().includes(q));
-  }, [nationalitySearch]);
+    return getLocalizedNationalityOptions(language, nationalitySearch);
+  }, [language, nationalitySearch]);
+
+  const localizedMyNationality = useMemo(
+    () => getLocalizedNationalityName(myNationality, language),
+    [language, myNationality],
+  );
 
   const saveNationality = async (nextNationality: string) => {
     if (!authToken) {
@@ -1450,7 +1449,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
     }
 
     const clean = String(nextNationality || '').trim();
-    if (!clean) return;
+    if (!clean) {return;}
 
     const previous = myNationality;
     setMyNationality(clean);
@@ -1573,43 +1572,6 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       '10. Contact\n\n' +
       'For any questions related to this policy, you may contact:\n\n' +
       'keintisoporte@gmail.com';
-
-    const raw = language === 'es' ? rawEs : rawEn;
-
-    return raw
-      .split(/\n\s*\n/g)
-      .map((p) => p.trim())
-      .filter(Boolean);
-  }, [language]);
-
-  const verifyKeintiParagraphs = useMemo(() => {
-    const rawEs =
-      'VERIFICACIÓN DE KEINTI\n\n' +
-      'Objetivos para conseguir Keinti verificado:\n\n' +
-      '• Autentifica tu cuenta primero.\n\n' +
-      '• Obtén 100.000 aperturas en tus publicaciones de tus intimidades.\n\n' +
-      '• Publica tu perfil al menos 40 veces en la “Home”.\n\n' +
-      '• Haz que 100.000 usuarios se unan al chat de “Tu canal”.\n\n' +
-      '• Crea al menos un grupo en \'Tus grupos\' y haz que se unan a estos grupos al menos 200 miembros activos.\n\n' +
-      'Beneficios por conseguir Keinti verificado:\n\n' +
-      '• Genera ingresos por cada uno de los usuarios que accedan a los chats de “Tu canal”.\n\n' +
-      '• Obtén la insignia dorada.\n\n' +
-      '• Generas ingresos por cada 1.000 visualizaciones de las tarjetas de los aros.\n\n' +
-      '• Obtén otros privilegios futuros ofrecidos por Keinti.';
-
-    const rawEn =
-      'KEINTI VERIFICATION\n\n' +
-      'Goals to become Keinti Verified:\n\n' +
-      '• Authenticate your account first.\n\n' +
-      '• Get 100,000 openings on your intimacy posts.\n\n' +
-      '• Publish your profile at least 40 times in the “Home”.\n\n' +
-      '• Get 100,000 users to join your “Your channel” chat.\n\n' +
-      '• Create at least one group in \'Your groups\' and have at least 200 active members join these groups.\n\n' +
-      'Benefits of becoming Keinti Verified:\n\n' +
-      '• Generate income for each user who accesses “Your channel” chats.\n\n' +
-      '• Get the golden badge.\n\n' +
-      '• Generate income for every 1,000 views of ring cards.\n\n' +
-      '• Get other future privileges offered by Keinti.';
 
     const raw = language === 'es' ? rawEs : rawEn;
 
@@ -1819,7 +1781,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       getMyPersonalData(authToken)
         .then((data) => {
           const next = String(data?.username || '').trim();
-          if (next) setMyUsername(next);
+          if (next) {setMyUsername(next);}
         })
         .catch(() => {});
     }
@@ -1835,7 +1797,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   };
 
   const closeLogoutConfirm = () => {
-    if (isLoggingOut) return;
+    if (isLoggingOut) {return;}
 
     Animated.timing(logoutSheetAnim, {
       toValue: 0,
@@ -1843,7 +1805,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       easing: Easing.in(Easing.cubic),
       useNativeDriver: true,
     }).start(({ finished }) => {
-      if (finished) setShowLogoutConfirmModal(false);
+      if (finished) {setShowLogoutConfirmModal(false);}
     });
   };
 
@@ -1862,7 +1824,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
   };
 
   const closeDeleteAccountConfirm = () => {
-    if (isDeletingAccount) return;
+    if (isDeletingAccount) {return;}
 
     Animated.timing(deleteAccountSheetAnim, {
       toValue: 0,
@@ -1870,7 +1832,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
       easing: Easing.in(Easing.cubic),
       useNativeDriver: true,
     }).start(({ finished }) => {
-      if (finished) setShowDeleteAccountModal(false);
+      if (finished) {setShowDeleteAccountModal(false);}
     });
   };
 
@@ -2021,8 +1983,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     activeOpacity={galleryPermissionStatus === 'unknown' ? 1 : 0.75}
                     disabled={galleryPermissionStatus === 'unknown'}
                     onPress={() => {
-                      if (galleryPermissionStatus === 'denied') requestOrOpenGalleryPermission();
-                      if (galleryPermissionStatus === 'granted') confirmRevokeGalleryPermission();
+                      if (galleryPermissionStatus === 'denied') {requestOrOpenGalleryPermission();}
+                      if (galleryPermissionStatus === 'granted') {confirmRevokeGalleryPermission();}
                     }}
                     style={[
                       styles.permissionBadge,
@@ -2069,8 +2031,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                   disabled={isOpeningPrivacyOptions}
                   style={[
                     styles.permissionBadge,
-                    { backgroundColor: privacyOptionsRequired ? '#333' : '#242424' },
-                    isOpeningPrivacyOptions ? { opacity: 0.6 } : null,
+                    privacyOptionsRequired ? styles.permissionBadgeRequired : styles.permissionBadgeOptional,
+                    isOpeningPrivacyOptions ? styles.dimmed : null,
                   ]}
                 >
                   {isOpeningPrivacyOptions ? (
@@ -2161,16 +2123,16 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
           {isBackendAdmin ? (
             <>
-              <View style={{ flexDirection: 'row', gap: 10 }}>
+              <View style={styles.adminSelfiesTabsRow}>
                 <TouchableOpacity
-                  style={[styles.checkButton, adminSelfiesTab !== 'pending' && styles.checkButtonDisabled, { flex: 1, marginTop: 0 }]}
+                  style={[styles.checkButton, styles.checkButtonInline, adminSelfiesTab !== 'pending' && styles.checkButtonDisabled]}
                   activeOpacity={0.8}
                   onPress={() => setAdminSelfiesTab('pending')}
                 >
                   <Text style={styles.checkButtonText}>{t('adminSelfies.tabPending')}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.checkButton, adminSelfiesTab !== 'blocked' && styles.checkButtonDisabled, { flex: 1, marginTop: 0 }]}
+                  style={[styles.checkButton, styles.checkButtonInline, adminSelfiesTab !== 'blocked' && styles.checkButtonDisabled]}
                   activeOpacity={0.8}
                   onPress={() => setAdminSelfiesTab('blocked')}
                 >
@@ -2179,11 +2141,11 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
               </View>
 
               <TouchableOpacity
-                style={[styles.primaryButton, { marginTop: 12 }, isLoadingAdminSelfies && styles.primaryButtonDisabled]}
+                style={[styles.primaryButton, styles.marginTop12, isLoadingAdminSelfies && styles.primaryButtonDisabled]}
                 activeOpacity={0.8}
                 disabled={isLoadingAdminSelfies}
                 onPress={async () => {
-                  if (!authToken) return;
+                  if (!authToken) {return;}
                   setIsLoadingAdminSelfies(true);
                   try {
                     const normalizeEmail = (v: unknown) => String(v || '').trim().toLowerCase();
@@ -2192,7 +2154,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       const map = new Map<string, any>();
                       for (const item of Array.isArray(items) ? items : []) {
                         const email = normalizeEmail(item?.email);
-                        if (!email) continue;
+                        if (!email) {continue;}
 
                         const existing = map.get(email);
                         if (!existing) {
@@ -2202,7 +2164,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
 
                         const existingTime = existing?.[dateField] ? new Date(String(existing[dateField])).getTime() : 0;
                         const itemTime = item?.[dateField] ? new Date(String(item[dateField])).getTime() : 0;
-                        if (itemTime >= existingTime) map.set(email, { ...existing, ...item });
+                        if (itemTime >= existingTime) {map.set(email, { ...existing, ...item });}
                       }
 
                       const list = Array.from(map.values());
@@ -2240,7 +2202,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                 adminPendingSelfies.length === 0 ? (
                   <Text style={styles.placeholderText}>{t('adminSelfies.emptyPending')}</Text>
                 ) : (
-                  <View style={{ marginTop: 12, gap: 12 }}>
+                  <View style={styles.sectionGap12}>
                     {adminPendingSelfies.map((item: any) => {
                       const email = String(item?.email || '').trim();
                       const username = item?.username ? String(item.username).trim() : '';
@@ -2272,7 +2234,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                               >
                                 <Image
                                   source={{ uri: imageUri }}
-                                  style={{ width: '100%', height: 280, borderRadius: 12, marginTop: 12, backgroundColor: '#1E1E1E' }}
+                                  style={styles.adminSelfieImagePreview}
                                   resizeMode="cover"
                                 />
                               </TouchableOpacity>
@@ -2283,15 +2245,15 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                               onChangeText={(txt) => setAdminReasonByEmail((prev) => ({ ...prev, [email]: txt }))}
                               placeholder={t('adminSelfies.reasonPlaceholder')}
                               placeholderTextColor="#7a7a7a"
-                              style={[styles.input, { marginTop: 12 }]}
+                              style={[styles.input, styles.marginTop12]}
                             />
 
-                            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                            <View style={styles.rowGap10MarginTop12}>
                               <TouchableOpacity
-                                style={[styles.checkButton, { flex: 1, marginTop: 0 }]}
+                                style={[styles.checkButton, styles.checkButtonInline]}
                                 activeOpacity={0.8}
                                 onPress={async () => {
-                                  if (!authToken) return;
+                                  if (!authToken) {return;}
                                   try {
                                     await adminReviewAccountSelfie(authToken, { email, action: 'accepted' });
                                     setAdminPendingSelfies((prev) => prev.filter((p: any) => String(p?.email || '').trim() !== email));
@@ -2304,10 +2266,10 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                                 <Text style={styles.checkButtonText}>{t('adminSelfies.accept')}</Text>
                               </TouchableOpacity>
                               <TouchableOpacity
-                                style={[styles.checkButton, { flex: 1, marginTop: 0 }]}
+                                style={[styles.checkButton, styles.checkButtonInline]}
                                 activeOpacity={0.8}
                                 onPress={async () => {
-                                  if (!authToken) return;
+                                  if (!authToken) {return;}
                                   try {
                                     await adminReviewAccountSelfie(authToken, { email, action: 'failed', reason });
                                     setAdminPendingSelfies((prev) => prev.filter((p: any) => String(p?.email || '').trim() !== email));
@@ -2320,10 +2282,10 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                                 <Text style={styles.checkButtonText}>{t('adminSelfies.reject')}</Text>
                               </TouchableOpacity>
                               <TouchableOpacity
-                                style={[styles.checkButton, { flex: 1, marginTop: 0 }]}
+                                style={[styles.checkButton, styles.checkButtonInline]}
                                 activeOpacity={0.8}
                                 onPress={async () => {
-                                  if (!authToken) return;
+                                  if (!authToken) {return;}
                                   try {
                                     await adminReviewAccountSelfie(authToken, { email, action: 'blocked', reason });
                                     setAdminPendingSelfies((prev) => prev.filter((p: any) => String(p?.email || '').trim() !== email));
@@ -2359,7 +2321,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                 adminBlockedSelfies.length === 0 ? (
                   <Text style={styles.placeholderText}>{t('adminSelfies.emptyBlocked')}</Text>
                 ) : (
-                  <View style={{ marginTop: 12, gap: 12 }}>
+                  <View style={styles.sectionGap12}>
                     {adminBlockedSelfies.map((item: any, idx: number) => {
                       const email = String(item?.email || '').trim();
                       const username = item?.username ? String(item.username).trim() : '';
@@ -2375,10 +2337,10 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                             {reason ? <Text style={styles.errorText}>{reason}</Text> : null}
 
                             <TouchableOpacity
-                              style={[styles.primaryButton, { marginTop: 12 }]}
+                              style={[styles.primaryButton, styles.marginTop12]}
                               activeOpacity={0.8}
                               onPress={async () => {
-                                if (!authToken) return;
+                                if (!authToken) {return;}
                                 try {
                                   await adminReviewAccountSelfie(authToken, { email, action: 'unblocked' });
                                   setAdminBlockedSelfies((prev) => prev.filter((p: any) => String(p?.email || '').trim() !== email));
@@ -2420,7 +2382,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                 <PersonalDataItem title={t('personalData.gender')} value={getLocalizedGender(myGender)} />
                 <PersonalDataItem
                   title={t('personalData.nationality')}
-                  value={myNationality}
+                  value={localizedMyNationality}
                   onPress={() => {
                     setShowNationalityPicker((v) => !v);
                     setNationalitySearch('');
@@ -2448,13 +2410,13 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                         {filteredNationalities.length > 0 ? (
                           filteredNationalities.map((country) => (
                             <TouchableOpacity
-                              key={country}
+                              key={country.value}
                               style={styles.nationalityItem}
-                              onPress={() => saveNationality(country)}
+                              onPress={() => saveNationality(country.value)}
                               activeOpacity={0.7}
                               disabled={isUpdatingNationality}
                             >
-                              <Text style={styles.nationalityItemText}>{country}</Text>
+                              <Text style={styles.nationalityItemText}>{country.label}</Text>
                             </TouchableOpacity>
                           ))
                         ) : (
@@ -2773,32 +2735,22 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                 </TouchableOpacity>
              </View>
              {showImportantNoticePanel && (
-                <View
-                  style={{
-                    position: 'absolute',
-                    bottom: 50 + safeAreaInsets.bottom,
-                    marginHorizontal: 20,
-                    backgroundColor: '#1E1E1E',
-                    borderRadius: 12,
-                    padding: 16,
-                    shadowColor: '#000',
-                    shadowOffset: { width: 0, height: 4 },
-                    shadowOpacity: 0.3,
-                    shadowRadius: 4.65,
-                    elevation: 8,
-                    zIndex: 9999,
-                  }}
-                >
-                  <Text style={{ color: '#FFFFFF', fontSize: 13, lineHeight: 18, textAlign: 'center' }}>
-                    {t('verifyKeinti.importantNoticeBody')}
-                  </Text>
-                  <TouchableOpacity
-                    style={{ position: 'absolute', top: 5, right: 5, padding: 5 }}
-                    onPress={() => setShowImportantNoticePanel(false)}
-                  >
-                    <MaterialIcons name="close" size={18} color="#FFFFFF" style={{ opacity: 0.6 }} />
-                  </TouchableOpacity>
-                </View>
+                 <View
+                   style={[
+                     styles.importantNoticePanel,
+                     { bottom: 50 + safeAreaInsets.bottom },
+                   ]}
+                 >
+                   <Text style={styles.importantNoticeText}>
+                     {t('verifyKeinti.importantNoticeBody')}
+                   </Text>
+                   <TouchableOpacity
+                     style={styles.importantNoticeCloseButton}
+                     onPress={() => setShowImportantNoticePanel(false)}
+                   >
+                     <MaterialIcons name="close" size={18} color="#FFFFFF" style={styles.rowRightIconMuted} />
+                   </TouchableOpacity>
+                 </View>
              )}
              <TouchableOpacity
                onPress={() => setShowImportantNoticePanel(!showImportantNoticePanel)}
@@ -2846,8 +2798,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     activeOpacity={0.8}
                     disabled={isUploadingSelfie || accountSelfieStatus === 'pending' || accountSelfieBlocked}
                     onPress={async () => {
-                      if (!authToken) return;
-                      if (accountSelfieBlocked) return;
+                      if (!authToken) {return;}
+                      if (accountSelfieBlocked) {return;}
                       setIsUploadingSelfie(true);
                       try {
                         const img = await ImageCropPicker.openCamera({
@@ -2935,7 +2887,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     activeOpacity={0.8}
                     disabled={isLoadingTotpSetup}
                     onPress={async () => {
-                      if (!authToken) return;
+                      if (!authToken) {return;}
                       setIsLoadingTotpSetup(true);
                       try {
                         const setup = await getTotpSetup(authToken);
@@ -2965,7 +2917,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                           }
                         }}
                         style={[styles.passwordRow, { minHeight: 52, height: undefined, paddingVertical: 12, alignItems: 'flex-start' }]}
-                      > 
+                      >
                         <Text selectable style={[styles.passwordInput, { flex: 1 }]}>
                           {totpSecret}
                         </Text>
@@ -2999,7 +2951,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       activeOpacity={0.8}
                       disabled={!/^[0-9]{6}$/.test(totpCode) || isVerifyingTotp}
                       onPress={async () => {
-                        if (!authToken) return;
+                        if (!authToken) {return;}
                         setIsVerifyingTotp(true);
                         try {
                           const resp = await verifyTotpCode(authToken, totpCode);
@@ -3191,11 +3143,11 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                 activeOpacity={0.8}
                 disabled={!authToken || !currentPassword || isVerifyingCurrentPassword || isChangingPassword || isCurrentPasswordFieldLocked || isCurrentPasswordValid}
                 onPress={async () => {
-                  if (!authToken) return;
-                  if (!currentPassword) return;
-                  if (isVerifyingCurrentPassword) return;
-                  if (isCurrentPasswordFieldLocked) return;
-                  if (isCurrentPasswordValid) return;
+                  if (!authToken) {return;}
+                  if (!currentPassword) {return;}
+                  if (isVerifyingCurrentPassword) {return;}
+                  if (isCurrentPasswordFieldLocked) {return;}
+                  if (isCurrentPasswordValid) {return;}
 
                   setIsVerifyingCurrentPassword(true);
                   try {
@@ -3345,8 +3297,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
             activeOpacity={0.8}
             disabled={!canSubmitPasswordChange}
             onPress={async () => {
-              if (!authToken) return;
-              if (!canSubmitPasswordChange) return;
+              if (!authToken) {return;}
+              if (!canSubmitPasswordChange) {return;}
 
               setIsChangingPassword(true);
               try {
@@ -3541,7 +3493,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       setUnlockPosition(null);
                       return;
                     }
-                    if (isUnlockingUser) return;
+                    if (isUnlockingUser) {return;}
 
                     setIsUnlockingUser(true);
                     fetch(`${API_URL}/api/group-requests/unblock`, {
@@ -3647,8 +3599,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                       en: `Signed in as @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`,
                       fr: `Connecté en tant que @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`,
                       pt: `Conectado como @${(myUsername || '').trim().replace(/^@+/, '') || '...'}`,
-                      de: `Du bist angemeldet als @`,
-                      it: `Hai effettuato l'accesso come @`,
+                      de: 'Du bist angemeldet als @',
+                      it: 'Hai effettuato l\'accesso come @',
                     })}
                   </Text>
                 </View>
@@ -3670,7 +3622,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     style={[styles.logoutButton, styles.logoutButtonPrimary, isLoggingOut && styles.logoutButtonDisabled]}
                     disabled={isLoggingOut}
                     onPress={() => {
-                      if (isLoggingOut) return;
+                      if (isLoggingOut) {return;}
                       setIsLoggingOut(true);
 
                       Animated.timing(logoutSheetAnim, {
@@ -3791,8 +3743,8 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     style={[styles.deleteAccountButton, styles.deleteAccountButtonDanger, isDeletingAccount && styles.deleteAccountButtonDisabled]}
                     disabled={isDeletingAccount}
                     onPress={async () => {
-                      if (!authToken) return;
-                      if (isDeletingAccount) return;
+                      if (!authToken) {return;}
+                      if (isDeletingAccount) {return;}
 
                       setIsDeletingAccount(true);
                       try {
@@ -3837,13 +3789,13 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
         transparent
         animationType="fade"
         onRequestClose={() => {
-          if (isRevokingGalleryPermission) return;
+          if (isRevokingGalleryPermission) {return;}
           setShowRevokeGalleryPermissionModal(false);
         }}
       >
         <TouchableWithoutFeedback
           onPress={() => {
-            if (isRevokingGalleryPermission) return;
+            if (isRevokingGalleryPermission) {return;}
             setShowRevokeGalleryPermissionModal(false);
           }}
         >
@@ -3868,7 +3820,7 @@ const Configuration = ({ onBack, authToken, onLogout, onAccountVerifiedChange }:
                     activeOpacity={0.8}
                     disabled={isRevokingGalleryPermission}
                     onPress={async () => {
-                      if (isRevokingGalleryPermission) return;
+                      if (isRevokingGalleryPermission) {return;}
 
                       setIsRevokingGalleryPermission(true);
                       try {
@@ -4022,6 +3974,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  adminSelfiesTabsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  rowGap10MarginTop12: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  rowRightIconMuted: {
+    opacity: 0.6,
+  },
 
   personalDataHeaderBox: {
     marginBottom: 14,
@@ -4147,6 +4111,12 @@ const styles = StyleSheet.create({
   permissionBadgeGranted: {
     borderColor: '#FFB74D',
   },
+  permissionBadgeRequired: {
+    backgroundColor: '#333333',
+  },
+  permissionBadgeOptional: {
+    backgroundColor: '#242424',
+  },
   permissionBadgeDenied: {
     borderColor: '#fb6159ff',
   },
@@ -4158,6 +4128,52 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     opacity: 0.95,
+  },
+  dimmed: {
+    opacity: 0.6,
+  },
+  marginTop12: {
+    marginTop: 12,
+  },
+  sectionGap12: {
+    marginTop: 12,
+    gap: 12,
+  },
+  checkButtonInline: {
+    flex: 1,
+    marginTop: 0,
+  },
+  adminSelfieImagePreview: {
+    width: '100%',
+    height: 280,
+    borderRadius: 12,
+    marginTop: 12,
+    backgroundColor: '#1E1E1E',
+  },
+  importantNoticePanel: {
+    position: 'absolute',
+    marginHorizontal: 20,
+    backgroundColor: '#1E1E1E',
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4.65,
+    elevation: 8,
+    zIndex: 9999,
+  },
+  importantNoticeText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  importantNoticeCloseButton: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    padding: 5,
   },
   permissionDescription: {
     color: '#FFFFFF',
@@ -4817,7 +4833,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#333',
     borderRadius: 2,
     position: 'relative',
-    marginHorizontal: 8, 
+    marginHorizontal: 8,
     marginVertical: 10,
   },
   verifyTrackFill: {
@@ -4827,7 +4843,7 @@ const styles = StyleSheet.create({
   },
   verifyThumb: {
     position: 'absolute',
-    top: -6, 
+    top: -6,
     width: 16,
     height: 16,
     borderRadius: 8,

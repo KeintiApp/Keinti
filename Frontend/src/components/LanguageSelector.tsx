@@ -65,7 +65,9 @@ const LanguageSelector = ({ value, onSelect, disabled = false, compact = false }
               key={option.code}
               activeOpacity={0.85}
               disabled={disabled}
-              onPress={() => void handlePress(option.code)}
+              onPress={() => {
+                handlePress(option.code);
+              }}
               style={[styles.option, index === hiddenOptions.length - 1 && styles.optionLast]}
             >
               <Text style={styles.optionShortCode}>{option.shortLabel}</Text>

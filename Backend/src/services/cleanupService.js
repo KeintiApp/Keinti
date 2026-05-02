@@ -1,6 +1,7 @@
 const pool = require('../config/database');
 const { getPostTtlMinutes } = require('../config/postTtl');
 const { deleteObject } = require('./supabaseStorageService');
+const { refundExpiredPendingChannelEventTaskRewards } = require('./channelEventRewardsService');
 
 const POST_TTL_MINUTES = getPostTtlMinutes();
 
@@ -195,6 +196,7 @@ const cleanupExpiredPostRequests = async () => {
     // Esto hace que las imágenes de publicaciones (Home) y el contenido compartido en canales
     // se retiren automáticamente al expirar el post (24h) o al eliminarlo manualmente.
     if (postIds.length > 0) {
+      await refundExpiredPendingChannelEventTaskRewards({ postIds, includeAllPending: true }).catch(() => []);
       await deleteUploadedImagesByPostIds(postIds);
       await deletePostEngagementByPostIds(postIds);
       // NOTA: NO eliminar post_intimidades_opens ni channel_subscriptions.
@@ -243,11 +245,13 @@ const startCleanupJob = () => {
   // Ejecutar inmediatamente al iniciar
   cleanupExpiredPostRequests();
   deleteReviewedAccountSelfies();
+  refundExpiredPendingChannelEventTaskRewards().catch(() => []);
 
   // Configurar intervalo de 1 minuto (60000 ms)
   setInterval(() => {
     cleanupExpiredPostRequests();
     deleteReviewedAccountSelfies();
+    refundExpiredPendingChannelEventTaskRewards().catch(() => []);
   }, 60000);
   console.log('⏰ Servicio de limpieza de publicaciones iniciado (verificación cada 1 min)');
 };

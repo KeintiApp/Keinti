@@ -25,7 +25,7 @@ const toFiniteNumber = (value: unknown) => {
 };
 
 const toPlatform = (): AdRevenueRecord['platform'] => {
-  if (Platform.OS === 'android' || Platform.OS === 'ios') return Platform.OS;
+  if (Platform.OS === 'android' || Platform.OS === 'ios') {return Platform.OS;}
   return 'unknown';
 };
 
@@ -54,7 +54,7 @@ export const trackAdPaidEvent = (params: {
   placement: string;
   event?: PaidEvent;
 }) => {
-  if (!params.event) return null;
+  if (!params.event) {return null;}
 
   const value = toFiniteNumber(params.event?.value);
   const valueMicros = Math.round(value * 1_000_000);
@@ -79,7 +79,7 @@ export const trackAdPaidEvent = (params: {
     console.log('[AdRevenue][PAID]', record);
   }
 
-  void logAdRevenueToAnalytics(record);
+  logAdRevenueToAnalytics(record).catch(() => {});
 
   return record;
 };

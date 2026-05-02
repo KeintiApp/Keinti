@@ -41,17 +41,17 @@ export const PASSWORD_RESET_DRAFT_STORAGE_KEY = 'keinti:passwordResetDraft';
 
 const isValidEmailFormat = (value: string) => {
   const v = String(value || '').trim();
-  if (!v) return false;
+  if (!v) {return false;}
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 };
 
 const isStrongPassword = (pass: string) => {
   const value = String(pass || '');
-  if (value.length < 10) return false;
-  if (value.length > 20) return false;
+  if (value.length < 10) {return false;}
+  if (value.length > 20) {return false;}
   const letterRegex = /[a-zA-Z]/;
   const numberRegex = /\d/;
-  const specialCharRegex = /[!@#$%^&*(),.?\":{}|<>]/;
+  const specialCharRegex = /[!@#$%^&*(),.?":{}|<>]/;
   return letterRegex.test(value) && numberRegex.test(value) && specialCharRegex.test(value);
 };
 
@@ -109,7 +109,8 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
   const restoreInternalState = (draft: PasswordResetDraft | null) => {
     const trimmedInitialEmail = String(initialEmail || '').trim();
     const nextEmail = String(draft?.email || trimmedInitialEmail).trim();
-    const nextStep = isValidPasswordResetStep(draft?.step) ? draft.step : 'email';
+    const draftStep = draft?.step;
+    const nextStep = isValidPasswordResetStep(draftStep) ? draftStep : 'email';
 
     setStep(nextStep);
     setEmail(nextEmail);
@@ -129,7 +130,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
   };
 
   const handleClose = () => {
-    if (sending || verifying || changing) return;
+    if (sending || verifying || changing) {return;}
 
     clearPasswordResetDraft()
       .catch(() => {})
@@ -201,7 +202,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
   }, [visible, initialEmail]);
 
   useEffect(() => {
-    if (!visible || !stateHydrated) return;
+    if (!visible || !stateHydrated) {return;}
 
     const trimmedEmail = String(email || '').trim();
     const shouldPersist = step !== 'email' || !!trimmedEmail;
@@ -224,9 +225,9 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
   }, [visible, stateHydrated, step, email, code, resetToken]);
 
   useEffect(() => {
-    if (!visible) return;
-    if (!stateHydrated) return;
-    if (step !== 'email') return;
+    if (!visible) {return;}
+    if (!stateHydrated) {return;}
+    if (step !== 'email') {return;}
 
     if (emailDebounceRef.current) {
       clearTimeout(emailDebounceRef.current);
@@ -237,7 +238,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
     setEmailRegistered(null);
 
     const trimmed = String(email || '').trim();
-    if (!trimmed) return;
+    if (!trimmed) {return;}
 
     if (!isValidEmailFormat(trimmed)) {
       setEmailRegistered(false);
@@ -274,21 +275,21 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
   };
 
   const getNewPasswordError = () => {
-    if (!newPassword1) return '';
-    if (String(newPassword1).length > 20) return t('validation.passwordMaxLength');
-    if (String(newPassword1).length < 10) return t('validation.passwordMinLength');
+    if (!newPassword1) {return '';}
+    if (String(newPassword1).length > 20) {return t('validation.passwordMaxLength');}
+    if (String(newPassword1).length < 10) {return t('validation.passwordMinLength');}
     const letterRegex = /[a-zA-Z]/;
-    if (!letterRegex.test(String(newPassword1))) return t('validation.passwordNeedsLetter');
+    if (!letterRegex.test(String(newPassword1))) {return t('validation.passwordNeedsLetter');}
     const numberRegex = /\d/;
-    if (!numberRegex.test(String(newPassword1))) return t('validation.passwordNeedsNumber');
-    const specialCharRegex = /[!@#$%^&*(),.?\":{}|<>]/;
-    if (!specialCharRegex.test(String(newPassword1))) return t('validation.passwordNeedsSpecial');
+    if (!numberRegex.test(String(newPassword1))) {return t('validation.passwordNeedsNumber');}
+    const specialCharRegex = /[!@#$%^&*(),.?":{}|<>]/;
+    if (!specialCharRegex.test(String(newPassword1))) {return t('validation.passwordNeedsSpecial');}
     return '';
   };
 
   const getRepeatPasswordError = () => {
-    if (!newPassword2) return '';
-    if (newPassword2 !== newPassword1) return t('validation.passwordsDontMatch');
+    if (!newPassword2) {return '';}
+    if (newPassword2 !== newPassword1) {return t('validation.passwordsDontMatch');}
     return '';
   };
 
@@ -344,8 +345,8 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
                       disabled={!isValidEmailFormat(email) || emailRegistered !== true || sending}
                       onPress={async () => {
                         const trimmed = String(email || '').trim();
-                        if (!isValidEmailFormat(trimmed) || emailRegistered !== true) return;
-                        if (sending) return;
+                        if (!isValidEmailFormat(trimmed) || emailRegistered !== true) {return;}
+                        if (sending) {return;}
 
                         setSending(true);
                         setEmailError('');
@@ -401,7 +402,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
                       activeOpacity={0.8}
                       disabled={verifying || changing}
                       onPress={() => {
-                        if (verifying || changing) return;
+                        if (verifying || changing) {return;}
                         setStep('email');
                         setCode('');
                         setCodeError('');
@@ -423,8 +424,8 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
                       onPress={async () => {
                         const trimmedEmail = String(email || '').trim();
                         const cleanCode = String(code || '').trim().toUpperCase();
-                        if (cleanCode.length !== 8) return;
-                        if (verifying) return;
+                        if (cleanCode.length !== 8) {return;}
+                        if (verifying) {return;}
 
                         setVerifying(true);
                         setCodeError('');
@@ -511,10 +512,10 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
                       disabled={!resetToken || !isStrongPassword(newPassword1) || newPassword1 !== newPassword2 || changing}
                       onPress={async () => {
                         const trimmedEmail = String(email || '').trim();
-                        if (!resetToken) return;
-                        if (!isStrongPassword(newPassword1)) return;
-                        if (newPassword1 !== newPassword2) return;
-                        if (changing) return;
+                        if (!resetToken) {return;}
+                        if (!isStrongPassword(newPassword1)) {return;}
+                        if (newPassword1 !== newPassword2) {return;}
+                        if (changing) {return;}
 
                         setChanging(true);
                         setChangeError('');
