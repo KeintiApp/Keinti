@@ -570,6 +570,18 @@ async function initDatabase() {
     await pool.query(
       `ALTER TABLE account_auth ADD COLUMN IF NOT EXISTS selfie_blocked_by VARCHAR(255) NULL;`
     ).catch(() => {});
+    await pool.query(
+      `ALTER TABLE account_auth ADD COLUMN IF NOT EXISTS selfie_analysis_json JSONB NULL;`
+    ).catch(() => {});
+    await pool.query(
+      `ALTER TABLE account_auth ADD COLUMN IF NOT EXISTS selfie_analysis_processed_at TIMESTAMP NULL;`
+    ).catch(() => {});
+    await pool.query(
+      `ALTER TABLE account_auth ADD COLUMN IF NOT EXISTS selfie_analysis_version VARCHAR(50) NULL;`
+    ).catch(() => {});
+    await pool.query(
+      `ALTER TABLE account_auth ADD COLUMN IF NOT EXISTS selfie_decision_source TEXT NULL;`
+    ).catch(() => {});
 
     // FK opcional: selfie_image_id apunta a uploaded_images.
     await pool.query(`

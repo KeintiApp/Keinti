@@ -754,6 +754,39 @@ export const updateSocialNetworks = async (data: {
 };
 
 
+export type SelfieAnalysisSummary = {
+  provider?: string;
+  ruleset?: string;
+  runtime?: string;
+  processedAt?: string;
+  reason?: string | null;
+  code?: string | null;
+  error?: string | null;
+  reviewFlags?: string[];
+  faceCount?: number;
+  image?: {
+    mimeType?: string;
+    bytes?: number;
+    width?: number | null;
+    height?: number | null;
+  } | null;
+  primaryFace?: {
+    detectionConfidence?: number | null;
+    landmarkingConfidence?: number | null;
+    faceAreaRatio?: number | null;
+    blurredLikelihood?: string | null;
+    underExposedLikelihood?: string | null;
+    headwearLikelihood?: string | null;
+  } | null;
+  safeSearch?: {
+    adult?: string | null;
+    spoof?: string | null;
+    medical?: string | null;
+    violence?: string | null;
+    racy?: string | null;
+  } | null;
+};
+
 export type AccountAuthStatusResponse = {
   selfie: {
     status: 'not_submitted' | 'pending' | 'accepted' | 'failed';
@@ -762,6 +795,10 @@ export type AccountAuthStatusResponse = {
     fail_reason: string | null;
     blocked?: boolean;
     blocked_reason?: string | null;
+    decision_source?: string | null;
+    analysis_summary?: SelfieAnalysisSummary | null;
+    analysis_processed_at?: string | null;
+    analysis_version?: string | null;
   };
   totp: {
     enabled: boolean;
@@ -957,6 +994,10 @@ export type AdminPendingSelfieItem = {
   email: string;
   username?: string;
   submitted_at: string | null;
+  decision_source?: string | null;
+  analysis_summary?: SelfieAnalysisSummary | null;
+  analysis_processed_at?: string | null;
+  analysis_version?: string | null;
   image_url?: string | null;
   image_path?: string | null;
   selfie_image_id?: number | null;
@@ -980,6 +1021,10 @@ export const getAdminPendingAccountSelfies = async (token: string): Promise<{ it
     email: String(it?.email || '').trim(),
     username: it?.username ? String(it.username).trim() : undefined,
     submitted_at: it?.submitted_at ?? null,
+    decision_source: it?.decision_source ?? null,
+    analysis_summary: it?.analysis_summary ?? null,
+    analysis_processed_at: it?.analysis_processed_at ?? null,
+    analysis_version: it?.analysis_version ?? null,
     image_url: it?.image_url ?? null,
     image_path: it?.image_path ?? null,
     selfie_image_id: Number.isFinite(Number(it?.selfie_image_id)) ? Number(it.selfie_image_id) : null,
@@ -993,6 +1038,10 @@ export type AdminBlockedSelfieItem = {
   username?: string;
   blocked_at: string | null;
   reason: string | null;
+  decision_source?: string | null;
+  analysis_summary?: SelfieAnalysisSummary | null;
+  analysis_processed_at?: string | null;
+  analysis_version?: string | null;
 };
 
 export const getAdminBlockedAccountSelfies = async (token: string): Promise<{ items: AdminBlockedSelfieItem[] }> => {
@@ -1014,6 +1063,10 @@ export const getAdminBlockedAccountSelfies = async (token: string): Promise<{ it
     username: it?.username ? String(it.username).trim() : undefined,
     blocked_at: it?.blocked_at ?? null,
     reason: it?.reason ?? null,
+    decision_source: it?.decision_source ?? null,
+    analysis_summary: it?.analysis_summary ?? null,
+    analysis_processed_at: it?.analysis_processed_at ?? null,
+    analysis_version: it?.analysis_version ?? null,
   })).filter((it: AdminBlockedSelfieItem) => !!it.email);
 
   return { items };

@@ -528,6 +528,10 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
   const [isUploadingSelfie, setIsUploadingSelfie] = useState(false);
   const [isLoadingTotpSetup, setIsLoadingTotpSetup] = useState(false);
   const [isVerifyingTotp, setIsVerifyingTotp] = useState(false);
+  const [showPendingSelfieReviewNotice, setShowPendingSelfieReviewNotice] = useState(false);
+  const pendingSelfieReviewNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const pendingSelfieReviewNotice = t('accountAuth.pendingReviewNotice');
 
   const formatCountdown = (ms: number) => {
     // Usamos ceil para evitar mostrar 00:00:00 antes de tiempo.
@@ -540,6 +544,23 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
     const mm = String(minutes).padStart(2, '0');
     const ss = String(seconds).padStart(2, '0');
     return days > 0 ? `${days}d ${hh}:${mm}:${ss}` : `${hh}:${mm}:${ss}`;
+  };
+
+  const clearPendingSelfieReviewNotice = () => {
+    if (pendingSelfieReviewNoticeTimeoutRef.current) {
+      clearTimeout(pendingSelfieReviewNoticeTimeoutRef.current);
+      pendingSelfieReviewNoticeTimeoutRef.current = null;
+    }
+    setShowPendingSelfieReviewNotice(false);
+  };
+
+  const showPendingSelfieReviewNoticeForSixSeconds = () => {
+    clearPendingSelfieReviewNotice();
+    setShowPendingSelfieReviewNotice(true);
+    pendingSelfieReviewNoticeTimeoutRef.current = setTimeout(() => {
+      pendingSelfieReviewNoticeTimeoutRef.current = null;
+      setShowPendingSelfieReviewNotice(false);
+    }, 6000);
   };
 
   const expireVerificationLocal = () => {
@@ -668,6 +689,9 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
       setAccountSelfieFailReason(data.selfie.fail_reason);
       setAccountSelfieBlocked(!!(data.selfie as any)?.blocked);
       setAccountSelfieBlockedReason(((data.selfie as any)?.blocked_reason ?? null) as any);
+      if (data.selfie.status !== 'pending') {
+        clearPendingSelfieReviewNotice();
+      }
       setAccountTotpEnabled(!!data.totp.enabled);
       setAccountVerified(!!data.account_verified);
       setKeintiVerified(!!(data as any)?.keinti_verified);
@@ -681,10 +705,21 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
         setTotpSecret('');
         setTotpCode('');
       }
+
+      return data;
     } catch {
       // ignore (UI will show last known state)
+      return null;
     } finally {
       setIsLoadingAccountAuth(false);
+    }
+  };
+
+  const handleRefreshAccountAuthStatus = async () => {
+    const data = await refreshAccountAuth();
+    const nextStatus = data?.selfie?.status || accountSelfieStatus;
+    if (nextStatus === 'pending') {
+      showPendingSelfieReviewNoticeForSixSeconds();
     }
   };
 
@@ -863,6 +898,12 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
   useEffect(() => {
     refreshAccountAuth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
+
+  useEffect(() => {
+    if (screen !== 'accountAuth') {
+      clearPendingSelfieReviewNotice();
+    }
   }, [screen]);
 
   useEffect(() => {
@@ -1266,9 +1307,11 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
       '3.3 Datos vinculados a “Autenticación de la cuenta” (selfie + TOTP)\n\n' +
       'En “Configuración > Control de Seguridad > Autenticación de la cuenta”, Keinti puede tratar datos adicionales únicamente para reforzar la seguridad, reducir suplantaciones y aumentar la confianza en la comunidad:\n\n' +
       'Selfie de verificación (imagen capturada con la cámara frontal)\n\n' +
-      'Estado de revisión del selfie (no enviado, pendiente, aceptado o fallido), fechas de envío/revisión y motivo de rechazo cuando aplique\n\n' +
+      'Estado y resultado de validación del selfie (no enviado, revisión adicional requerida, aceptado o fallido), fechas de análisis/revisión y motivo de rechazo cuando aplique\n\n' +
+      'Metadatos técnicos del análisis automático del selfie para auditoría y seguridad\n\n' +
       'Datos de configuración TOTP (secreto) y el estado/fecha de activación (para uso con una app autenticadora compatible, por ejemplo Google Authenticator)\n\n' +
-      'La selfie se utiliza únicamente para verificación y seguridad. No se utiliza para reconocimiento facial automatizado ni para fines publicitarios.\n\n' +
+      'La selfie se utiliza únicamente para validación de seguridad y prevención de suplantaciones. No se utiliza para reconocimiento facial automatizado, identificación de individuos ni fines publicitarios.\n\n' +
+      'Cuando el análisis automático no puede decidir con suficiente certeza, la selfie puede pasar a revisión adicional por personal autorizado.\n\n' +
       'La app autenticadora (por ejemplo, Google Authenticator) funciona en el dispositivo del usuario. Keinti no recibe datos de esa app; únicamente valida códigos TOTP.\n\n' +
       '4. Finalidades del tratamiento\n\n' +
       'Tratamos los datos personales para:\n\n' +
@@ -1310,11 +1353,12 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
       'Eliminación de cuenta: el usuario puede solicitarla desde la configuración; al eliminarla, los datos se eliminan o se anonimizan conforme a requisitos técnicos y legales\n\n' +
       'Contenido en canales públicos vinculado a publicaciones: se concibe como temporal; por defecto, las publicaciones en “Home” y contenido asociado pueden expirar y retirarse automáticamente, junto con interacciones relacionadas\n\n' +
       'Registros técnicos y de seguridad: se conservan el tiempo mínimo necesario para seguridad, mantenimiento y cumplimiento\n\n' +
-      'Autenticación de la cuenta: la selfie se conserva únicamente el tiempo necesario para su revisión y se elimina automáticamente tras la revisión (aceptada o fallida). La verificación puede tener vigencia limitada; por defecto expira a los 365 días, y al expirar se reinicia el estado y se eliminan datos asociados (por ejemplo, el secreto TOTP)\n\n' +
+      'Autenticación de la cuenta: la selfie se conserva únicamente el tiempo necesario para su validación automática y, cuando aplique, su revisión adicional; las imágenes aceptadas o rechazadas automáticamente pueden no conservarse, y las imágenes marcadas para revisión se eliminan tras su resolución (aceptada o fallida). La verificación puede tener vigencia limitada; por defecto expira a los 365 días, y al expirar se reinicia el estado y se eliminan datos asociados (por ejemplo, el secreto TOTP)\n\n' +
       '10. Destinatarios y cesiones\n\n' +
       'Los datos personales pueden ser tratados por proveedores que prestan servicios a Keinti, principalmente:\n\n' +
       'Supabase (infraestructura, base de datos, autenticación y almacenamiento)\n\n' +
       'Google (inicio de sesión con Google OAuth, si el usuario lo elige)\n\n' +
+      'Google Cloud Vision (análisis automático de selfies para seguridad)\n\n' +
       'Google (AdMob, para publicidad)\n\n' +
       'Keinti no vende datos personales a terceros.\n\n' +
       '11. Derechos de los usuarios\n\n' +
@@ -1323,7 +1367,7 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
       'Las solicitudes pueden enviarse a keintisoporte@gmail.com. También pueden existir opciones en la app (por ejemplo, eliminación de cuenta).\n\n' +
       '12. Seguridad\n\n' +
       'Aplicamos medidas técnicas y organizativas razonables para proteger los datos, incluyendo controles de acceso, medidas de seguridad en infraestructura y prácticas de minimización.\n\n' +
-      'En “Autenticación de la cuenta”, el acceso a información de revisión (incluida la selfie) está restringido a personal/administración autorizado únicamente para validar el proceso.\n\n' +
+      'Cuando un selfie se marca para revisión adicional, el acceso a esa información (incluida la selfie) está restringido a personal/administración autorizado únicamente para validar el proceso.\n\n' +
       '13. Cambios en esta política\n\n' +
       'Podemos actualizar esta Política de Privacidad para reflejar cambios legales, técnicos o de producto. Si los cambios son relevantes, lo notificaremos a través de la aplicación.\n\n' +
       '14. Legislación aplicable\n\n' +
@@ -1360,9 +1404,11 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
       '3.3 Data related to “Account Authentication” (selfie + TOTP)\n\n' +
       'In “Settings > Security Control > Account Authentication”, Keinti may process additional data solely to strengthen security, reduce impersonation and increase trust in the community:\n\n' +
       'Verification selfie (captured with the device front camera)\n\n' +
-      'Selfie review status (not submitted, pending, accepted or failed), submission/review timestamps and a rejection reason when applicable\n\n' +
+      'Selfie validation status and outcome (not submitted, additional review required, accepted or failed), analysis/review timestamps and a rejection reason when applicable\n\n' +
+      'Technical metadata from the automatic selfie analysis for audit and security purposes\n\n' +
       'TOTP setup data (secret) and enablement status/date (for use with a compatible authenticator app, e.g., Google Authenticator)\n\n' +
-      'The selfie is used only for verification and security. We do not use automated facial recognition and we do not use it for advertising profiling.\n\n' +
+      'The selfie is used only for security validation and anti-impersonation purposes. We do not use automated facial recognition, individual identification, or advertising profiling.\n\n' +
+      'When the automatic analysis cannot decide with sufficient confidence, the selfie may be routed to additional review by authorized staff.\n\n' +
       'Authenticator apps (e.g., Google Authenticator) run on the user’s device. Keinti does not receive data from those apps; it only validates TOTP codes.\n\n' +
       '4. Purposes of processing\n\n' +
       'We process personal data to:\n\n' +
@@ -1404,11 +1450,12 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
       'Account deletion: the user may request deletion from the app settings; upon deletion, data are deleted or anonymized in accordance with technical and legal requirements\n\n' +
       'Public channel content linked to posts: designed to be temporary; by default, “Home” posts and related content may expire and be removed automatically, together with related interactions\n\n' +
       'Technical and security logs: retained for the minimum time required for security, maintenance and compliance\n\n' +
-      'Account Authentication: selfie images are retained only as long as needed for review and are automatically deleted after review (accepted or failed). Verification may have a limited validity; by default it expires 365 days after verification, and upon expiry the status is reset and associated data (e.g., TOTP secret) are removed\n\n' +
+      'Account Authentication: selfie images are retained only as long as needed for automatic validation and, where applicable, additional review; automatically accepted or rejected images may not be retained, and images flagged for review are deleted once resolved (accepted or failed). Verification may have a limited validity; by default it expires 365 days after verification, and upon expiry the status is reset and associated data (e.g., TOTP secret) are removed\n\n' +
       '10. Recipients\n\n' +
       'Personal data may be processed by service providers supporting Keinti, mainly:\n\n' +
       'Supabase (infrastructure, database, authentication and storage)\n\n' +
       'Google (Google OAuth sign-in, if the user chooses it)\n\n' +
+      'Google Cloud Vision (automatic selfie analysis for security)\n\n' +
       'Google (AdMob, advertising)\n\n' +
       'Keinti does not sell personal data to third parties.\n\n' +
       '11. User rights\n\n' +
@@ -1417,7 +1464,7 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
       'Requests can be sent to keintisoporte@gmail.com. The app may also provide options (e.g., account deletion).\n\n' +
       '12. Security\n\n' +
       'We apply reasonable technical and organizational measures to protect data, including access controls, infrastructure security and data minimization practices.\n\n' +
-      'Within “Account Authentication”, access to review information (including the selfie) is restricted to authorized staff/administration solely to validate the process.\n\n' +
+      'When a selfie is flagged for additional review, access to that information (including the selfie) is restricted to authorized staff/administration solely to validate the process.\n\n' +
       '13. Changes to this policy\n\n' +
       'We may update this Privacy Policy to reflect legal, technical or product changes. If changes are material, we will notify users through the app.\n\n' +
       '14. Applicable law\n\n' +
@@ -1598,9 +1645,9 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
       '3.1 Autenticación de la cuenta (selfie + TOTP)\n\n' +
       'Keinti puede ofrecer al usuario, dentro de “Configuración > Control de Seguridad > Autenticación de la cuenta”, un proceso adicional de verificación para aumentar la seguridad y reducir suplantaciones.\n\n' +
       'Este proceso puede incluir:\n\n' +
-      'Captura y envío de una selfie para revisión\n\n' +
+      'Captura y envío de una selfie para validación automática y, cuando sea necesario, revisión adicional\n\n' +
       'Activación de un segundo factor mediante un código TOTP de 6 dígitos generado por una app autenticadora compatible (por ejemplo, Google Authenticator)\n\n' +
-      'La revisión del selfie puede tardar hasta 24 horas. Keinti puede rechazar selfies que no permitan una verificación razonable (por ejemplo, mala iluminación, rostro no visible o imagen no válida) y solicitar un reintento.\n\n' +
+      'El sistema puede aceptar, rechazar o escalar la selfie a revisión adicional según la calidad de la imagen y las señales de seguridad detectadas. Keinti puede rechazar selfies que no permitan una validación razonable (por ejemplo, mala iluminación, rostro no visible, varias personas o imagen no válida) y solicitar un reintento.\n\n' +
       'El usuario se compromete a enviar únicamente una selfie propia, actual y sin manipulación. Cualquier intento de fraude, suplantación o elusión de medidas de seguridad puede conllevar restricciones, suspensión o eliminación de la cuenta.\n\n' +
       'El usuario es responsable de mantener el control de su dispositivo y de su app autenticadora. Si sospecha un acceso no autorizado, debe cambiar su contraseña, revisar la seguridad de su dispositivo y contactar con soporte.\n\n' +
       '4. Descripción del servicio\n\n' +
@@ -1661,9 +1708,9 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
       '3.1 Account Authentication (selfie + TOTP)\n\n' +
       'Keinti may offer, within “Settings > Security Control > Account Authentication”, an additional verification process to strengthen security and reduce impersonation.\n\n' +
       'This process may include:\n\n' +
-      'Capturing and submitting a selfie for review\n\n' +
+      'Capturing and submitting a selfie for automatic validation and, when necessary, additional review\n\n' +
       'Enabling a second factor using a 6-digit TOTP code generated by a compatible authenticator app (e.g., Google Authenticator)\n\n' +
-      'Selfie review may take up to 24 hours. Keinti may reject selfies that do not allow reasonable verification (e.g., poor lighting, face not visible or invalid image) and request a retry.\n\n' +
+      'The system may accept, reject, or escalate the selfie to additional review depending on image quality and the detected security signals. Keinti may reject selfies that do not allow a reasonable validation (e.g., poor lighting, face not visible, multiple people, or invalid image) and request a retry.\n\n' +
       'The user agrees to submit only their own, current, unedited selfie. Any attempt to commit fraud, impersonate others or bypass security measures may result in restrictions, suspension or account deletion.\n\n' +
       'The user is responsible for maintaining control of their device and authenticator app. If they suspect unauthorized access, they must change their password, review device security and contact support.\n\n' +
       '4. Service description\n\n' +
@@ -2837,7 +2884,7 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
                   style={[styles.checkButton, (isLoadingAccountAuth || accountSelfieStatus === 'accepted') && styles.checkButtonDisabled, { flex: 1 }]}
                   activeOpacity={0.8}
                   disabled={isLoadingAccountAuth || accountSelfieStatus === 'accepted'}
-                  onPress={refreshAccountAuth}
+                  onPress={handleRefreshAccountAuthStatus}
                 >
                   <Text style={styles.checkButtonText}>
                     {accountSelfieStatus === 'accepted' ? t('accountAuth.selfieAccepted') : t('accountAuth.refreshStatus')}
@@ -2861,6 +2908,11 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
                   <Text style={styles.errorText}>{accountSelfieBlockedReason || accountSelfieFailReason}</Text>
                 ) : accountSelfieStatus === 'failed' && accountSelfieFailReason ? (
                   <Text style={styles.errorText}>{accountSelfieFailReason}</Text>
+                ) : null}
+                {showPendingSelfieReviewNotice && accountSelfieStatus === 'pending' ? (
+                  <View style={styles.pendingReviewNoticeBox}>
+                    <Text style={styles.pendingReviewNoticeText}>{pendingSelfieReviewNotice}</Text>
+                  </View>
                 ) : null}
               </View>
             </View>
@@ -4261,6 +4313,21 @@ const styles = StyleSheet.create({
     opacity: 0.6,
     fontSize: 12,
     marginTop: 8,
+  },
+  pendingReviewNoticeBox: {
+    marginTop: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.35)',
+    backgroundColor: 'rgba(255, 183, 77, 0.08)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  pendingReviewNoticeText: {
+    color: '#FFFFFF',
+    opacity: 0.92,
+    fontSize: 12,
+    lineHeight: 18,
   },
   checkButton: {
     marginTop: 12,

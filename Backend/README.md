@@ -95,3 +95,42 @@ Opcionales (con valores por defecto):
 - `EMAIL_VERIFICATION_MAX_ATTEMPTS` (por defecto: `6`)
 - `EMAIL_VERIFICATION_LOCK_MINUTES` (por defecto: `30`)
 - `EMAIL_VERIFICATION_VERIFIED_TTL_MINUTES` (por defecto: `10`)
+
+## Google Cloud Vision para Autenticación de la cuenta
+El Paso 1 de `Configuración > Centro de la cuenta > Control de Seguridad > Autenticación de la cuenta` puede validar selfies automáticamente usando Google Cloud Vision.
+
+### Qué hace el backend
+- Analiza la imagen antes de guardarla.
+- Auto-acepta selfies claros de una sola cara y desbloquea el Paso 2 al momento.
+- Auto-rechaza imágenes claramente inválidas (sin rostro, varias personas, calidad muy baja, etc.).
+- Envía a revisión manual solo los casos ambiguos o cuando Google Vision no está disponible.
+
+### Variables necesarias
+Añade en `Backend/.env`:
+
+- `GOOGLE_CLOUD_VISION_ENABLED=true`
+- `GOOGLE_CLOUD_PROJECT_ID`
+- `GOOGLE_CLOUD_CLIENT_EMAIL`
+- `GOOGLE_CLOUD_PRIVATE_KEY`
+
+Alternativas soportadas:
+
+- `GOOGLE_APPLICATION_CREDENTIALS` apuntando al JSON del service account.
+- `GOOGLE_CLOUD_VISION_CREDENTIALS_JSON` con el JSON completo en una sola variable.
+
+### Umbrales opcionales
+- `ACCOUNT_SELFIE_GCV_TIMEOUT_MS`
+- `ACCOUNT_SELFIE_GCV_MIN_FACE_CONFIDENCE`
+- `ACCOUNT_SELFIE_GCV_MIN_LANDMARK_CONFIDENCE`
+- `ACCOUNT_SELFIE_GCV_MIN_FACE_AREA_RATIO`
+- `ACCOUNT_SELFIE_GCV_AUTO_FAIL_FACE_AREA_RATIO`
+
+### Dependencia
+Instala el cliente oficial en `Backend/`:
+
+```bash
+npm install @google-cloud/vision
+```
+
+### Comportamiento de fallback
+Si Vision falla por credenciales, cuota, timeout o indisponibilidad, el backend no rompe el flujo: deja el selfie en `pending` para revisión manual por admin.

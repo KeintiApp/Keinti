@@ -75,8 +75,18 @@ function App() {
   }, [authToken]);
 
   useEffect(() => {
+    const token = String(authToken || '').trim();
+    if (!token) {
+      setNotificationUnreadCount(0);
+      return;
+    }
+
+    if (currentScreen !== 'front' && currentScreen !== 'notifications') {
+      return;
+    }
+
     refreshNotificationUnreadCount();
-  }, [refreshNotificationUnreadCount]);
+  }, [authToken, currentScreen, refreshNotificationUnreadCount]);
 
   // Global deep-link handler for Supabase PKCE callbacks.
   // Needed for email confirmation links (Confirm your email) because the app may open on Login.
@@ -709,6 +719,10 @@ function App() {
           authToken={authToken}
           onNavigateToConfiguration={() => {
             setConfigurationInitialScreen('main');
+            setCurrentScreen('configuration');
+          }}
+          onNavigateToAccountAuth={() => {
+            setConfigurationInitialScreen('accountAuth');
             setCurrentScreen('configuration');
           }}
           onNavigateToNotifications={() => setCurrentScreen('notifications')}

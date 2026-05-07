@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, PermissionsAndroid, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, PermissionsAndroid, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaskedView from '@react-native-masked-view/masked-view';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -1811,82 +1811,84 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
           onPress={clearExpandedCitation}
           style={styles.citationUsersOverlay}
         >
-          <TouchableOpacity
-            accessibilityRole="button"
-            activeOpacity={1}
-            onPress={() => undefined}
-            style={[
-              styles.citationUsersSheet,
-              { paddingBottom: Math.max(16, safeAreaInsets.bottom + 8) },
-            ]}
-          >
-            <View style={styles.citationUsersSheetHandle} />
-            <Text style={styles.citationUsersSheetTitle}>Usuarios citados</Text>
-            <Text style={styles.citationUsersSheetExcerpt}>{expandedCitation?.text || ''}</Text>
-
-            <ScrollView
-              style={styles.citationUsersList}
-              contentContainerStyle={styles.citationUsersListContent}
-              showsVerticalScrollIndicator={(expandedCitation?.users.length || 0) > MAX_VISIBLE_CITED_USERS}
+          <TouchableWithoutFeedback>
+            <View
+              style={[
+                styles.citationUsersSheet,
+                { paddingBottom: Math.max(16, safeAreaInsets.bottom + 8) },
+              ]}
             >
-              {(expandedCitation?.users || []).map((user) => {
-                const displayUsername = user.username.startsWith('@') ? user.username : `@${user.username}`;
-                const normalizedUsername = normalizeMentionUsername(displayUsername);
-                const avatarUri = user.profile_photo_uri ? getServerResourceUrl(String(user.profile_photo_uri)) : '';
-                const renderableSocials = getRenderableCitationUserSocials(user.social_networks);
-                const socialViewportCount = Math.min(renderableSocials.length, CITATION_USER_SOCIAL_VIEWPORT_COUNT);
-                const socialViewportWidth = socialViewportCount > 0
-                  ? (socialViewportCount * CITATION_USER_SOCIAL_ICON_SIZE) + ((socialViewportCount - 1) * CITATION_USER_SOCIAL_ICON_GAP)
-                  : 0;
+              <View style={styles.citationUsersSheetHandle} />
+              <Text style={styles.citationUsersSheetTitle}>Usuarios citados</Text>
+              <Text style={styles.citationUsersSheetExcerpt}>{expandedCitation?.text || ''}</Text>
 
-                return (
-                  <View key={normalizedUsername} style={styles.citationUsersListItem}>
-                    {avatarUri ? (
-                      <Image source={{ uri: avatarUri }} style={styles.citationUsersListAvatar} resizeMode="cover" />
-                    ) : (
-                      <View style={styles.citationUsersListAvatarFallback}>
-                        <MaterialIcons name="person" size={18} color="#FFFFFF" />
-                      </View>
-                    )}
-                    <View style={styles.citationUsersListBody}>
-                      <Text style={styles.citationUsersListText}>{displayUsername}</Text>
+              <ScrollView
+                style={styles.citationUsersList}
+                contentContainerStyle={styles.citationUsersListContent}
+                showsVerticalScrollIndicator={(expandedCitation?.users.length || 0) > MAX_VISIBLE_CITED_USERS}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+              >
+                {(expandedCitation?.users || []).map((user) => {
+                  const displayUsername = user.username.startsWith('@') ? user.username : `@${user.username}`;
+                  const normalizedUsername = normalizeMentionUsername(displayUsername);
+                  const avatarUri = user.profile_photo_uri ? getServerResourceUrl(String(user.profile_photo_uri)) : '';
+                  const renderableSocials = getRenderableCitationUserSocials(user.social_networks);
+                  const socialViewportCount = Math.min(renderableSocials.length, CITATION_USER_SOCIAL_VIEWPORT_COUNT);
+                  const socialViewportWidth = socialViewportCount > 0
+                    ? (socialViewportCount * CITATION_USER_SOCIAL_ICON_SIZE) + ((socialViewportCount - 1) * CITATION_USER_SOCIAL_ICON_GAP)
+                    : 0;
 
-                      {renderableSocials.length > 0 ? (
-                        <View style={[styles.citationUsersSocialViewport, { width: socialViewportWidth }]}>
-                          <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            scrollEnabled={renderableSocials.length > CITATION_USER_SOCIAL_VIEWPORT_COUNT}
-                            contentContainerStyle={styles.citationUsersSocialRow}
-                          >
-                            {renderableSocials.map((social, socialIndex) => {
-                              const isLastSocial = socialIndex === renderableSocials.length - 1;
-
-                              return (
-                                <TouchableOpacity
-                                  key={`${normalizedUsername}-${social.key}`}
-                                  accessibilityRole="button"
-                                  activeOpacity={0.85}
-                                  onPress={() => handleOpenCitationSocialLink(social.link)}
-                                  style={isLastSocial ? null : styles.citationUsersSocialIconSpacing}
-                                >
-                                  <Image
-                                    source={social.iconSource}
-                                    style={styles.citationUsersSocialIcon}
-                                    resizeMode="contain"
-                                  />
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </ScrollView>
+                  return (
+                    <View key={normalizedUsername} style={styles.citationUsersListItem}>
+                      {avatarUri ? (
+                        <Image source={{ uri: avatarUri }} style={styles.citationUsersListAvatar} resizeMode="cover" />
+                      ) : (
+                        <View style={styles.citationUsersListAvatarFallback}>
+                          <MaterialIcons name="person" size={18} color="#FFFFFF" />
                         </View>
-                      ) : null}
+                      )}
+                      <View style={styles.citationUsersListBody}>
+                        <Text style={styles.citationUsersListText}>{displayUsername}</Text>
+
+                        {renderableSocials.length > 0 ? (
+                          <View style={[styles.citationUsersSocialViewport, { width: socialViewportWidth }]}>
+                            <ScrollView
+                              horizontal
+                              showsHorizontalScrollIndicator={false}
+                              scrollEnabled={renderableSocials.length > CITATION_USER_SOCIAL_VIEWPORT_COUNT}
+                              contentContainerStyle={styles.citationUsersSocialRow}
+                              nestedScrollEnabled
+                            >
+                              {renderableSocials.map((social, socialIndex) => {
+                                const isLastSocial = socialIndex === renderableSocials.length - 1;
+
+                                return (
+                                  <TouchableOpacity
+                                    key={`${normalizedUsername}-${social.key}`}
+                                    accessibilityRole="button"
+                                    activeOpacity={0.85}
+                                    onPress={() => handleOpenCitationSocialLink(social.link)}
+                                    style={isLastSocial ? null : styles.citationUsersSocialIconSpacing}
+                                  >
+                                    <Image
+                                      source={social.iconSource}
+                                      style={styles.citationUsersSocialIcon}
+                                      resizeMode="contain"
+                                    />
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </ScrollView>
+                          </View>
+                        ) : null}
+                      </View>
                     </View>
-                  </View>
-                );
-              })}
-            </ScrollView>
-          </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </TouchableWithoutFeedback>
         </TouchableOpacity>
       </Modal>
 

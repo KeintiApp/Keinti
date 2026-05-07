@@ -6,6 +6,7 @@ const pool = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { getPostTtlMinutes } = require('../config/postTtl');
 const { buildObjectPath, uploadBuffer, deleteObject, isSupabaseConfigured } = require('../services/supabaseStorageService');
+const { analyzeAccountSelfie, RULESET_VERSION } = require('../services/accountSelfieVisionService');
 
 const router = express.Router();
 
@@ -36,6 +37,37 @@ function normalizeSelfieStatus(raw) {
   const s = String(raw || '').trim().toLowerCase();
   if (s === 'pending' || s === 'accepted' || s === 'failed' || s === 'not_submitted') return s;
   return 'not_submitted';
+}
+
+function parseSelfieAnalysisSummary(raw) {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(String(raw));
+  } catch {
+    return null;
+  }
+}
+
+function buildInputValidationAnalysis({ mimeType, bytes, processedAt, reviewFlags, reason, code }) {
+  return {
+    provider: 'input-validation',
+    ruleset: RULESET_VERSION,
+    runtime: 'input_validation',
+    image: {
+      mimeType: mimeType || 'application/octet-stream',
+      bytes: Number(bytes) || 0,
+      width: null,
+      height: null,
+    },
+    faceCount: 0,
+    primaryFace: null,
+    safeSearch: null,
+    reviewFlags: Array.isArray(reviewFlags) ? reviewFlags : [],
+    processedAt,
+    reason: reason || null,
+    code: code || null,
+  };
 }
 
 async function requireBackendAdmin(req, res) {
@@ -111,7 +143,11 @@ async function resetAccountAuthToInitialState(email, selfieImageId) {
        selfie_submitted_at = NULL,
        selfie_reviewed_at = NULL,
        selfie_fail_reason = NULL,
-       selfie_image_id = NULL
+       selfie_image_id = NULL,
+       selfie_analysis_json = NULL,
+       selfie_analysis_processed_at = NULL,
+       selfie_analysis_version = NULL,
+       selfie_decision_source = NULL
      WHERE user_email = $1`,
     [email]
   );
@@ -134,6 +170,10 @@ router.get('/status', authenticateToken, async (req, res) => {
          aa.selfie_fail_reason AS account_selfie_fail_reason,
          aa.selfie_blocked AS account_selfie_blocked,
          aa.selfie_blocked_reason AS account_selfie_blocked_reason,
+         aa.selfie_decision_source AS account_selfie_decision_source,
+         aa.selfie_analysis_json AS account_selfie_analysis_json,
+         aa.selfie_analysis_processed_at AS account_selfie_analysis_processed_at,
+         aa.selfie_analysis_version AS account_selfie_analysis_version,
          aa.totp_enabled AS totp_enabled,
          aa.totp_enabled_at AS totp_enabled_at
        FROM users u
@@ -152,6 +192,7 @@ router.get('/status', authenticateToken, async (req, res) => {
     let totpEnabled = row.totp_enabled === true;
     let accountVerified = row.account_verified === true;
     let verifiedAt = row.account_verified_at || null;
+    const analysisSummary = parseSelfieAnalysisSummary(row.account_selfie_analysis_json);
 
     // Expiración de la insignia: si expiró, revierte todo al estado inicial.
     const expiresAtMs = accountVerified ? computeVerificationExpiresAtMs(verifiedAt) : null;
@@ -189,6 +230,10 @@ router.get('/status', authenticateToken, async (req, res) => {
         fail_reason: row.account_selfie_fail_reason || null,
         blocked: row.account_selfie_blocked === true,
         blocked_reason: row.account_selfie_blocked_reason || null,
+        decision_source: row.account_selfie_decision_source || null,
+        analysis_summary: analysisSummary,
+        analysis_processed_at: row.account_selfie_analysis_processed_at || null,
+        analysis_version: row.account_selfie_analysis_version || null,
       },
       totp: {
         enabled: totpEnabled,
@@ -333,37 +378,196 @@ router.post('/selfie', authenticateToken, upload.single('selfie'), async (req, r
     }
 
     const mimeType = req.file.mimetype || 'application/octet-stream';
-    const accessToken = generateAccessToken();
+    const nowIso = new Date().toISOString();
+
+    const prev = await pool.query(
+      'SELECT selfie_image_id FROM account_auth WHERE user_email = $1 LIMIT 1',
+      [email]
+    );
+    const prevId = prev.rows?.[0]?.selfie_image_id;
+
+    const clearPreviousSelfie = async () => {
+      if (prevId) {
+        await deleteUploadedImageById(prevId);
+      }
+    };
 
     // Pre-check (Opción B lite): filtrar basura obvia para reducir carga de revisión.
     // Nota: esto no sustituye liveness/edad real; solo evita imágenes vacías o demasiado pequeñas.
     const minBytes = Math.max(5_000, Number(process.env.ACCOUNT_SELFIE_MIN_BYTES || 10_000));
     if (Buffer.isBuffer(req.file.buffer) && req.file.buffer.length > 0 && req.file.buffer.length < minBytes) {
+      await clearPreviousSelfie();
+      const analysisSummary = buildInputValidationAnalysis({
+        mimeType,
+        bytes: req.file.buffer.length,
+        processedAt: nowIso,
+        reviewFlags: ['image_too_small'],
+        reason: 'La imagen es demasiado pequeña o no parece una selfie válida. Reintenta con buena iluminación y encuadre.',
+        code: 'SELFIE_AUTO_REJECTED',
+      });
+
       await pool.query(
         `INSERT INTO account_auth (
            user_email,
            selfie_status,
+           selfie_image_id,
+           selfie_submitted_at,
            selfie_reviewed_at,
            selfie_fail_reason,
            selfie_blocked,
            selfie_blocked_at,
            selfie_blocked_reason,
-           selfie_blocked_by
-         ) VALUES ($1, 'failed', NOW(), $2, FALSE, NULL, NULL, NULL)
+           selfie_blocked_by,
+           selfie_analysis_json,
+           selfie_analysis_processed_at,
+           selfie_analysis_version,
+           selfie_decision_source
+         ) VALUES ($1, 'failed', NULL, NOW(), NOW(), $2, FALSE, NULL, NULL, NULL, $3::jsonb, NOW(), $4, 'input_validation')
          ON CONFLICT (user_email) DO UPDATE SET
            selfie_status = 'failed',
+           selfie_image_id = NULL,
+           selfie_submitted_at = NOW(),
            selfie_reviewed_at = NOW(),
            selfie_fail_reason = EXCLUDED.selfie_fail_reason,
            selfie_blocked = FALSE,
            selfie_blocked_at = NULL,
            selfie_blocked_reason = NULL,
-           selfie_blocked_by = NULL`,
-        [email, 'La imagen es demasiado pequeña o no parece una selfie válida. Reintenta con buena iluminación y encuadre.']
+           selfie_blocked_by = NULL,
+           selfie_analysis_json = EXCLUDED.selfie_analysis_json,
+           selfie_analysis_processed_at = NOW(),
+           selfie_analysis_version = EXCLUDED.selfie_analysis_version,
+           selfie_decision_source = EXCLUDED.selfie_decision_source`,
+        [
+          email,
+          'La imagen es demasiado pequeña o no parece una selfie válida. Reintenta con buena iluminación y encuadre.',
+          JSON.stringify(analysisSummary),
+          RULESET_VERSION,
+        ]
       );
 
-      return res.status(400).json({
-        error: 'Selfie rechazado automáticamente por calidad insuficiente. Reintenta.',
+      return res.json({
+        selfie: {
+          status: 'failed',
+          submitted_at: nowIso,
+          reviewed_at: nowIso,
+          fail_reason: 'La imagen es demasiado pequeña o no parece una selfie válida. Reintenta con buena iluminación y encuadre.',
+        },
+        message: 'Selfie rechazado automáticamente por calidad insuficiente. Reintenta.',
         code: 'SELFIE_AUTO_REJECTED',
+      });
+    }
+
+    const visionDecision = await analyzeAccountSelfie({
+      buffer: req.file.buffer,
+      mimeType,
+    });
+
+    if (visionDecision.status === 'accepted') {
+      await clearPreviousSelfie();
+
+      await pool.query(
+        `INSERT INTO account_auth (
+           user_email,
+           selfie_status,
+           selfie_image_id,
+           selfie_submitted_at,
+           selfie_reviewed_at,
+           selfie_fail_reason,
+           selfie_blocked,
+           selfie_blocked_at,
+           selfie_blocked_reason,
+           selfie_blocked_by,
+           selfie_analysis_json,
+           selfie_analysis_processed_at,
+           selfie_analysis_version,
+           selfie_decision_source
+         ) VALUES ($1, 'accepted', NULL, NOW(), NOW(), NULL, FALSE, NULL, NULL, NULL, $2::jsonb, NOW(), $3, $4)
+         ON CONFLICT (user_email) DO UPDATE SET
+           selfie_status = 'accepted',
+           selfie_image_id = NULL,
+           selfie_submitted_at = NOW(),
+           selfie_reviewed_at = NOW(),
+           selfie_fail_reason = NULL,
+           selfie_blocked = FALSE,
+           selfie_blocked_at = NULL,
+           selfie_blocked_reason = NULL,
+           selfie_blocked_by = NULL,
+           selfie_analysis_json = EXCLUDED.selfie_analysis_json,
+           selfie_analysis_processed_at = NOW(),
+           selfie_analysis_version = EXCLUDED.selfie_analysis_version,
+           selfie_decision_source = EXCLUDED.selfie_decision_source`,
+        [
+          email,
+          JSON.stringify(visionDecision.summary),
+          visionDecision.summary?.ruleset || RULESET_VERSION,
+          visionDecision.summary?.runtime || 'google_vision',
+        ]
+      );
+
+      return res.json({
+        selfie: {
+          status: 'accepted',
+          submitted_at: nowIso,
+          reviewed_at: nowIso,
+          fail_reason: null,
+        },
+        step2_available: true,
+        message: visionDecision.userMessage,
+      });
+    }
+
+    if (visionDecision.status === 'failed') {
+      await clearPreviousSelfie();
+
+      await pool.query(
+        `INSERT INTO account_auth (
+           user_email,
+           selfie_status,
+           selfie_image_id,
+           selfie_submitted_at,
+           selfie_reviewed_at,
+           selfie_fail_reason,
+           selfie_blocked,
+           selfie_blocked_at,
+           selfie_blocked_reason,
+           selfie_blocked_by,
+           selfie_analysis_json,
+           selfie_analysis_processed_at,
+           selfie_analysis_version,
+           selfie_decision_source
+         ) VALUES ($1, 'failed', NULL, NOW(), NOW(), $2, FALSE, NULL, NULL, NULL, $3::jsonb, NOW(), $4, $5)
+         ON CONFLICT (user_email) DO UPDATE SET
+           selfie_status = 'failed',
+           selfie_image_id = NULL,
+           selfie_submitted_at = NOW(),
+           selfie_reviewed_at = NOW(),
+           selfie_fail_reason = EXCLUDED.selfie_fail_reason,
+           selfie_blocked = FALSE,
+           selfie_blocked_at = NULL,
+           selfie_blocked_reason = NULL,
+           selfie_blocked_by = NULL,
+           selfie_analysis_json = EXCLUDED.selfie_analysis_json,
+           selfie_analysis_processed_at = NOW(),
+           selfie_analysis_version = EXCLUDED.selfie_analysis_version,
+           selfie_decision_source = EXCLUDED.selfie_decision_source`,
+        [
+          email,
+          visionDecision.userMessage,
+          JSON.stringify(visionDecision.summary),
+          visionDecision.summary?.ruleset || RULESET_VERSION,
+          visionDecision.summary?.runtime || 'google_vision',
+        ]
+      );
+
+      return res.json({
+        selfie: {
+          status: 'failed',
+          submitted_at: nowIso,
+          reviewed_at: nowIso,
+          fail_reason: visionDecision.userMessage,
+        },
+        message: visionDecision.userMessage,
+        code: visionDecision.errorCode,
       });
     }
 
@@ -383,12 +587,9 @@ router.post('/selfie', authenticateToken, upload.single('selfie'), async (req, r
       });
     }
 
+    const accessToken = generateAccessToken();
+
     // Si había un selfie anterior guardado, lo borramos para minimizar retención.
-    const prev = await pool.query(
-      'SELECT selfie_image_id FROM account_auth WHERE user_email = $1 LIMIT 1',
-      [email]
-    );
-    const prevId = prev.rows?.[0]?.selfie_image_id;
     if (prevId) {
       await deleteUploadedImageById(prevId);
     }
@@ -420,8 +621,12 @@ router.post('/selfie', authenticateToken, upload.single('selfie'), async (req, r
          selfie_blocked,
          selfie_blocked_at,
          selfie_blocked_reason,
-         selfie_blocked_by
-       ) VALUES ($1, 'pending', $2, NOW(), NULL, NULL, FALSE, NULL, NULL, NULL)
+         selfie_blocked_by,
+         selfie_analysis_json,
+         selfie_analysis_processed_at,
+         selfie_analysis_version,
+         selfie_decision_source
+       ) VALUES ($1, 'pending', $2, NOW(), NULL, NULL, FALSE, NULL, NULL, NULL, $3::jsonb, NOW(), $4, $5)
        ON CONFLICT (user_email) DO UPDATE SET
          selfie_status = 'pending',
          selfie_image_id = EXCLUDED.selfie_image_id,
@@ -431,16 +636,27 @@ router.post('/selfie', authenticateToken, upload.single('selfie'), async (req, r
          selfie_blocked = FALSE,
          selfie_blocked_at = NULL,
          selfie_blocked_reason = NULL,
-         selfie_blocked_by = NULL`,
-      [email, imageId]
+         selfie_blocked_by = NULL,
+         selfie_analysis_json = EXCLUDED.selfie_analysis_json,
+         selfie_analysis_processed_at = NOW(),
+         selfie_analysis_version = EXCLUDED.selfie_analysis_version,
+         selfie_decision_source = EXCLUDED.selfie_decision_source`,
+      [
+        email,
+        imageId,
+        JSON.stringify(visionDecision.summary),
+        visionDecision.summary?.ruleset || RULESET_VERSION,
+        visionDecision.summary?.runtime || 'manual_review_fallback',
+      ]
     );
 
     res.json({
       selfie: {
         status: 'pending',
-        submitted_at: new Date().toISOString(),
+        submitted_at: nowIso,
       },
-      message: 'Selfie recibido. La revisión puede tardar hasta 24 horas.',
+      message: visionDecision.userMessage,
+      code: visionDecision.errorCode,
     });
   } catch (error) {
     console.error('Error uploading selfie:', error);
@@ -653,6 +869,10 @@ router.get('/admin/pending-selfies', authenticateToken, async (req, res) => {
          u.username,
          aa.selfie_submitted_at,
          aa.selfie_image_id,
+        aa.selfie_decision_source,
+        aa.selfie_analysis_json,
+        aa.selfie_analysis_processed_at,
+        aa.selfie_analysis_version,
          ui.image_data,
          ui.mime_type,
          ui.storage_bucket,
@@ -690,6 +910,10 @@ router.get('/admin/pending-selfies', authenticateToken, async (req, res) => {
               email: r.email,
               username: r.username,
               submitted_at: r.selfie_submitted_at,
+              decision_source: r.selfie_decision_source || null,
+              analysis_summary: parseSelfieAnalysisSummary(r.selfie_analysis_json),
+              analysis_processed_at: r.selfie_analysis_processed_at || null,
+              analysis_version: r.selfie_analysis_version || null,
               image_url: signedUrl,
               selfie_image_id: Number.isFinite(imageId) ? imageId : null,
               image_path: imagePath,
@@ -704,6 +928,10 @@ router.get('/admin/pending-selfies', authenticateToken, async (req, res) => {
           email: r.email,
           username: r.username,
           submitted_at: r.selfie_submitted_at,
+          decision_source: r.selfie_decision_source || null,
+          analysis_summary: parseSelfieAnalysisSummary(r.selfie_analysis_json),
+          analysis_processed_at: r.selfie_analysis_processed_at || null,
+          analysis_version: r.selfie_analysis_version || null,
           image_url: imagePath || `data:${mime};base64,${base64}`,
           selfie_image_id: Number.isFinite(imageId) ? imageId : null,
           image_path: imagePath,
@@ -729,7 +957,11 @@ router.get('/admin/blocked-selfies', authenticateToken, async (req, res) => {
          u.email,
          u.username,
          aa.selfie_blocked_at,
-         aa.selfie_blocked_reason
+        aa.selfie_blocked_reason,
+        aa.selfie_decision_source,
+        aa.selfie_analysis_json,
+        aa.selfie_analysis_processed_at,
+        aa.selfie_analysis_version
        FROM account_auth aa
        JOIN users u ON u.email = aa.user_email
        WHERE aa.selfie_blocked = TRUE
@@ -743,6 +975,10 @@ router.get('/admin/blocked-selfies', authenticateToken, async (req, res) => {
         username: String(r.username || ''),
         blocked_at: r.selfie_blocked_at,
         reason: r.selfie_blocked_reason || null,
+        decision_source: r.selfie_decision_source || null,
+        analysis_summary: parseSelfieAnalysisSummary(r.selfie_analysis_json),
+        analysis_processed_at: r.selfie_analysis_processed_at || null,
+        analysis_version: r.selfie_analysis_version || null,
       })),
     });
   } catch (error) {
@@ -788,8 +1024,10 @@ router.post('/admin/selfie-review', authenticateToken, async (req, res) => {
            selfie_blocked,
            selfie_blocked_at,
            selfie_blocked_reason,
-           selfie_blocked_by
-         ) VALUES ($1, 'accepted', NOW(), NULL, FALSE, NULL, NULL, NULL)
+           selfie_blocked_by,
+           selfie_analysis_processed_at,
+           selfie_decision_source
+         ) VALUES ($1, 'accepted', NOW(), NULL, FALSE, NULL, NULL, NULL, NOW(), 'manual_admin')
          ON CONFLICT (user_email) DO UPDATE SET
            selfie_status = 'accepted',
            selfie_reviewed_at = NOW(),
@@ -797,7 +1035,9 @@ router.post('/admin/selfie-review', authenticateToken, async (req, res) => {
            selfie_blocked = FALSE,
            selfie_blocked_at = NULL,
            selfie_blocked_reason = NULL,
-           selfie_blocked_by = NULL`,
+           selfie_blocked_by = NULL,
+           selfie_analysis_processed_at = NOW(),
+           selfie_decision_source = 'manual_admin'`,
         [userEmail]
       );
     } else if (action === 'failed') {
@@ -810,8 +1050,10 @@ router.post('/admin/selfie-review', authenticateToken, async (req, res) => {
            selfie_blocked,
            selfie_blocked_at,
            selfie_blocked_reason,
-           selfie_blocked_by
-         ) VALUES ($1, 'failed', NOW(), $2, FALSE, NULL, NULL, NULL)
+           selfie_blocked_by,
+           selfie_analysis_processed_at,
+           selfie_decision_source
+         ) VALUES ($1, 'failed', NOW(), $2, FALSE, NULL, NULL, NULL, NOW(), 'manual_admin')
          ON CONFLICT (user_email) DO UPDATE SET
            selfie_status = 'failed',
            selfie_reviewed_at = NOW(),
@@ -819,7 +1061,9 @@ router.post('/admin/selfie-review', authenticateToken, async (req, res) => {
            selfie_blocked = FALSE,
            selfie_blocked_at = NULL,
            selfie_blocked_reason = NULL,
-           selfie_blocked_by = NULL`,
+           selfie_blocked_by = NULL,
+           selfie_analysis_processed_at = NOW(),
+           selfie_decision_source = 'manual_admin'`,
         [userEmail, reason || 'Selfie no válido. Reintenta con buena iluminación y encuadre.']
       );
     } else if (action === 'blocked') {
@@ -832,8 +1076,10 @@ router.post('/admin/selfie-review', authenticateToken, async (req, res) => {
            selfie_blocked,
            selfie_blocked_at,
            selfie_blocked_reason,
-           selfie_blocked_by
-         ) VALUES ($1, 'failed', NOW(), $2, TRUE, NOW(), $3, $4)
+           selfie_blocked_by,
+           selfie_analysis_processed_at,
+           selfie_decision_source
+         ) VALUES ($1, 'failed', NOW(), $2, TRUE, NOW(), $3, $4, NOW(), 'manual_admin')
          ON CONFLICT (user_email) DO UPDATE SET
            selfie_status = 'failed',
            selfie_reviewed_at = NOW(),
@@ -841,7 +1087,9 @@ router.post('/admin/selfie-review', authenticateToken, async (req, res) => {
            selfie_blocked = TRUE,
            selfie_blocked_at = NOW(),
            selfie_blocked_reason = EXCLUDED.selfie_blocked_reason,
-           selfie_blocked_by = EXCLUDED.selfie_blocked_by`,
+           selfie_blocked_by = EXCLUDED.selfie_blocked_by,
+           selfie_analysis_processed_at = NOW(),
+           selfie_decision_source = 'manual_admin'`,
         [
           userEmail,
           reason || 'Bloqueado por moderación.',
@@ -859,8 +1107,12 @@ router.post('/admin/selfie-review', authenticateToken, async (req, res) => {
            selfie_blocked,
            selfie_blocked_at,
            selfie_blocked_reason,
-           selfie_blocked_by
-         ) VALUES ($1, 'not_submitted', NOW(), NULL, FALSE, NULL, NULL, NULL)
+           selfie_blocked_by,
+           selfie_analysis_json,
+           selfie_analysis_processed_at,
+           selfie_analysis_version,
+           selfie_decision_source
+         ) VALUES ($1, 'not_submitted', NOW(), NULL, FALSE, NULL, NULL, NULL, NULL, NULL, NULL, 'manual_admin')
          ON CONFLICT (user_email) DO UPDATE SET
            selfie_status = 'not_submitted',
            selfie_reviewed_at = NOW(),
@@ -868,7 +1120,11 @@ router.post('/admin/selfie-review', authenticateToken, async (req, res) => {
            selfie_blocked = FALSE,
            selfie_blocked_at = NULL,
            selfie_blocked_reason = NULL,
-           selfie_blocked_by = NULL`,
+           selfie_blocked_by = NULL,
+           selfie_analysis_json = NULL,
+           selfie_analysis_processed_at = NULL,
+           selfie_analysis_version = NULL,
+           selfie_decision_source = 'manual_admin'`,
         [userEmail]
       );
     }

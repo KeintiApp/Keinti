@@ -31,6 +31,11 @@ async function isPostActive(postId) {
 
 // Obtener todas las publicaciones
 router.get('/', async (req, res) => {
+  const requestedLimit = Number.parseInt(String(req.query.limit || ''), 10);
+  const postsLimit = Number.isFinite(requestedLimit)
+    ? Math.min(100, Math.max(1, requestedLimit))
+    : 100;
+
   // Intentar obtener el email del usuario si hay token (opcional)
   let currentUserEmail = null;
   const authHeader = req.headers['authorization'];
@@ -95,8 +100,9 @@ router.get('/', async (req, res) => {
          u.moderation_blocked IS DISTINCT FROM TRUE
          OR (u.moderation_block_until IS NOT NULL AND u.moderation_block_until <= NOW())
        )
-       ORDER BY p.created_at DESC`,
-      [currentUserEmail, POST_TTL_MINUTES]
+       ORDER BY p.created_at DESC
+       LIMIT $3`,
+      [currentUserEmail, POST_TTL_MINUTES, postsLimit]
     );
 
     const activePostIds = result.rows.map(r => r.id).filter(id => Number.isFinite(Number(id)));

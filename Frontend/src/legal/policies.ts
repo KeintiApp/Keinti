@@ -44,10 +44,13 @@ Cuando el usuario utiliza Keinti, podemos recopilar datos técnicos necesarios p
 En “Configuración > Control de Seguridad > Autenticación de la cuenta”, Keinti puede tratar datos adicionales únicamente para reforzar la seguridad, reducir suplantaciones y aumentar la confianza en la comunidad:
 
 - Selfie de verificación (imagen capturada con la cámara frontal)
-- Estado de revisión del selfie (no enviado, pendiente, aceptado o fallido), fechas de envío/revisión y motivo de rechazo cuando aplique
+- Estado y resultado de validación del selfie (no enviado, revisión adicional requerida, aceptado o fallido), fechas de análisis/revisión y motivo de rechazo cuando aplique
+- Metadatos técnicos del análisis automático del selfie para auditoría y seguridad
 - Datos de configuración TOTP (secreto) y el estado/fecha de activación (para uso con una app autenticadora compatible, por ejemplo Google Authenticator)
 
-La selfie se utiliza únicamente para verificación y seguridad. No se utiliza para reconocimiento facial automatizado ni para fines publicitarios.
+La selfie se utiliza únicamente para validación de seguridad y prevención de suplantaciones. No se utiliza para reconocimiento facial automatizado, identificación de individuos ni fines publicitarios.
+
+Cuando el análisis automático no puede decidir con suficiente certeza, la selfie puede pasar a revisión adicional por personal autorizado.
 
 La app autenticadora (por ejemplo, Google Authenticator) funciona en el dispositivo del usuario. Keinti no recibe datos de esa app; únicamente valida códigos TOTP.
 
@@ -116,7 +119,7 @@ Conservamos los datos durante el tiempo necesario para prestar el servicio y par
 - Eliminación de cuenta: el usuario puede solicitarla desde la configuración; al eliminarla, los datos se eliminan o se anonimizan conforme a requisitos técnicos y legales
 - Contenido en canales públicos vinculado a publicaciones: se concibe como temporal; por defecto, las publicaciones en “Home” y contenido asociado pueden expirar y retirarse automáticamente, junto con interacciones relacionadas
 - Registros técnicos y de seguridad: se conservan el tiempo mínimo necesario para seguridad, mantenimiento y cumplimiento
-- Autenticación de la cuenta: la selfie se conserva únicamente el tiempo necesario para su revisión y se elimina automáticamente tras la revisión (aceptada o fallida). La verificación puede tener vigencia limitada; por defecto expira a los 365 días, y al expirar se reinicia el estado y se eliminan datos asociados (por ejemplo, el secreto TOTP)
+- Autenticación de la cuenta: la selfie se conserva únicamente el tiempo necesario para su validación automática y, cuando aplique, su revisión adicional; las imágenes aceptadas o rechazadas automáticamente pueden no conservarse, y las imágenes marcadas para revisión se eliminan tras su resolución (aceptada o fallida). La verificación puede tener vigencia limitada; por defecto expira a los 365 días, y al expirar se reinicia el estado y se eliminan datos asociados (por ejemplo, el secreto TOTP)
 
 ## 10. Destinatarios y cesiones
 
@@ -124,6 +127,7 @@ Los datos personales pueden ser tratados por proveedores que prestan servicios a
 
 - Supabase (infraestructura, base de datos, autenticación y almacenamiento)
 - Google (inicio de sesión con Google OAuth, si el usuario lo elige)
+- Google Cloud Vision (análisis automático de selfies para seguridad)
 - Google (AdMob, para publicidad)
 - Google (Google Maps Platform / SDK de Maps) para mostrar mapas y, cuando aplique, búsquedas o detalles de lugares
 
@@ -141,7 +145,7 @@ Las solicitudes pueden enviarse a keintisoporte@gmail.com. También pueden exist
 
 Aplicamos medidas técnicas y organizativas razonables para proteger los datos, incluyendo controles de acceso, medidas de seguridad en infraestructura y prácticas de minimización.
 
-En “Autenticación de la cuenta”, el acceso a información de revisión (incluida la selfie) está restringido a personal/administración autorizado únicamente para validar el proceso.
+Cuando un selfie se marca para revisión adicional, el acceso a esa información (incluida la selfie) está restringido a personal/administración autorizado únicamente para validar el proceso.
 
 ## 13. Cambios en esta política
 
@@ -203,10 +207,13 @@ When the user uses Keinti, we may collect technical data required to operate the
 In “Settings > Security Control > Account Authentication”, Keinti may process additional data solely to strengthen security, reduce impersonation and increase trust in the community:
 
 - Verification selfie (captured with the device front camera)
-- Selfie review status (not submitted, pending, accepted or failed), submission/review timestamps and a rejection reason when applicable
+- Selfie validation status and outcome (not submitted, additional review required, accepted or failed), analysis/review timestamps and a rejection reason when applicable
+- Technical metadata from the automatic selfie analysis for audit and security purposes
 - TOTP setup data (secret) and enablement status/date (for use with a compatible authenticator app, e.g., Google Authenticator)
 
-The selfie is used only for verification and security. We do not use automated facial recognition and we do not use it for advertising profiling.
+The selfie is used only for security validation and anti-impersonation purposes. We do not use automated facial recognition, individual identification, or advertising profiling.
+
+When the automatic analysis cannot decide with sufficient confidence, the selfie may be routed to additional review by authorized staff.
 
 Authenticator apps (e.g., Google Authenticator) run on the user’s device. Keinti does not receive data from those apps; it only validates TOTP codes.
 
@@ -275,7 +282,7 @@ We retain data for as long as necessary to provide the service and for the purpo
 - Account deletion: the user may request deletion from the app settings; upon deletion, data are deleted or anonymized in accordance with technical and legal requirements
 - Public channel content linked to posts: designed to be temporary; by default, “Home” posts and related content may expire and be removed automatically, together with related interactions
 - Technical and security logs: retained for the minimum time required for security, maintenance and compliance
-- Account Authentication: selfie images are retained only as long as needed for review and are automatically deleted after review (accepted or failed). Verification may have a limited validity; by default it expires 365 days after verification, and upon expiry the status is reset and associated data (e.g., TOTP secret) are removed
+- Account Authentication: selfie images are retained only as long as needed for automatic validation and, where applicable, additional review; automatically accepted or rejected images may not be retained, and images flagged for review are deleted once resolved (accepted or failed). Verification may have a limited validity; by default it expires 365 days after verification, and upon expiry the status is reset and associated data (e.g., TOTP secret) are removed
 
 ## 10. Recipients
 
@@ -283,6 +290,7 @@ Personal data may be processed by service providers supporting Keinti, mainly:
 
 - Supabase (infrastructure, database, authentication and storage)
 - Google (Google OAuth sign-in, if the user chooses it)
+- Google Cloud Vision (automatic selfie analysis for security)
 - Google (AdMob, advertising)
 - Google (Google Maps Platform / Maps SDK) to display maps and, where applicable, place search/details
 
@@ -300,7 +308,7 @@ Requests can be sent to keintisoporte@gmail.com. The app may also provide option
 
 We apply reasonable technical and organizational measures to protect data, including access controls, infrastructure security and data minimization practices.
 
-Within “Account Authentication”, access to review information (including the selfie) is restricted to authorized staff/administration solely to validate the process.
+When a selfie is flagged for additional review, access to that information (including the selfie) is restricted to authorized staff/administration solely to validate the process.
 
 ## 13. Changes to this policy
 
@@ -522,10 +530,10 @@ Keinti puede ofrecer al usuario, dentro de “Configuración > Control de Seguri
 
 Este proceso puede incluir:
 
-- Captura y envío de una selfie para revisión
+- Captura y envío de una selfie para validación automática y, cuando sea necesario, revisión adicional
 - Activación de un segundo factor mediante un código TOTP de 6 dígitos generado por una app autenticadora compatible (por ejemplo, Google Authenticator)
 
-La revisión del selfie puede tardar hasta 24 horas. Keinti puede rechazar selfies que no permitan una verificación razonable (por ejemplo, mala iluminación, rostro no visible o imagen no válida) y solicitar un reintento.
+El sistema puede aceptar, rechazar o escalar la selfie a revisión adicional según la calidad de la imagen y las señales de seguridad detectadas. Keinti puede rechazar selfies que no permitan una validación razonable (por ejemplo, mala iluminación, rostro no visible, varias personas o imagen no válida) y solicitar un reintento.
 
 El usuario se compromete a enviar únicamente una selfie propia, actual y sin manipulación. Cualquier intento de fraude, suplantación o elusión de medidas de seguridad puede conllevar restricciones, suspensión o eliminación de la cuenta.
 
@@ -635,10 +643,10 @@ Keinti may offer, within “Settings > Security Control > Account Authentication
 
 This process may include:
 
-- Capturing and submitting a selfie for review
+- Capturing and submitting a selfie for automatic validation and, when necessary, additional review
 - Enabling a second factor using a 6-digit TOTP code generated by a compatible authenticator app (e.g., Google Authenticator)
 
-Selfie review may take up to 24 hours. Keinti may reject selfies that do not allow reasonable verification (e.g., poor lighting, face not visible or invalid image) and request a retry.
+The system may accept, reject, or escalate the selfie to additional review depending on image quality and the detected security signals. Keinti may reject selfies that do not allow a reasonable validation (e.g., poor lighting, face not visible, multiple people, or invalid image) and request a retry.
 
 The user agrees to submit only their own, current, unedited selfie. Any attempt to commit fraud, impersonate others or bypass security measures may result in restrictions, suspension or account deletion.
 

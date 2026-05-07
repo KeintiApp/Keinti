@@ -63,6 +63,7 @@ import { POST_TTL_MS } from '../config/postTtl';
 import { useI18n } from '../i18n/I18nProvider';
 import { getLocalizedNationalityName } from '../i18n/nationalities';
 import type { Language, TranslationKey } from '../i18n/translations';
+import { PROFILE_REACTION_EMOJIS } from '../data/profileReactionEmojis';
 import { ensureAdsConsentForAccount, getStoredAdsRuntimeConfig } from '../services/adsConsent';
 import Reanimated, {
   Easing as ReanimatedEasing,
@@ -84,6 +85,7 @@ const HOME_INTERSTITIAL_MIN_VIEWS = 16;
 const HOME_INTERSTITIAL_MAX_VIEWS = 18;
 const HOME_DISCOVER_RECENT_POOL_SIZE = 5;
 const HOME_DISCOVER_RECENT_WEIGHT = 0.7;
+const HOME_DEV_POSTS_LIMIT = 20;
 
 // In-memory fallback so the tutorial can still appear once even if
 // the backend ui-hints endpoint is temporarily unavailable.
@@ -1466,9 +1468,16 @@ const ReactionEmojiButton = React.memo(({
     activeOpacity={0.7}
   >
     <Text style={styles.reactionEmoji}>{emoji}</Text>
+    {selected ? (
+      <View pointerEvents="none" style={styles.reactionItemCheck}>
+        <MaterialIcons name="check" size={12} color="#2D1B0E" />
+      </View>
+    ) : null}
   </TouchableOpacity>
 ), (prevProps, nextProps) => (
-  prevProps.emoji === nextProps.emoji && prevProps.selected === nextProps.selected
+  prevProps.emoji === nextProps.emoji
+  && prevProps.selected === nextProps.selected
+  && prevProps.onPress === nextProps.onPress
 ));
 
 const FireworkChatIcon = ({ size, onPress, style }: { size: number, onPress: () => void, style?: any }) => {
@@ -1574,6 +1583,9 @@ const CHAT_INPUT_KEYBOARD_GAP = Platform.OS === 'ios' ? 18 : 10;
 // Cap the multiline chat input so it doesn't grow indefinitely.
 // After reaching this height, the TextInput becomes internally scrollable.
 const CHAT_INPUT_MAX_HEIGHT = 140;
+const PRESENTATION_BODY_VISIBLE_LINES = 6;
+const PRESENTATION_BODY_LINE_HEIGHT = 22;
+const PRESENTATION_BODY_INPUT_HEIGHT = (PRESENTATION_BODY_VISIBLE_LINES * PRESENTATION_BODY_LINE_HEIGHT) + 20;
 const CHANNEL_CHAT_PAGE_SIZE = 40;
 const CHANNEL_CHAT_LOAD_OLDER_TOP_THRESHOLD = 100;
 const CHANNEL_CHAT_MAX_LOADED_CONVERSATIONS = 180;
@@ -1880,47 +1892,7 @@ const CATEGORY_LABELS: Partial<Record<Language, Record<string, string>>> = {
   it: CATEGORY_LABELS_IT,
 };
 
-const REACTION_EMOJIS = Array.from(new Set([
-  '👍', '❤️', '😂', '😮', '😢', '😡', '👏', '🔥', '🎉', '💯',
-  '😍', '🤔', '😱', '🥳', '😎', '🙌', '👀', '🤝', '🙏', '💪',
-  '✨', '🌟', '💫', '💥', '💢', '💤', '👋', '👌', '✌️', '🤞',
-  '🤟', '🤘', '🤙', '👈', '👉', '👆', '👇', '☝️', '✋', '🤚',
-  '🖐️', '🖖', '🤏', '✍️', '🤳', '💅', '🙇', '🙋', '💁', '🙆',
-  '💩', '🤡', '👻', '👽', '🤖', '👾', '😺', '😸', '😹', '😻',
-  '😼', '😽', '🙀', '😿', '😾', '🙈', '🙉', '🙊', '💋', '💌',
-  '💘', '💝', '💖', '💗', '💓', '💞', '💕', '💟', '❣️', '💔',
-  '🧡', '💛', '💚', '💙', '💜', '🤎', '🖤', '🤍', '💣', '🦠',
-  '💐', '🌸', '💮', '🏵️', '🌹', '🥀', '🌺', '🌻', '🌼', '🌷',
-  '🚀', '🌈', '🍕', '🍺', '⚽',
-
-  // Extra emojis requested
-  '🐶', '👑', '😅', '😉', '🫠', '🤤', '🫡', '😤', '🤯', '🥵', '🥶', '🤑', '😇', '🤥',
-  '🦵🏼', '🦿', '🦶🏼', '👂🏼', '👃🏼', '🫶🏼', '✊🏼', '🙅🏼‍♂️', '🎅🏼', '🥷🏼', '👼🏼',
-  '🍓', '🍑', '🍊', '🥝', '🥬', '🥞', '🍰', '🍻', '🍷',
-  '🧭', '🛸', '🗿', '🗽',
-  '⚾', '🏀', '🏐', '🏈', '🎾', '🏸', '🥋', '🏁', '🏴', '🥊',
-  '💎', '💻', '⌨️', '📱', '🪫', '🔋', '💡', '🕯️', '🧽',
-  '👠', '👞', '☂️', '🌂', '📎', '🖇️', '✒️',
-  '📈', '📉', '🔐', '🔓', '🛡️', '⚔️', '📜', '🔮', '🪬', '🛎️', '🗓️', '🔍',
-  '🧪', '🩺', '🔭', '🧬', '🔬', '📡', '🛰️',
-  '⛔', '🆘', '🆚', '☢️', '☣️', '⚠️', '🔱', '⚜️', '💲', '✅', '❎',
-  '🏳️‍🌈', '🏳️‍⚧️',
-
-  // Nationality / country flags (broad coverage)
-  '🇪🇸', '🇲🇽', '🇦🇷', '🇨🇴', '🇵🇪', '🇨🇱', '🇻🇪', '🇪🇨', '🇧🇴', '🇵🇾', '🇺🇾',
-  '🇨🇷', '🇵🇦', '🇬🇹', '🇸🇻', '🇭🇳', '🇳🇮', '🇩🇴', '🇵🇷', '🇨🇺',
-  '🇺🇸', '🇨🇦', '🇧🇷', '🇵🇹',
-  '🇫🇷', '🇩🇪', '🇮🇹', '🇬🇧', '🇮🇪', '🇳🇱', '🇧🇪', '🇨🇭', '🇦🇹',
-  '🇸🇪', '🇳🇴', '🇩🇰', '🇫🇮', '🇵🇱', '🇨🇿', '🇸🇰', '🇭🇺', '🇬🇷', '🇹🇷',
-  '🇷🇴', '🇧🇬', '🇺🇦', '🇷🇺', '🇷🇸', '🇭🇷', '🇸🇮', '🇧🇦', '🇲🇪', '🇲🇰', '🇦🇱',
-  '🇱🇹', '🇱🇻', '🇪🇪', '🇮🇸',
-  '🇮🇱',
-  '🇲🇦', '🇩🇿', '🇹🇳', '🇪🇬', '🇿🇦', '🇳🇬', '🇰🇪', '🇬🇭', '🇸🇳', '🇪🇹', '🇹🇿', '🇺🇬',
-  '🇸🇦', '🇦🇪', '🇶🇦', '🇰🇼', '🇴🇲', '🇯🇴', '🇱🇧', '🇮🇷', '🇮🇶',
-  '🇮🇳', '🇵🇰', '🇧🇩', '🇱🇰', '🇳🇵',
-  '🇨🇳', '🇯🇵', '🇰🇷', '🇹🇼', '🇭🇰', '🇸🇬', '🇲🇾', '🇹🇭', '🇻🇳', '🇮🇩', '🇵🇭',
-  '🇦🇺', '🇳🇿',
-]));
+const REACTION_EMOJIS = PROFILE_REACTION_EMOJIS;
 
 type ProfileRingPoint = {
   id: string;
@@ -2010,6 +1982,7 @@ interface FrontScreenProps {
   onNavigateToNotifications?: () => void;
   onNavigateToRecompensa?: () => void;
   onNavigateToConfiguration?: () => void;
+  onNavigateToAccountAuth?: () => void;
   onNavigateToKeys?: () => void;
   onNavigateToReading?: (options?: { channelPostId?: string | number | null }) => void;
   onReloadGiveAways?: () => void;
@@ -2849,9 +2822,9 @@ const HomeActivePublicationCard = React.memo(({
                   snapToInterval={HOME_CARD_WIDTH}
                   decelerationRate="fast"
                   scrollEventThrottle={16}
-                  removeClippedSubviews={false}
-                  initialNumToRender={publication.presentation.images.length}
-                  maxToRenderPerBatch={publication.presentation.images.length}
+                  removeClippedSubviews={Platform.OS === 'android'}
+                  initialNumToRender={1}
+                  maxToRenderPerBatch={2}
                   windowSize={3}
                   onScrollBeginDrag={() => handlers.onSetCarouselGestureActive(true)}
                   onScrollEndDrag={() => handlers.onSetCarouselGestureActive(false)}
@@ -2974,21 +2947,45 @@ const HomeActivePublicationCard = React.memo(({
                       <Text style={styles.profilePresentationOverlayTitle}>
                         {trimmedTitle}
                       </Text>
-                      <Text style={styles.profilePresentationOverlayText}>
-                        {textPreview}
-                        {hasTextOverflow ? (
+                      {isTextExpanded && hasTextOverflow ? (
+                        <>
+                          <ScrollView
+                            nestedScrollEnabled
+                            style={styles.profilePresentationOverlayTextScroll}
+                            contentContainerStyle={styles.profilePresentationOverlayTextScrollContent}
+                            showsVerticalScrollIndicator={false}
+                          >
+                            <Text style={styles.profilePresentationOverlayText}>
+                              {trimmedText}
+                            </Text>
+                          </ScrollView>
                           <Text
-                            style={styles.profilePresentationToggleLink}
+                            style={[styles.profilePresentationToggleLink, styles.profilePresentationToggleLinkStandalone]}
                             onPress={(e) => {
                               e.stopPropagation();
                               handlers.onToggleExpandedText(publication.id);
                             }}
                           >
-                            {' '}
-                            {isTextExpanded ? t('front.readLess' as TranslationKey) : t('front.readMore' as TranslationKey)}
+                            {t('front.readLess' as TranslationKey)}
                           </Text>
-                        ) : null}
-                      </Text>
+                        </>
+                      ) : (
+                        <Text style={styles.profilePresentationOverlayText}>
+                          {textPreview}
+                          {hasTextOverflow ? (
+                            <Text
+                              style={styles.profilePresentationToggleLink}
+                              onPress={(e) => {
+                                e.stopPropagation();
+                                handlers.onToggleExpandedText(publication.id);
+                              }}
+                            >
+                              {' '}
+                              {t('front.readMore' as TranslationKey)}
+                            </Text>
+                          ) : null}
+                        </Text>
+                      )}
                     </View>
                   ) : null}
 
@@ -3370,6 +3367,7 @@ const FrontScreen = ({
   onNavigateToNotifications: _onNavigateToNotifications,
   onNavigateToRecompensa: _onNavigateToRecompensa,
   onNavigateToConfiguration,
+  onNavigateToAccountAuth,
   onNavigateToKeys,
   onNavigateToReading,
   onLogout: _onLogout,
@@ -4512,9 +4510,7 @@ const FrontScreen = ({
         if (!Array.isArray(parsed)) {return;}
         setBlockedJoinedGroupIds(parsed.map(String));
       } catch (e) {
-        // Don't pass the Error object to console.warn(), it renders as an ERROR warning.
         // This can happen if the native module isn't available in the installed build.
-        console.log('Blocked groups storage unavailable');
       }
     })();
   }, []);
@@ -5147,7 +5143,12 @@ const FrontScreen = ({
     return progress.whiteKeysBalance;
   }, [authToken, userEmail]);
 
+  const shouldTickChannelEventCountdown = activeBottomTab === 'chat' || activeBottomTab === 'hype';
+
   useEffect(() => {
+    if (!shouldTickChannelEventCountdown) {return;}
+
+    setChannelEventCountdownNowMs(Date.now());
     const intervalId = setInterval(() => {
       setChannelEventCountdownNowMs(Date.now());
     }, 1000);
@@ -5155,7 +5156,7 @@ const FrontScreen = ({
     return () => {
       clearInterval(intervalId);
     };
-  }, []);
+  }, [shouldTickChannelEventCountdown]);
 
   useEffect(() => {
     if (!showChannelEventPanel) {return;}
@@ -8332,7 +8333,6 @@ const FrontScreen = ({
       });
       if (response.ok) {
         const data = await response.json();
-        console.log('My Channels Data:', data);
         setMyChannels(data);
       }
     } catch (error) {
@@ -8808,7 +8808,6 @@ const FrontScreen = ({
     const fetchSeq = ++channelInteractionsFetchSeqRef.current;
 
     try {
-      console.log('Fetching channel interactions...');
       const url = postId
         ? `${API_URL}/api/channels/interactions/${postId}`
         : `${API_URL}/api/channels/interactions`;
@@ -8832,7 +8831,6 @@ const FrontScreen = ({
 
       if (response.ok) {
         const data = await response.json();
-        console.log('Channel interactions fetched:', data);
         setChannelInteractions(data);
       } else {
         console.error('Failed to fetch interactions:', response.status);
@@ -8848,7 +8846,6 @@ const FrontScreen = ({
     if (enteringChannelPostIdsRef.current.has(postId)) {return;}
 
     enteringChannelPostIdsRef.current.add(postId);
-    console.log('Entering channel:', pub.id, pub.user.email);
     try {
       const response = await fetch(`${API_URL}/api/channels/enter`, {
         method: 'POST',
@@ -9032,6 +9029,7 @@ const FrontScreen = ({
   const profilePresentationActiveIndexRef = useRef(0);
   const profileDotsRef = useRef<PresentationDotsHandle | null>(null);
   const editDotsRef = useRef<PresentationDotsHandle | null>(null);
+  const profilePresentationScrollRef = useRef<ScrollView | null>(null);
   const [profileViewMountKey, setProfileViewMountKey] = useState(0);
   const [profileCarouselMountKey, setProfileCarouselMountKey] = useState(0);
   const [profilePresentation, setProfilePresentation] = useState<PresentationContent | null>(null);
@@ -9741,6 +9739,17 @@ const FrontScreen = ({
 
   const [showReactionPanel, setShowReactionPanel] = useState(false);
   const [reactionPanelAnimation] = useState(new Animated.Value(400)); // Start off-screen (positive value for bottom sheet)
+  const isProfileReactionPanelContext = activeBottomTab === 'profile' && profileView === 'profile';
+
+  useEffect(() => {
+    if (!showReactionPanel || isProfileReactionPanelContext) {return;}
+
+    Animated.timing(reactionPanelAnimation, {
+      toValue: 400,
+      duration: 180,
+      useNativeDriver: true,
+    }).start(() => setShowReactionPanel(false));
+  }, [isProfileReactionPanelContext, reactionPanelAnimation, showReactionPanel]);
 
   const [bottomToastMessage, setBottomToastMessage] = useState<string>('');
   const [isBottomToastVisible, setIsBottomToastVisible] = useState(false);
@@ -13207,6 +13216,8 @@ const FrontScreen = ({
         }
       });
     } else {
+      if (!isProfileReactionPanelContext) {return;}
+
       // Show
       setShowReactionPanel(true);
       Animated.timing(reactionPanelAnimation, {
@@ -13218,16 +13229,52 @@ const FrontScreen = ({
   };
 
   const handleReactionSelect = (emoji: string) => {
+    let nextSelectedReactions = selectedReactions;
+    let nextReactionCounts = reactionCounts;
+
     if (selectedReactions.includes(emoji)) {
-      setSelectedReactions(selectedReactions.filter(e => e !== emoji));
+      nextSelectedReactions = selectedReactions.filter(e => e !== emoji);
     } else {
-      if (selectedReactions.length < 3) {
-        setSelectedReactions([...selectedReactions, emoji]);
-        if (reactionCounts[emoji] === undefined) {
-          setReactionCounts(prev => ({ ...prev, [emoji]: 0 }));
-        }
+      if (selectedReactions.length >= 3) {return;}
+      nextSelectedReactions = [...selectedReactions, emoji];
+      if (reactionCounts[emoji] === undefined) {
+        nextReactionCounts = { ...reactionCounts, [emoji]: 0 };
       }
     }
+
+    const nextUserReaction = currentUserReaction && nextSelectedReactions.includes(currentUserReaction)
+      ? currentUserReaction
+      : null;
+
+    setSelectedReactions(nextSelectedReactions);
+    if (nextReactionCounts !== reactionCounts) {
+      setReactionCounts(nextReactionCounts);
+    }
+    if (nextUserReaction !== currentUserReaction) {
+      setCurrentUserReaction(nextUserReaction);
+    }
+
+    void saveEditProfile(profilePresentation, intimidades, {
+      selected: nextSelectedReactions,
+      counts: nextReactionCounts,
+      userReaction: nextUserReaction,
+    });
+  };
+
+  const handleResetReactions = () => {
+    if (selectedReactions.length === 0 && currentUserReaction === null && Object.keys(reactionCounts).length === 0) {
+      return;
+    }
+
+    setSelectedReactions([]);
+    setReactionCounts({});
+    setCurrentUserReaction(null);
+
+    void saveEditProfile(profilePresentation, intimidades, {
+      selected: [],
+      counts: {},
+      userReaction: null,
+    });
   };
 
   const lastTap = useRef<number>(0);
@@ -13315,6 +13362,16 @@ const FrontScreen = ({
   const hasOnlyRemoteCarouselImages = !authToken || carouselImages.every(img => String(img.uri || '').startsWith('http'));
   const canApplyPresentation = hasPresentationImage && titleReady && textReady && !hasUploadingCarouselImages && hasOnlyRemoteCarouselImages;
 
+  const scrollPresentationEditorIntoView = useCallback(() => {
+    requestAnimationFrame(() => {
+      profilePresentationScrollRef.current?.scrollToEnd({ animated: true });
+    });
+
+    setTimeout(() => {
+      profilePresentationScrollRef.current?.scrollToEnd({ animated: true });
+    }, Platform.OS === 'ios' ? 80 : 120);
+  }, []);
+
   const [showSocialPanel, setShowSocialPanel] = useState(false);
   const [socialPanelAnimation] = useState(new Animated.Value(-SOCIAL_PANEL_HEIGHT));
   const [selectedSocialNetwork, setSelectedSocialNetwork] = useState<string | null>(null);
@@ -13367,7 +13424,11 @@ const FrontScreen = ({
         headers.Authorization = `Bearer ${authToken}`;
       }
 
-      const response = await fetch(`${API_URL}/api/posts`, {
+      const homePostsUrl = typeof __DEV__ !== 'undefined' && __DEV__
+        ? `${API_URL}/api/posts?limit=${HOME_DEV_POSTS_LIMIT}`
+        : `${API_URL}/api/posts`;
+
+      const response = await fetch(homePostsUrl, {
         headers,
         signal: abortController?.signal,
       });
@@ -13764,12 +13825,11 @@ const FrontScreen = ({
 
       if (authToken) {
         try {
-          await updateSocialNetworks({
-            token: authToken,
-            socialNetworks: networksForBackend,
-          });
-          console.log('✅ Redes sociales actualizadas en servidor');
-        } catch (error) {
+        await updateSocialNetworks({
+          token: authToken,
+          socialNetworks: networksForBackend,
+        });
+      } catch (error) {
           console.error('❌ Error al actualizar redes sociales:', error);
           Alert.alert('Error', 'No se pudieron guardar los cambios en el servidor.');
         }
@@ -13794,7 +13854,6 @@ const FrontScreen = ({
           token: authToken,
           socialNetworks: networksForBackend,
         });
-        console.log('✅ Redes sociales actualizadas en servidor (desvinculación)');
       } catch (error) {
         console.error('❌ Error al actualizar redes sociales:', error);
       }
@@ -14026,7 +14085,6 @@ const FrontScreen = ({
       });
 
       if (image && image.path) {
-        console.log('Imagen seleccionada:', image.path);
         // Usar la ruta tal como viene del picker
         const imagePath = image.path;
         setSelectedImageUri(imagePath);
@@ -14061,7 +14119,6 @@ const FrontScreen = ({
           });
 
           if (response && response.profile_photo_uri) {
-            console.log('✅ Foto actualizada en servidor:', response.profile_photo_uri);
             // Actualizar con la URL real del servidor para persistencia futura
             // Nota: getServerResourceUrl se encargará de añadir el dominio si es necesario
             setProfilePhotoUri(response.profile_photo_uri);
@@ -14071,8 +14128,6 @@ const FrontScreen = ({
           console.error('❌ Error al subir foto:', uploadError);
           Alert.alert('Advertencia', 'La foto se guardó localmente pero hubo un error al subirla al servidor.');
         }
-      } else {
-        console.log('⚠️ No hay token de autenticación, solo se guarda localmente');
       }
 
     } catch (error) {
@@ -15583,44 +15638,74 @@ const FrontScreen = ({
       </Animated.View>
 
       {/* Reaction Panel Overlay */}
-      {showReactionPanel && (
+      {showReactionPanel && isProfileReactionPanelContext && (
         <TouchableWithoutFeedback onPress={toggleReactionPanel}>
           <View style={styles.socialPanelOverlay} />
         </TouchableWithoutFeedback>
       )}
 
       {/* Reaction Panel */}
-      <Animated.View
-        style={[
-          styles.reactionPanel,
-          {
-            bottom: 0,
-            paddingBottom: Math.max(bottomSystemOffset, 24),
-            transform: [{ translateY: reactionPanelAnimation }],
-          },
-        ]}
-      >
-        <View style={styles.reactionPanelHeader}>
-          <Text style={styles.reactionPanelTitle}>{t('front.reactions' as TranslationKey)} ({selectedReactions.length}/3)</Text>
-          <TouchableOpacity onPress={toggleReactionPanel}>
-            <MaterialIcons name="check" size={24} color="#FFB74D" />
-          </TouchableOpacity>
-        </View>
-        <ScrollView
-          style={styles.reactionScrollView}
-          contentContainerStyle={styles.reactionGrid}
-          showsVerticalScrollIndicator={false}
+      {showReactionPanel && isProfileReactionPanelContext && (
+        <Animated.View
+          style={[
+            styles.reactionPanel,
+            {
+              bottom: 0,
+              paddingBottom: Math.max(bottomSystemOffset, 24),
+              transform: [{ translateY: reactionPanelAnimation }],
+            },
+          ]}
         >
-          {REACTION_EMOJIS.map((emoji, index) => (
-            <ReactionEmojiButton
-              key={index}
-              emoji={emoji}
-              selected={selectedReactions.includes(emoji)}
-              onPress={handleReactionSelect}
-            />
-          ))}
-        </ScrollView>
-      </Animated.View>
+          <View style={styles.reactionPanelHandle} />
+          <View style={styles.reactionPanelHeader}>
+            <View style={styles.reactionPanelTitleGroup}>
+              <TouchableOpacity
+                onPress={handleResetReactions}
+                style={styles.reactionPanelResetButton}
+                activeOpacity={0.8}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <MaterialIcons name="restart-alt" size={20} color="#FFFFFF" />
+              </TouchableOpacity>
+              <Text style={styles.reactionPanelTitle}>{t('front.reactions' as TranslationKey)}</Text>
+              <View style={styles.reactionPanelCounterPill}>
+                <Text style={styles.reactionPanelCounterText}>{selectedReactions.length}/3</Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              onPress={toggleReactionPanel}
+              style={[
+                styles.reactionPanelDoneButton,
+                selectedReactions.length === 0 && styles.reactionPanelDoneButtonDisabled,
+              ]}
+              activeOpacity={0.85}
+              disabled={selectedReactions.length === 0}
+            >
+              <MeasuredSvgGradientBorder
+                gradientId="reaction_panel_done_button_gradient"
+                colors={['#FFB74D', '#ffe45c']}
+                borderRadius={19}
+                strokeWidth={2}
+              />
+              <MaterialIcons name="check" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            style={styles.reactionScrollView}
+            contentContainerStyle={styles.reactionGrid}
+            showsVerticalScrollIndicator={false}
+          >
+            {REACTION_EMOJIS.map((emoji, index) => (
+              <ReactionEmojiButton
+                key={index}
+                emoji={emoji}
+                selected={selectedReactions.includes(emoji)}
+                onPress={handleReactionSelect}
+              />
+            ))}
+          </ScrollView>
+        </Animated.View>
+      )}
 
       {/* Confirm delete profile ring (styled modal) */}
       <Modal
@@ -17052,20 +17137,43 @@ const FrontScreen = ({
                                   <Text style={styles.profilePresentationOverlayTitle}>
                                     {trimmedProfileTitle}
                                   </Text>
-                                  <Text style={styles.profilePresentationOverlayText}>
-                                    {profileTextPreview}
-                                    {hasProfileTextOverflow && (
+                                  {isProfileTextExpanded && hasProfileTextOverflow ? (
+                                    <>
+                                      <ScrollView
+                                        nestedScrollEnabled
+                                        style={styles.profilePresentationOverlayTextScroll}
+                                        contentContainerStyle={styles.profilePresentationOverlayTextScrollContent}
+                                        showsVerticalScrollIndicator={false}
+                                      >
+                                        <Text style={styles.profilePresentationOverlayText}>
+                                          {trimmedProfileText}
+                                        </Text>
+                                      </ScrollView>
                                       <Text
-                                        style={styles.profilePresentationToggleLink}
+                                        style={[styles.profilePresentationToggleLink, styles.profilePresentationToggleLinkStandalone]}
                                         onPress={(e) => {
                                           e.stopPropagation();
-                                          setIsProfileTextExpanded(prev => !prev);
+                                          setIsProfileTextExpanded(false);
                                         }}>
-                                        {' '}
-                                        {isProfileTextExpanded ? t('front.readLess' as TranslationKey) : t('front.readMore' as TranslationKey)}
+                                        {t('front.readLess' as TranslationKey)}
                                       </Text>
-                                    )}
-                                  </Text>
+                                    </>
+                                  ) : (
+                                    <Text style={styles.profilePresentationOverlayText}>
+                                      {profileTextPreview}
+                                      {hasProfileTextOverflow && (
+                                        <Text
+                                          style={styles.profilePresentationToggleLink}
+                                          onPress={(e) => {
+                                            e.stopPropagation();
+                                            setIsProfileTextExpanded(true);
+                                          }}>
+                                          {' '}
+                                          {t('front.readMore' as TranslationKey)}
+                                        </Text>
+                                      )}
+                                    </Text>
+                                  )}
                                 </View>
                               )}
                               <View style={styles.carouselPagination}>
@@ -17113,12 +17221,17 @@ const FrontScreen = ({
                               <View style={styles.profileLikeGroup}>
                                 {!isPublished && (
                                   <TouchableOpacity
-                                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
-                                    activeOpacity={0.7}
+                                    style={styles.reactionAddButton}
+                                    activeOpacity={0.82}
                                     onPress={toggleReactionPanel}
+                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                                   >
-                                    {/* Placeholder for iconoreaccion */}
-                                    <GradientIcon name="add-reaction" size={24} colors={['#FFFFFF', '#FFB74D']} />
+                                    <BottomNavGradientIcon
+                                      name="sticker-plus-outline"
+                                      size={28}
+                                      library="community"
+                                      gradientId="reaction_add_button_gradient"
+                                    />
                                   </TouchableOpacity>
                                 )}
                                 {selectedReactions.map((emoji, index) => (
@@ -17469,10 +17582,18 @@ const FrontScreen = ({
                   )}
                 </ScrollView>
               ) : profileView === 'presentation' ? (
+                <KeyboardAvoidingView
+                  style={{ flex: 1 }}
+                  behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                  keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : (ANDROID_STATUS_BAR_HEIGHT || 0)}
+                >
                 <View style={{ flex: 1 }}>
                   <ScrollView
+                    ref={profilePresentationScrollRef}
                     scrollEnabled={!isPublished}
-                    contentContainerStyle={{ paddingTop: 0, paddingBottom: bottomNavHeight + 16 }}
+                    contentContainerStyle={{ paddingTop: 0, paddingBottom: bottomNavHeight + (isKeyboardVisible ? 28 : 16) }}
+                    keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
                   >
                     <View style={styles.categorySelectorContainer}>
                     <Text style={styles.categoryLabel}>{t('front.category' as TranslationKey)}</Text>
@@ -17541,6 +17662,7 @@ const FrontScreen = ({
                                         setPresentationTitle(text);
                                       }
                                     }}
+                                    onFocus={scrollPresentationEditorIntoView}
                                     maxLength={120}
                                   />
                                   <Text style={styles.overlayCount}>
@@ -17559,9 +17681,11 @@ const FrontScreen = ({
                                         setPresentationText(text);
                                       }
                                     }}
+                                    onFocus={scrollPresentationEditorIntoView}
                                     maxLength={480}
                                     multiline
-                                    numberOfLines={4}
+                                    numberOfLines={PRESENTATION_BODY_VISIBLE_LINES}
+                                    scrollEnabled
                                     textAlignVertical="top"
                                   />
                                   <Text style={styles.overlayCount}>
@@ -17635,6 +17759,7 @@ const FrontScreen = ({
                     </View>
                   )}
                 </View>
+                </KeyboardAvoidingView>
               ) : (
                 <KeyboardAvoidingView
                   style={{ flex: 1 }}
@@ -21193,6 +21318,39 @@ const FrontScreen = ({
                             ? t('chat.lockedYourGroupsMessage' as TranslationKey)
                             : t('chat.lockedJoinedGroupsMessage' as TranslationKey)}
                         </Text>
+                        {onNavigateToAccountAuth ? (
+                          <TouchableOpacity
+                            activeOpacity={0.85}
+                            onPress={onNavigateToAccountAuth}
+                            style={styles.groupsLockedActionButton}
+                          >
+                            <Svg
+                              pointerEvents="none"
+                              style={styles.groupsLockedActionButtonBorder}
+                              viewBox="0 0 100 48"
+                              preserveAspectRatio="none"
+                            >
+                              <Defs>
+                                <LinearGradient id="frontscreen_groups_locked_action_button_gradient" x1="0" y1="0" x2="1" y2="0">
+                                  <Stop offset="0" stopColor="#FFB74D" stopOpacity="1" />
+                                  <Stop offset="1" stopColor="#ffe45c" stopOpacity="1" />
+                                </LinearGradient>
+                              </Defs>
+                              <Rect
+                                x="1"
+                                y="1"
+                                width="98"
+                                height="46"
+                                rx="14"
+                                fill="none"
+                                stroke="url(#frontscreen_groups_locked_action_button_gradient)"
+                                strokeWidth="2"
+                              />
+                            </Svg>
+                            <MaterialIcons name="verified-user" size={18} color="#FFFFFF" />
+                            <Text style={styles.groupsLockedActionButtonText}>{t('securityControl.accountAuth' as TranslationKey)}</Text>
+                          </TouchableOpacity>
+                        ) : null}
                       </View>
                     ) : (
                       <>
@@ -23637,8 +23795,10 @@ const FrontScreen = ({
                       closeSidePanel();
                       _onNavigateToNotifications?.();
                     }}>
-                    <View style={[styles.sidePanelOptionIconWrap, { position: 'relative' }]}>
-                      <MaterialIcons name="notifications" size={20} color="#FFB74D" />
+                    <View style={styles.sidePanelOptionIconBadgeWrap}>
+                      <View style={styles.sidePanelOptionIconWrap}>
+                        <MaterialIcons name="notifications" size={20} color="#FFB74D" />
+                      </View>
                       {unreadNotificationsCount > 0 && (
                         <View pointerEvents="none" style={styles.sidePanelBadge}>
                           <Svg width={20} height={20} style={styles.sidePanelBadgeBorder} viewBox="0 0 20 20">
@@ -24961,79 +25121,79 @@ const FrontScreen = ({
           onPress={closeExpandedChannelReadingCitation}
           style={styles.expandedChannelReadingCitationOverlay}
         >
-          <TouchableOpacity
-            accessibilityRole="button"
-            activeOpacity={1}
-            onPress={() => undefined}
-            style={styles.expandedChannelReadingCitationSheet}
-          >
-            <View style={styles.expandedChannelReadingCitationHandle} />
-            <Text style={styles.expandedChannelReadingCitationSheetTitle}>Usuarios citados</Text>
-            <Text style={styles.expandedChannelReadingCitationSheetExcerpt}>{expandedChannelReadingCitation?.text || ''}</Text>
+          <TouchableWithoutFeedback>
+            <View style={styles.expandedChannelReadingCitationSheet}>
+              <View style={styles.expandedChannelReadingCitationHandle} />
+              <Text style={styles.expandedChannelReadingCitationSheetTitle}>Usuarios citados</Text>
+              <Text style={styles.expandedChannelReadingCitationSheetExcerpt}>{expandedChannelReadingCitation?.text || ''}</Text>
 
-            <ScrollView
-              style={styles.expandedChannelReadingCitationUsersList}
-              contentContainerStyle={styles.expandedChannelReadingCitationUsersListContent}
-              showsVerticalScrollIndicator={(expandedChannelReadingCitation?.users.length || 0) > 5}
-            >
-              {(expandedChannelReadingCitation?.users || []).map((user) => {
-                const displayUsername = user.username.startsWith('@') ? user.username : `@${user.username}`;
-                const normalizedUsername = String(displayUsername || '').trim().toLowerCase();
-                const avatarUri = user.profile_photo_uri ? getServerResourceUrl(String(user.profile_photo_uri)) : '';
-                const renderableSocials = getRenderableReadingCitationUserSocials(user.social_networks);
-                const socialViewportCount = Math.min(renderableSocials.length, READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT);
-                const socialViewportWidth = socialViewportCount > 0
-                  ? (socialViewportCount * READING_CITATION_USER_SOCIAL_ICON_SIZE) + ((socialViewportCount - 1) * READING_CITATION_USER_SOCIAL_ICON_GAP)
-                  : 0;
+              <ScrollView
+                style={styles.expandedChannelReadingCitationUsersList}
+                contentContainerStyle={styles.expandedChannelReadingCitationUsersListContent}
+                showsVerticalScrollIndicator={(expandedChannelReadingCitation?.users.length || 0) > 5}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+              >
+                {(expandedChannelReadingCitation?.users || []).map((user) => {
+                  const displayUsername = user.username.startsWith('@') ? user.username : `@${user.username}`;
+                  const normalizedUsername = String(displayUsername || '').trim().toLowerCase();
+                  const avatarUri = user.profile_photo_uri ? getServerResourceUrl(String(user.profile_photo_uri)) : '';
+                  const renderableSocials = getRenderableReadingCitationUserSocials(user.social_networks);
+                  const socialViewportCount = Math.min(renderableSocials.length, READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT);
+                  const socialViewportWidth = socialViewportCount > 0
+                    ? (socialViewportCount * READING_CITATION_USER_SOCIAL_ICON_SIZE) + ((socialViewportCount - 1) * READING_CITATION_USER_SOCIAL_ICON_GAP)
+                    : 0;
 
-                return (
-                  <View key={normalizedUsername} style={styles.expandedChannelReadingCitationUserRow}>
-                    {avatarUri ? (
-                      <Image source={{ uri: avatarUri }} style={styles.expandedChannelReadingCitationUserAvatar} resizeMode="cover" />
-                    ) : (
-                      <View style={styles.expandedChannelReadingCitationUserAvatarFallback}>
-                        <MaterialIcons name="person" size={18} color="#FFFFFF" />
-                      </View>
-                    )}
-                    <View style={styles.expandedChannelReadingCitationUserBody}>
-                      <Text style={styles.expandedChannelReadingCitationUserText}>{displayUsername}</Text>
-
-                      {renderableSocials.length > 0 ? (
-                        <View style={[styles.expandedChannelReadingCitationSocialViewport, { width: socialViewportWidth }]}>
-                          <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            scrollEnabled={renderableSocials.length > READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT}
-                            contentContainerStyle={styles.expandedChannelReadingCitationSocialRow}
-                          >
-                            {renderableSocials.map((social, socialIndex) => {
-                              const isLastSocial = socialIndex === renderableSocials.length - 1;
-
-                              return (
-                                <TouchableOpacity
-                                  key={`${normalizedUsername}-${social.key}`}
-                                  accessibilityRole="button"
-                                  activeOpacity={0.85}
-                                  onPress={() => openExternalLink(social.link)}
-                                  style={isLastSocial ? null : styles.expandedChannelReadingCitationSocialIconSpacing}
-                                >
-                                  <Image
-                                    source={social.iconSource}
-                                    style={styles.expandedChannelReadingCitationSocialIcon}
-                                    resizeMode="contain"
-                                  />
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </ScrollView>
+                  return (
+                    <View key={normalizedUsername} style={styles.expandedChannelReadingCitationUserRow}>
+                      {avatarUri ? (
+                        <Image source={{ uri: avatarUri }} style={styles.expandedChannelReadingCitationUserAvatar} resizeMode="cover" />
+                      ) : (
+                        <View style={styles.expandedChannelReadingCitationUserAvatarFallback}>
+                          <MaterialIcons name="person" size={18} color="#FFFFFF" />
                         </View>
-                      ) : null}
+                      )}
+                      <View style={styles.expandedChannelReadingCitationUserBody}>
+                        <Text style={styles.expandedChannelReadingCitationUserText}>{displayUsername}</Text>
+
+                        {renderableSocials.length > 0 ? (
+                          <View style={[styles.expandedChannelReadingCitationSocialViewport, { width: socialViewportWidth }]}>
+                            <ScrollView
+                              horizontal
+                              showsHorizontalScrollIndicator={false}
+                              scrollEnabled={renderableSocials.length > READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT}
+                              contentContainerStyle={styles.expandedChannelReadingCitationSocialRow}
+                              nestedScrollEnabled
+                            >
+                              {renderableSocials.map((social, socialIndex) => {
+                                const isLastSocial = socialIndex === renderableSocials.length - 1;
+
+                                return (
+                                  <TouchableOpacity
+                                    key={`${normalizedUsername}-${social.key}`}
+                                    accessibilityRole="button"
+                                    activeOpacity={0.85}
+                                    onPress={() => openExternalLink(social.link)}
+                                    style={isLastSocial ? null : styles.expandedChannelReadingCitationSocialIconSpacing}
+                                  >
+                                    <Image
+                                      source={social.iconSource}
+                                      style={styles.expandedChannelReadingCitationSocialIcon}
+                                      resizeMode="contain"
+                                    />
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </ScrollView>
+                          </View>
+                        ) : null}
+                      </View>
                     </View>
-                  </View>
-                );
-              })}
-            </ScrollView>
-          </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </TouchableWithoutFeedback>
         </TouchableOpacity>
       </Modal>
 
@@ -25198,6 +25358,27 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: 'bold',
     marginBottom: 4,
+  },
+  groupsLockedActionButton: {
+    position: 'relative',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 18,
+    minHeight: 48,
+    paddingHorizontal: 20,
+    borderRadius: 14,
+    backgroundColor: 'transparent',
+    overflow: 'hidden',
+  },
+  groupsLockedActionButtonBorder: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  groupsLockedActionButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
   },
   blueDot: {
     width: 6,
@@ -26060,6 +26241,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  sidePanelOptionIconBadgeWrap: {
+    position: 'relative',
+  },
   sidePanelOptionText: {
     flex: 1,
     color: '#FFFFFF',
@@ -26424,7 +26608,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   overlayInputMultiline: {
-    minHeight: 90,
+    minHeight: PRESENTATION_BODY_INPUT_HEIGHT,
+    maxHeight: PRESENTATION_BODY_INPUT_HEIGHT,
+    lineHeight: PRESENTATION_BODY_LINE_HEIGHT,
   },
   overlayCount: {
     color: 'rgba(255, 255, 255, 0.6)',
@@ -26494,11 +26680,21 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
   },
+  profilePresentationToggleLinkStandalone: {
+    alignSelf: 'flex-end',
+    marginTop: 8,
+  },
   profilePresentationOverlayText: {
     color: 'rgba(255, 255, 255, 0.9)',
     fontSize: 15,
     lineHeight: 22,
     textAlign: 'justify',
+  },
+  profilePresentationOverlayTextScroll: {
+    maxHeight: PRESENTATION_BODY_VISIBLE_LINES * PRESENTATION_BODY_LINE_HEIGHT,
+  },
+  profilePresentationOverlayTextScrollContent: {
+    paddingRight: 4,
   },
   profileMetaContainer: {
     width: '100%',
@@ -26520,6 +26716,14 @@ const styles = StyleSheet.create({
     gap: 6,
     position: 'absolute',
     right: 0,
+  },
+  reactionAddButton: {
+    width: 34,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 2,
+    paddingHorizontal: 2,
   },
   homeDiscoverContainer: {
     width: '100%',
@@ -27179,28 +27383,90 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    maxHeight: 250,
-    backgroundColor: '#000000',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    maxHeight: Math.round(SCREEN_HEIGHT * 0.58),
+    backgroundColor: '#050505',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     borderTopWidth: 1,
-    borderTopColor: '#FFB74D',
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderTopColor: 'rgba(255, 183, 77, 0.55)',
+    borderLeftColor: 'rgba(255, 183, 77, 0.18)',
+    borderRightColor: 'rgba(255, 183, 77, 0.18)',
     zIndex: 11000,
     elevation: 11000,
-    paddingTop: 20,
-    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingHorizontal: 16,
     paddingBottom: 0,
+    shadowColor: '#FFB74D',
+    shadowOpacity: 0.22,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: -4 },
+  },
+  reactionPanelHandle: {
+    width: 44,
+    height: 4,
+    borderRadius: 2,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(255, 183, 77, 0.42)',
+    marginBottom: 14,
   },
   reactionPanelHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 14,
+  },
+  reactionPanelTitleGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 1,
+    gap: 10,
+  },
+  reactionPanelResetButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   reactionPanelTitle: {
     color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 17,
+    fontWeight: '800',
+    flexShrink: 1,
+  },
+  reactionPanelCounterPill: {
+    minWidth: 44,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    backgroundColor: 'rgba(255, 183, 77, 0.13)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.35)',
+  },
+  reactionPanelCounterText: {
+    color: '#FFB74D',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  reactionPanelDoneButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  reactionPanelDoneButtonDisabled: {
+    opacity: 0.4,
   },
   reactionScrollView: {
     flex: 1,
@@ -27209,29 +27475,49 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    rowGap: 10,
+    rowGap: 12,
     flexGrow: 0,
-    paddingBottom: 0,
+    paddingTop: 2,
+    paddingBottom: 8,
   },
   reactionItem: {
     width: REACTION_ITEM_SIZE,
     height: REACTION_ITEM_SIZE,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: REACTION_ITEM_SIZE / 2,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'transparent',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    position: 'relative',
   },
   reactionItemSelected: {
-    borderColor: '#FFB74D',
-    backgroundColor: 'rgba(255, 183, 77, 0.1)',
+    borderColor: 'rgba(255, 183, 77, 0.95)',
+    backgroundColor: 'rgba(255, 183, 77, 0.16)',
+    shadowColor: '#FFB74D',
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
   },
   reactionEmoji: {
-    fontSize: 24,
+    fontSize: 25,
     color: '#FFFFFF',
     textAlign: 'center',
     textAlignVertical: 'center',
     includeFontPadding: false,
+  },
+  reactionItemCheck: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFB74D',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
   },
 
   profileRingColorPanel: {
