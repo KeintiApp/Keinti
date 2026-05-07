@@ -1,6 +1,6 @@
 # POLÍTICA DE PRIVACIDAD – KEINTI
 
-Última actualización: 05/02/2026
+Última actualización: martes 05, mayo de 2026
 
 ## 1. Responsable del tratamiento
 
@@ -163,7 +163,7 @@ Keinti mantiene una política de tolerancia cero frente a cualquier contenido re
 
 # PRIVACY POLICY – KEINTI
 
-Last updated: 02/05/2026
+Last updated: Tuesday, May 05, 2026
 
 ## 1. Data controller
 
@@ -317,3 +317,7 @@ We may update this Privacy Policy to reflect legal, technical or product changes
 ## 14. Applicable law
 
 This policy is governed by the GDPR where applicable and by the privacy laws applicable in the user’s jurisdiction (including U.S. state laws where applicable).
+
+## 15. Child safety and reporting
+
+Keinti maintains a zero-tolerance policy toward any content related to child sexual exploitation or abuse (CSEA/CSAE). Users can report content or accounts from within the app and/or contact support at keintisoporte@gmail.com.
