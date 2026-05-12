@@ -241,7 +241,7 @@ const NotificationScreen = ({ onBack, authToken, onNotificationsChanged, onGroup
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <View style={[styles.header, { height: 56 + insets.top, paddingTop: insets.top }]}> 
+      <View style={[styles.header, { height: 56 + insets.top, paddingTop: insets.top }]}>
         <TouchableOpacity style={styles.backButton} onPress={onBack} activeOpacity={0.7}>
           <MaterialIcons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>

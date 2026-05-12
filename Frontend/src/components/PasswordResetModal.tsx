@@ -22,7 +22,9 @@ import {
 type PasswordResetModalProps = {
   visible: boolean;
   onClose: () => void;
+  onPasswordChanged?: () => void;
   initialEmail?: string;
+  lockInitialEmail?: boolean;
   disabled?: boolean;
 };
 
@@ -45,14 +47,17 @@ const isValidEmailFormat = (value: string) => {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 };
 
+const normalizeEmail = (value: string) => String(value || '').trim().toLowerCase();
+
 const isStrongPassword = (pass: string) => {
   const value = String(pass || '');
   if (value.length < 10) {return false;}
   if (value.length > 20) {return false;}
-  const letterRegex = /[a-zA-Z]/;
+  const lowercaseRegex = /[a-z]/;
+  const uppercaseRegex = /[A-Z]/;
   const numberRegex = /\d/;
-  const specialCharRegex = /[!@#$%^&*(),.?":{}|<>]/;
-  return letterRegex.test(value) && numberRegex.test(value) && specialCharRegex.test(value);
+  const specialCharRegex = /[!@#$%^&*()_+\-=[\]{};':"\\|<>?,./`~]/;
+  return lowercaseRegex.test(value) && uppercaseRegex.test(value) && numberRegex.test(value) && specialCharRegex.test(value);
 };
 
 const isValidPasswordResetStep = (value: unknown): value is PasswordResetStep => {
@@ -63,11 +68,12 @@ const clearPasswordResetDraft = async () => {
   await AsyncStorage.removeItem(PASSWORD_RESET_DRAFT_STORAGE_KEY).catch(() => {});
 };
 
-const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: PasswordResetModalProps) => {
+const PasswordResetModal = ({ visible, onClose, onPasswordChanged, initialEmail, lockInitialEmail = false, disabled }: PasswordResetModalProps) => {
   const { t } = useI18n();
+  const trimmedInitialEmail = String(initialEmail || '').trim();
 
   const [step, setStep] = useState<PasswordResetStep>('email');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(trimmedInitialEmail);
   const [emailRegistered, setEmailRegistered] = useState<boolean | null>(null);
   const [emailChecking, setEmailChecking] = useState(false);
   const [emailError, setEmailError] = useState('');
@@ -81,16 +87,19 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
 
   const [newPassword1, setNewPassword1] = useState('');
   const [newPassword2, setNewPassword2] = useState('');
+  const [showNewPassword1, setShowNewPassword1] = useState(false);
+  const [showNewPassword2, setShowNewPassword2] = useState(false);
   const [changing, setChanging] = useState(false);
   const [changeError, setChangeError] = useState('');
 
   const emailDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [stateHydrated, setStateHydrated] = useState(false);
+  const resolvedEmail = lockInitialEmail && trimmedInitialEmail ? trimmedInitialEmail : String(email || '').trim();
 
   const resetInternalState = () => {
     setStep('email');
-    setEmail(String(initialEmail || '').trim());
+    setEmail(trimmedInitialEmail);
     setEmailRegistered(null);
     setEmailChecking(false);
     setEmailError('');
@@ -102,15 +111,25 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
     setResetToken('');
     setNewPassword1('');
     setNewPassword2('');
+    setShowNewPassword1(false);
+    setShowNewPassword2(false);
     setChanging(false);
     setChangeError('');
   };
 
   const restoreInternalState = (draft: PasswordResetDraft | null) => {
-    const trimmedInitialEmail = String(initialEmail || '').trim();
-    const nextEmail = String(draft?.email || trimmedInitialEmail).trim();
+    const draftEmail = String(draft?.email || '').trim();
+    const shouldResetToInitialEmail =
+      lockInitialEmail
+      && !!trimmedInitialEmail
+      && normalizeEmail(draftEmail) !== normalizeEmail(trimmedInitialEmail);
+    const nextEmail = lockInitialEmail && trimmedInitialEmail
+      ? trimmedInitialEmail
+      : String(draft?.email || trimmedInitialEmail).trim();
     const draftStep = draft?.step;
-    const nextStep = isValidPasswordResetStep(draftStep) ? draftStep : 'email';
+    const nextStep = shouldResetToInitialEmail
+      ? 'email'
+      : isValidPasswordResetStep(draftStep) ? draftStep : 'email';
 
     setStep(nextStep);
     setEmail(nextEmail);
@@ -119,12 +138,14 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
     setEmailError('');
     setSending(false);
     setInfo('');
-    setCode(String(draft?.code || '').trim().toUpperCase());
+    setCode(shouldResetToInitialEmail ? '' : String(draft?.code || '').trim().toUpperCase());
     setCodeError('');
     setVerifying(false);
-    setResetToken(String(draft?.resetToken || '').trim());
+    setResetToken(shouldResetToInitialEmail ? '' : String(draft?.resetToken || '').trim());
     setNewPassword1('');
     setNewPassword2('');
+    setShowNewPassword1(false);
+    setShowNewPassword2(false);
     setChanging(false);
     setChangeError('');
   };
@@ -204,7 +225,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
   useEffect(() => {
     if (!visible || !stateHydrated) {return;}
 
-    const trimmedEmail = String(email || '').trim();
+    const trimmedEmail = resolvedEmail;
     const shouldPersist = step !== 'email' || !!trimmedEmail;
 
     if (!shouldPersist) {
@@ -222,7 +243,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
     };
 
     AsyncStorage.setItem(PASSWORD_RESET_DRAFT_STORAGE_KEY, JSON.stringify(draft)).catch(() => {});
-  }, [visible, stateHydrated, step, email, code, resetToken]);
+  }, [visible, stateHydrated, step, resolvedEmail, code, resetToken]);
 
   useEffect(() => {
     if (!visible) {return;}
@@ -237,12 +258,19 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
     setEmailError('');
     setEmailRegistered(null);
 
-    const trimmed = String(email || '').trim();
+    const trimmed = resolvedEmail;
     if (!trimmed) {return;}
 
     if (!isValidEmailFormat(trimmed)) {
       setEmailRegistered(false);
       setEmailError(t('login.resetInvalidEmail'));
+      return;
+    }
+
+    if (lockInitialEmail) {
+      setEmailRegistered(true);
+      setEmailChecking(false);
+      setEmailError('');
       return;
     }
 
@@ -268,7 +296,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
         emailDebounceRef.current = null;
       }
     };
-  }, [visible, stateHydrated, step, email, t]);
+  }, [visible, stateHydrated, step, resolvedEmail, lockInitialEmail, t]);
 
   const safeClose = () => {
     handleClose();
@@ -278,11 +306,13 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
     if (!newPassword1) {return '';}
     if (String(newPassword1).length > 20) {return t('validation.passwordMaxLength');}
     if (String(newPassword1).length < 10) {return t('validation.passwordMinLength');}
-    const letterRegex = /[a-zA-Z]/;
-    if (!letterRegex.test(String(newPassword1))) {return t('validation.passwordNeedsLetter');}
+    const lowercaseRegex = /[a-z]/;
+    if (!lowercaseRegex.test(String(newPassword1))) {return t('validation.passwordNeedsLowercase');}
+    const uppercaseRegex = /[A-Z]/;
+    if (!uppercaseRegex.test(String(newPassword1))) {return t('validation.passwordNeedsUppercase');}
     const numberRegex = /\d/;
     if (!numberRegex.test(String(newPassword1))) {return t('validation.passwordNeedsNumber');}
-    const specialCharRegex = /[!@#$%^&*(),.?":{}|<>]/;
+    const specialCharRegex = /[!@#$%^&*()_+\-=[\]{};':"\\|<>?,./`~]/;
     if (!specialCharRegex.test(String(newPassword1))) {return t('validation.passwordNeedsSpecial');}
     return '';
   };
@@ -312,14 +342,14 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
                     <Text style={styles.label}>{t('login.email')}</Text>
                     <TextInput
                       style={styles.input}
-                      placeholder={t('login.emailPlaceholder')}
+                      placeholder={lockInitialEmail ? '' : t('login.emailPlaceholder')}
                       placeholderTextColor="#989898ff"
-                      value={email}
+                      value={resolvedEmail}
                       onChangeText={setEmail}
                       keyboardType="email-address"
                       autoCapitalize="none"
                       autoComplete="email"
-                      editable={!disabled && !sending}
+                      editable={!lockInitialEmail && !disabled && !sending}
                     />
                     {emailChecking ? <Text style={styles.hintText}>{t('common.check')}...</Text> : null}
                     {emailError ? <Text style={styles.errorText}>{emailError}</Text> : null}
@@ -339,12 +369,12 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
                       style={[
                         styles.button,
                         styles.buttonPrimary,
-                        (!isValidEmailFormat(email) || emailRegistered !== true || sending) && styles.buttonDisabled,
+                        (!isValidEmailFormat(resolvedEmail) || emailRegistered !== true || sending) && styles.buttonDisabled,
                       ]}
                       activeOpacity={0.85}
-                      disabled={!isValidEmailFormat(email) || emailRegistered !== true || sending}
+                      disabled={!isValidEmailFormat(resolvedEmail) || emailRegistered !== true || sending}
                       onPress={async () => {
-                        const trimmed = String(email || '').trim();
+                        const trimmed = resolvedEmail;
                         if (!isValidEmailFormat(trimmed) || emailRegistered !== true) {return;}
                         if (sending) {return;}
 
@@ -422,7 +452,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
                       activeOpacity={0.85}
                       disabled={String(code || '').trim().length !== 8 || verifying}
                       onPress={async () => {
-                        const trimmedEmail = String(email || '').trim();
+                        const trimmedEmail = resolvedEmail;
                         const cleanCode = String(code || '').trim().toUpperCase();
                         if (cleanCode.length !== 8) {return;}
                         if (verifying) {return;}
@@ -459,33 +489,63 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
                 <>
                   <View style={styles.inputContainer}>
                     <Text style={styles.label}>{t('login.resetNewPasswordLabel')}</Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder={t('login.passwordPlaceholder')}
-                      placeholderTextColor="#989898ff"
-                      value={newPassword1}
-                      onChangeText={setNewPassword1}
-                      maxLength={20}
-                      secureTextEntry
-                      autoCapitalize="none"
-                      editable={!disabled && !changing}
-                    />
+                    <View style={styles.passwordRow}>
+                      <TextInput
+                        style={styles.passwordInput}
+                        placeholder={t('login.passwordPlaceholder')}
+                        placeholderTextColor="#989898ff"
+                        value={newPassword1}
+                        onChangeText={setNewPassword1}
+                        maxLength={20}
+                        secureTextEntry={!showNewPassword1}
+                        autoCapitalize="none"
+                        editable={!disabled && !changing}
+                      />
+                      <TouchableOpacity
+                        style={styles.eyeButton}
+                        activeOpacity={0.7}
+                        disabled={!!disabled || changing}
+                        onPress={() => setShowNewPassword1((value) => !value)}
+                      >
+                        <MaterialIcons
+                          name={showNewPassword1 ? 'visibility' : 'visibility-off'}
+                          size={20}
+                          color="#FFFFFF"
+                          style={{ opacity: 0.6 }}
+                        />
+                      </TouchableOpacity>
+                    </View>
                     {getNewPasswordError() ? <Text style={styles.errorText}>{getNewPasswordError()}</Text> : null}
                   </View>
 
                   <View style={styles.inputContainer}>
                     <Text style={styles.label}>{t('login.resetRepeatNewPasswordLabel')}</Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder={t('register.confirmPasswordPlaceholder')}
-                      placeholderTextColor="#989898ff"
-                      value={newPassword2}
-                      onChangeText={setNewPassword2}
-                      maxLength={20}
-                      secureTextEntry
-                      autoCapitalize="none"
-                      editable={!disabled && !changing}
-                    />
+                    <View style={styles.passwordRow}>
+                      <TextInput
+                        style={styles.passwordInput}
+                        placeholder={t('register.confirmPasswordPlaceholder')}
+                        placeholderTextColor="#989898ff"
+                        value={newPassword2}
+                        onChangeText={setNewPassword2}
+                        maxLength={20}
+                        secureTextEntry={!showNewPassword2}
+                        autoCapitalize="none"
+                        editable={!disabled && !changing}
+                      />
+                      <TouchableOpacity
+                        style={styles.eyeButton}
+                        activeOpacity={0.7}
+                        disabled={!!disabled || changing}
+                        onPress={() => setShowNewPassword2((value) => !value)}
+                      >
+                        <MaterialIcons
+                          name={showNewPassword2 ? 'visibility' : 'visibility-off'}
+                          size={20}
+                          color="#FFFFFF"
+                          style={{ opacity: 0.6 }}
+                        />
+                      </TouchableOpacity>
+                    </View>
                     {getRepeatPasswordError() ? <Text style={styles.errorText}>{getRepeatPasswordError()}</Text> : null}
                   </View>
 
@@ -511,7 +571,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
                       activeOpacity={0.85}
                       disabled={!resetToken || !isStrongPassword(newPassword1) || newPassword1 !== newPassword2 || changing}
                       onPress={async () => {
-                        const trimmedEmail = String(email || '').trim();
+                        const trimmedEmail = resolvedEmail;
                         if (!resetToken) {return;}
                         if (!isStrongPassword(newPassword1)) {return;}
                         if (newPassword1 !== newPassword2) {return;}
@@ -535,6 +595,7 @@ const PasswordResetModal = ({ visible, onClose, initialEmail, disabled }: Passwo
 
                           closeTimeoutRef.current = setTimeout(() => {
                             onClose();
+                            onPasswordChanged?.();
                           }, 1200);
                         } catch (e: any) {
                           setChangeError(e?.message || 'No se pudo cambiar la contraseña');
@@ -604,6 +665,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#ffffffff',
     borderColor: '#FFB74D',
+  },
+  passwordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1e1e1eff',
+    borderRadius: 12,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingLeft: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: '#ffffffff',
+  },
+  eyeButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   hintText: {
     marginTop: 8,

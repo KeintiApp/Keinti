@@ -7,7 +7,7 @@
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start --reset-cache",
-    "postinstall": "node scripts/fix-debugger-locales.js && node scripts/fix-react-native-maps-rn076-shim.js && node scripts/fix-react-native-reanimated-android-linking.js",
+    "postinstall": "node scripts/fix-debugger-locales.js && node scripts/fix-react-native-maps-rn076-shim.js && node scripts/fix-react-native-reanimated-android-linking.js && node scripts/fix-react-native-audio-recorder-player-max-duration.js",
     "test": "jest"
   },
   "dependencies": {
@@ -26,6 +26,7 @@
     "i18n-iso-countries": "^7.14.0",
     "react": "18.3.1",
     "react-native": "0.77.3",
+    "react-native-audio-recorder-player": "^3.6.14",
     "react-native-calendars": "^1.1314.0",
     "react-native-edge-to-edge": "^1.8.1",
     "react-native-get-random-values": "^1.11.0",

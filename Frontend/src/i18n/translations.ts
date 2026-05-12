@@ -132,6 +132,7 @@ export type TranslationKey =
   | 'register.errorTitle'
   | 'chat.generalTab'
   | 'chat.yourThreadsTab'
+  | 'chat.recommendationsTab'
   | 'chat.eventsTab'
   | 'chat.readingsTab'
   | 'chat.imagesTab'
@@ -215,6 +216,8 @@ export type TranslationKey =
   | 'validation.mustBeAdult'
   | 'validation.passwordMinLength'
   | 'validation.passwordMaxLength'
+  | 'validation.passwordNeedsLowercase'
+  | 'validation.passwordNeedsUppercase'
   | 'validation.passwordNeedsLetter'
   | 'validation.passwordNeedsNumber'
   | 'validation.passwordNeedsSpecial'
@@ -713,6 +716,8 @@ const es: Record<TranslationKey, string> = {
   'validation.mustBeAdult': 'Debes ser mayor de 18 años',
   'validation.passwordMinLength': 'La contraseña debe tener al menos 10 caracteres',
   'validation.passwordMaxLength': 'La contraseña no puede superar 20 caracteres',
+  'validation.passwordNeedsLowercase': 'Debe contener al menos 1 letra minúscula',
+  'validation.passwordNeedsUppercase': 'Debe contener al menos 1 letra mayúscula',
   'validation.passwordNeedsLetter': 'Debe contener al menos 1 letra',
   'validation.passwordNeedsNumber': 'Debe contener al menos 1 número',
   'validation.passwordNeedsSpecial': 'Debe contener al menos 1 carácter especial',
@@ -800,6 +805,7 @@ const es: Record<TranslationKey, string> = {
   'chat.reply': 'Responder',
   'chat.generalTab': 'General',
   'chat.yourThreadsTab': 'Hilos',
+  'chat.recommendationsTab': 'Recomendaciones',
   'chat.eventsTab': 'Eventos',
   'chat.readingsTab': 'Lecturas',
   'chat.imagesTab': 'Imágenes',
@@ -1284,6 +1290,8 @@ const en: Record<TranslationKey, string> = {
   'validation.mustBeAdult': 'You must be at least 18 years old',
   'validation.passwordMinLength': 'Password must be at least 10 characters',
   'validation.passwordMaxLength': 'Password must be at most 20 characters',
+  'validation.passwordNeedsLowercase': 'Must include at least 1 lowercase letter',
+  'validation.passwordNeedsUppercase': 'Must include at least 1 uppercase letter',
   'validation.passwordNeedsLetter': 'Must include at least 1 letter',
   'validation.passwordNeedsNumber': 'Must include at least 1 number',
   'validation.passwordNeedsSpecial': 'Must include at least 1 special character',
@@ -1371,6 +1379,7 @@ const en: Record<TranslationKey, string> = {
   'chat.reply': 'Reply',
   'chat.generalTab': 'General',
   'chat.yourThreadsTab': 'Threads',
+  'chat.recommendationsTab': 'Recommendations',
   'chat.eventsTab': 'Events',
   'chat.readingsTab': 'Readings',
   'chat.imagesTab': 'Images',
@@ -1831,6 +1840,8 @@ export const translations: Record<Language, Record<TranslationKey, string>> = {
     'validation.mustBeAdult': 'Vous devez avoir au moins 18 ans',
     'validation.passwordMinLength': 'Le mot de passe doit contenir au moins 10 caractères',
     'validation.passwordMaxLength': 'Le mot de passe doit contenir au maximum 20 caractères',
+    'validation.passwordNeedsLowercase': 'Doit inclure au moins 1 lettre minuscule',
+    'validation.passwordNeedsUppercase': 'Doit inclure au moins 1 lettre majuscule',
     'validation.passwordNeedsLetter': 'Doit inclure au moins 1 lettre',
     'validation.passwordNeedsNumber': 'Doit inclure au moins 1 chiffre',
     'validation.passwordNeedsSpecial': 'Doit inclure au moins 1 caractère spécial',
@@ -1912,6 +1923,7 @@ export const translations: Record<Language, Record<TranslationKey, string>> = {
     'chat.reply': 'Répondre',
     'chat.generalTab': 'Général',
     'chat.yourThreadsTab': 'Fils',
+    'chat.recommendationsTab': 'Recommandations',
     'chat.eventsTab': 'Événements',
     'chat.readingsTab': 'Lectures',
     'chat.imagesTab': 'Images',
@@ -2339,6 +2351,8 @@ L’équipe Keinti`,
     'validation.mustBeAdult': 'Você deve ter pelo menos 18 anos',
     'validation.passwordMinLength': 'A senha deve ter no mínimo 10 caracteres',
     'validation.passwordMaxLength': 'A senha não pode ter mais de 20 caracteres',
+    'validation.passwordNeedsLowercase': 'Deve incluir pelo menos 1 letra minúscula',
+    'validation.passwordNeedsUppercase': 'Deve incluir pelo menos 1 letra maiúscula',
     'validation.passwordNeedsLetter': 'Deve incluir pelo menos 1 letra',
     'validation.passwordNeedsNumber': 'Deve incluir pelo menos 1 número',
     'validation.passwordNeedsSpecial': 'Deve incluir pelo menos 1 caractere especial',
@@ -2421,6 +2435,7 @@ L’équipe Keinti`,
     'chat.limitWarningMessage': 'Você já interagiu no canal de {user}. Aguarde a resposta.',
     'chat.generalTab': 'Geral',
     'chat.yourThreadsTab': 'Tópicos',
+    'chat.recommendationsTab': 'Recomendações',
     'chat.eventsTab': 'Eventos',
     'chat.readingsTab': 'Leituras',
     'chat.imagesTab': 'Imagens',
@@ -2875,6 +2890,8 @@ Equipe Keinti`,
     'validation.mustBeAdult': 'Du musst mindestens 18 Jahre alt sein',
     'validation.passwordMinLength': 'Das Passwort muss mindestens 10 Zeichen haben',
     'validation.passwordMaxLength': 'Das Passwort darf maximal 20 Zeichen haben',
+    'validation.passwordNeedsLowercase': 'Muss mindestens 1 Kleinbuchstaben enthalten',
+    'validation.passwordNeedsUppercase': 'Muss mindestens 1 Großbuchstaben enthalten',
     'validation.passwordNeedsLetter': 'Muss mindestens 1 Buchstaben enthalten',
     'validation.passwordNeedsNumber': 'Muss mindestens 1 Zahl enthalten',
     'validation.passwordNeedsSpecial': 'Muss mindestens 1 Sonderzeichen enthalten',
@@ -2957,6 +2974,7 @@ Equipe Keinti`,
     'chat.limitWarningMessage': 'Du hast bereits im Kanal von {user} interagiert. Bitte warte auf die Antwort.',
     'chat.generalTab': 'Allgemein',
     'chat.yourThreadsTab': 'Threads',
+    'chat.recommendationsTab': 'Empfehlungen',
     'chat.eventsTab': 'Ereignisse',
     'chat.readingsTab': 'Lektüren',
     'chat.imagesTab': 'Bilder',
@@ -3397,6 +3415,8 @@ Das Keinti-Team`,
     'validation.mustBeAdult': 'Devi avere almeno 18 anni',
     'validation.passwordMinLength': 'La password deve avere almeno 10 caratteri',
     'validation.passwordMaxLength': 'La password non può superare i 20 caratteri',
+    'validation.passwordNeedsLowercase': 'Deve contenere almeno 1 lettera minuscola',
+    'validation.passwordNeedsUppercase': 'Deve contenere almeno 1 lettera maiuscola',
     'validation.passwordNeedsLetter': 'Deve contenere almeno 1 lettera',
     'validation.passwordNeedsNumber': 'Deve contenere almeno 1 numero',
     'validation.passwordNeedsSpecial': 'Deve contenere almeno 1 carattere speciale',
@@ -3478,6 +3498,7 @@ Das Keinti-Team`,
     'chat.reply': 'Rispondi',
     'chat.generalTab': 'Generale',
     'chat.yourThreadsTab': 'Thread',
+    'chat.recommendationsTab': 'Raccomandazioni',
     'chat.eventsTab': 'Eventi',
     'chat.readingsTab': 'Letture',
     'chat.imagesTab': 'Immagini',

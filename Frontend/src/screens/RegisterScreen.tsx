@@ -703,9 +703,14 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
       return t('validation.passwordMinLength');
     }
 
-    const letterRegex = /[a-zA-Z]/;
-    if (!letterRegex.test(password)) {
-      return t('validation.passwordNeedsLetter');
+    const lowercaseRegex = /[a-z]/;
+    if (!lowercaseRegex.test(password)) {
+      return t('validation.passwordNeedsLowercase');
+    }
+
+    const uppercaseRegex = /[A-Z]/;
+    if (!uppercaseRegex.test(password)) {
+      return t('validation.passwordNeedsUppercase');
     }
 
     const numberRegex = /\d/;
@@ -713,7 +718,7 @@ const RegisterScreen = ({ onBack: _onBack, onRegisterSuccess }: RegisterScreenPr
       return t('validation.passwordNeedsNumber');
     }
 
-    const specialCharRegex = /[!@#$%^&*(),.?":{}|<>]/;
+    const specialCharRegex = /[!@#$%^&*()_+\-=[\]{};':"\\|<>?,./`~]/;
     if (!specialCharRegex.test(password)) {
       return t('validation.passwordNeedsSpecial');
     }

@@ -44,6 +44,15 @@ import {
 import ImageCropPicker from 'react-native-image-crop-picker';
 import ProfilePhotoEdit from './ProfilePhotoEdit';
 import CarouselImageEditor from './CarouselImageEditor';
+import VoiceNotePlayer, { stopSharedVoiceNotePlayback } from '../components/VoiceNotePlayer';
+import audioRecorderPlayer, {
+  AudioEncoderAndroidType,
+  AVEncodingOption,
+  AVEncoderAudioQualityIOSType,
+  OutputFormatAndroidType,
+  type AudioSet,
+  type RecordBackType,
+} from '../services/audioRecorderPlayer';
 import { deleteDraftUploadedImageByUrl, getAccountAuthStatus, getMyDevicePermissions, getMyUiHints, setMyDevicePermissions, setMyUiHints, updateProfilePhoto, updateSocialNetworks, uploadImage } from '../services/userService';
 import { trackAdPaidEvent } from '../services/adRevenueService';
 import { dismissChannelReplyNotification } from '../services/notificationService';
@@ -97,12 +106,34 @@ const normalizeEmailKey = (raw?: string | null) => String(raw || '').trim().toLo
 const CHANNEL_IMAGE_MESSAGE_PREFIX = '__KIMG__';
 const CHANNEL_EVENT_MESSAGE_PREFIX = '__KEVT__';
 const CHANNEL_READING_MESSAGE_PREFIX = '__KREAD__';
-const CHANNEL_MESSAGES_TAB_SEQUENCE = ['General', 'Hilos', 'Eventos', 'Lecturas', 'Imágenes'] as const;
+const CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX = '__KRREC__';
+const CHANNEL_RING_RECOMMENDATION_THREAD_MESSAGE_PREFIX = '__KRRTH__';
+const CHANNEL_MESSAGES_TAB_SEQUENCE = ['General', 'Hilos', 'Recomendaciones', 'Eventos', 'Lecturas', 'Imágenes'] as const;
 const READING_ACCENT_GRADIENT_COLORS = ['#FFB74D', '#ffe45c'];
 const HYPE_CATEGORY_BORDER_GRADIENT_COLORS: [string, string] = ['#FFB74D', '#ffe45c'];
 const READING_CITATION_USER_SOCIAL_ICON_SIZE = 18;
 const READING_CITATION_USER_SOCIAL_ICON_GAP = 10;
 const READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT = 3;
+const CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_SECONDS = 60;
+const CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_MS = CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_SECONDS * 1000;
+const CHANNEL_EVENT_VOICE_NOTE_STOP_TIMEOUT_MS = 1500;
+const CHANNEL_EVENT_VOICE_NOTE_LIMIT_NOTICE_DURATION_MS = 5000;
+const CHANNEL_EVENT_VOICE_NOTE_TEXT_MAX_LENGTH = 40;
+const CHANNEL_EVENT_VOICE_NOTE_MIME_TYPE = 'audio/mp4';
+
+const CHANNEL_EVENT_VOICE_NOTE_AUDIO_SET: AudioSet = {
+  OutputFormatAndroid: OutputFormatAndroidType.MPEG_4,
+  AudioEncoderAndroid: AudioEncoderAndroidType.AAC,
+  AudioChannelsAndroid: 1,
+  AudioSamplingRateAndroid: 44100,
+  AudioEncodingBitRateAndroid: 64000,
+  MaxDurationMillis: CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_MS,
+  AVFormatIDKeyIOS: AVEncodingOption.aac as AudioSet['AVFormatIDKeyIOS'],
+  AVNumberOfChannelsKeyIOS: 1,
+  AVSampleRateKeyIOS: 44100,
+  AVEncoderAudioQualityKeyIOS: AVEncoderAudioQualityIOSType.medium,
+  AVEncoderBitRateKeyIOS: 64000,
+};
 
 type ChannelMessagesTab = typeof CHANNEL_MESSAGES_TAB_SEQUENCE[number];
 
@@ -166,6 +197,20 @@ const formatChannelEventDate = (date: Date) => {
 };
 
 type ChannelEventTimeFormat = 'european' | 'us';
+
+type ChannelEventMessageVoiceNote = {
+  url: string;
+  durationSeconds: number;
+  mimeType?: string | null;
+  noteText?: string | null;
+};
+
+type ChannelEventVoiceNote = {
+  uri: string;
+  durationSeconds: number;
+  mimeType?: string | null;
+  noteText?: string | null;
+};
 
 const getChannelEventTimeMeridiem = (date: Date) => (date.getHours() >= 12 ? 'PM' : 'AM');
 
@@ -339,6 +384,27 @@ const normalizeChannelEventDateInput = (value: string) => {
 
 const sanitizeChannelEventAmountInput = (value: string) => value.replace(/\D+/g, '').replace(/^0+(?=\d)/, '');
 
+const sanitizeChannelEventVoiceNoteTextInput = (value: string) => String(value || '').slice(0, CHANNEL_EVENT_VOICE_NOTE_TEXT_MAX_LENGTH);
+
+const normalizeChannelEventVoiceNoteText = (value: unknown) => {
+  const text = sanitizeChannelEventVoiceNoteTextInput(String(value ?? '')).trim();
+  return text || null;
+};
+
+const sanitizeChannelEventVoiceNote = (audio: ChannelEventMessageVoiceNote | null | undefined) => {
+  const url = String(audio?.url || '').trim();
+  if (!url) {
+    return null;
+  }
+
+  return {
+    url,
+    durationSeconds: Math.max(0, Math.floor(Number(audio?.durationSeconds) || 0)),
+    mimeType: typeof audio?.mimeType === 'string' ? audio.mimeType.trim() || null : null,
+    noteText: normalizeChannelEventVoiceNoteText(audio?.noteText),
+  };
+};
+
 const getChannelEventMinimumDate = () => {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -410,6 +476,7 @@ type ChannelEventMessagePayload = {
   typeKey: TranslationKey;
   hypeCost?: number | null;
   imageUrl?: string;
+  eventAudio?: ChannelEventMessageVoiceNote | null;
   tasksEnabled?: boolean;
   durationMinutes?: number | null;
   expiresAt?: string | null;
@@ -425,6 +492,69 @@ type ChannelEventMessagePayload = {
   timeFormat?: ChannelEventTimeFormat;
 };
 
+type ChannelRingRecommendationMessagePayload = {
+  sourcePublicationId: string;
+  sourceImageUrl: string;
+  sourceImageAspectRatio?: CarouselAspectRatio | null;
+  ring: ProfileRingPoint;
+  creator: {
+    username: string;
+    email?: string | null;
+    profilePhotoUri?: string | null;
+    socialNetworks?: Array<{ network: string; link: string }>;
+    accountVerified?: boolean;
+    keintiVerified?: boolean;
+  };
+};
+
+type ChannelRingRecommendationThreadEntryKind = 'viewer-root' | 'host-global' | 'host-direct';
+
+type ChannelRingRecommendationThreadMessagePayload = {
+  recommendationMessageId: string;
+  entryKind: ChannelRingRecommendationThreadEntryKind;
+  text: string;
+  viewerEmail?: string | null;
+  viewerUsername?: string | null;
+};
+
+type ChannelRecommendationThreadEntry = {
+  id?: any;
+  created_at?: any;
+  text: string;
+  entryKind: ChannelRingRecommendationThreadEntryKind;
+  viewerEmail?: string | null;
+  viewerUsername?: string | null;
+  senderEmail?: string | null;
+};
+
+type ChannelRecommendationThreadViewerItem = {
+  type: 'viewer-root';
+  key: string;
+  viewerEmail?: string | null;
+  viewerUsername?: string | null;
+  rootEntry: ChannelRecommendationThreadEntry;
+  directReplies: ChannelRecommendationThreadEntry[];
+  sortKey: number;
+};
+
+type ChannelRecommendationThreadGlobalItem = {
+  type: 'host-global';
+  key: string;
+  entry: ChannelRecommendationThreadEntry;
+  sortKey: number;
+};
+
+type ChannelRecommendationThreadItem = ChannelRecommendationThreadViewerItem | ChannelRecommendationThreadGlobalItem;
+
+type RecommendationReplyComposerContext = {
+  recommendationMessageId: string;
+  recommendationMessageKey: string;
+  entryKind: ChannelRingRecommendationThreadEntryKind;
+  viewerEmail?: string | null;
+  viewerUsername?: string | null;
+  label: string;
+};
+
 type ChannelReadingMessageInsertion =
   | {
       type: 'image';
@@ -433,7 +563,21 @@ type ChannelReadingMessageInsertion =
   | {
       type: 'intertitle';
       text: string;
+    }
+  | {
+      type: 'voice-note';
+      url: string;
+      durationSeconds: number;
+      mimeType?: string | null;
+      noteText?: string | null;
     };
+
+type ChannelReadingMessageVoiceNote = {
+  url: string;
+  durationSeconds: number;
+  mimeType?: string | null;
+  noteText?: string | null;
+};
 
 type ChannelReadingCitationAppearance = 'white' | 'gradient';
 
@@ -460,8 +604,10 @@ type ChannelReadingMessagePayload = {
   date?: string;
   category?: string;
   hypeCost?: number | null;
+  introAudio?: ChannelReadingMessageVoiceNote | null;
   bodySections?: string[];
   insertions?: ChannelReadingMessageInsertion[];
+  outroAudio?: ChannelReadingMessageVoiceNote | null;
   imageUrls?: string[];
   citations?: ChannelReadingCitation[];
 };
@@ -619,6 +765,11 @@ const buildHypeViralEndpointQuery = (
   return params.join('&');
 };
 
+const normalizeOptionalString = (value: unknown) => {
+  const normalizedValue = String(value ?? '').trim();
+  return normalizedValue || null;
+};
+
 const encodeChannelEventMessage = (payload: ChannelEventMessagePayload) => {
   const safe = {
     name: String(payload?.name || '').trim(),
@@ -629,6 +780,7 @@ const encodeChannelEventMessage = (payload: ChannelEventMessagePayload) => {
       ? Math.max(0, Math.floor(payload.hypeCost))
       : null,
     imageUrl: String(payload?.imageUrl || '').trim(),
+    eventAudio: sanitizeChannelEventVoiceNote(payload?.eventAudio),
     tasksEnabled: !!payload?.tasksEnabled,
     durationMinutes: typeof payload?.durationMinutes === 'number' && Number.isFinite(payload.durationMinutes)
       ? Math.max(1, Math.round(payload.durationMinutes))
@@ -670,6 +822,69 @@ const encodeChannelEventMessage = (payload: ChannelEventMessagePayload) => {
     timeFormat: payload?.timeFormat === 'us' ? 'us' : 'european',
   };
   return `${CHANNEL_EVENT_MESSAGE_PREFIX}${JSON.stringify(safe)}`;
+};
+
+const encodeChannelRingRecommendationMessage = (payload: ChannelRingRecommendationMessagePayload) => {
+  const safe = {
+    sourcePublicationId: String(payload?.sourcePublicationId || '').trim(),
+    sourceImageUrl: String(payload?.sourceImageUrl || '').trim(),
+    sourceImageAspectRatio: payload?.sourceImageAspectRatio === '3:4'
+      ? '3:4'
+      : null,
+    ring: {
+      id: String(payload?.ring?.id || '').trim(),
+      imageIndex: Math.max(0, Math.floor(Number(payload?.ring?.imageIndex) || 0)),
+      x: Number.isFinite(Number(payload?.ring?.x)) ? Number(payload?.ring?.x) : 0.5,
+      y: Number.isFinite(Number(payload?.ring?.y)) ? Number(payload?.ring?.y) : 0.5,
+      color: String(payload?.ring?.color || '#FFFFFF').trim() || '#FFFFFF',
+      colorSelected: !!payload?.ring?.colorSelected,
+      name: String(payload?.ring?.name || '').trim(),
+      description: String(payload?.ring?.description || '').trim(),
+      linkNetwork: normalizeOptionalString(payload?.ring?.linkNetwork),
+      linkUrl: String(payload?.ring?.linkUrl || '').trim(),
+      locationLabel: String(payload?.ring?.locationLabel || '').trim(),
+      locationUrl: String(payload?.ring?.locationUrl || '').trim(),
+      locationPlaceId: normalizeOptionalString(payload?.ring?.locationPlaceId),
+      locationLat: typeof payload?.ring?.locationLat === 'number' ? payload.ring.locationLat : null,
+      locationLng: typeof payload?.ring?.locationLng === 'number' ? payload.ring.locationLng : null,
+      isCreated: !!payload?.ring?.isCreated,
+    },
+    creator: {
+      username: String(payload?.creator?.username || '').trim(),
+      email: normalizeOptionalString(payload?.creator?.email),
+      profilePhotoUri: normalizeOptionalString(payload?.creator?.profilePhotoUri),
+      socialNetworks: Array.isArray(payload?.creator?.socialNetworks)
+        ? payload.creator.socialNetworks
+          .map(item => ({
+            network: String(item?.network || '').trim(),
+            link: String(item?.link || '').trim(),
+          }))
+          .filter(item => item.network && item.link)
+        : [],
+      accountVerified: !!payload?.creator?.accountVerified,
+      keintiVerified: !!payload?.creator?.keintiVerified,
+    },
+  };
+
+  return `${CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX}${JSON.stringify(safe)}`;
+};
+
+const encodeChannelRingRecommendationThreadMessage = (payload: ChannelRingRecommendationThreadMessagePayload) => {
+  const normalizedEntryKind: ChannelRingRecommendationThreadEntryKind = payload?.entryKind === 'host-global'
+    ? 'host-global'
+    : payload?.entryKind === 'host-direct'
+      ? 'host-direct'
+      : 'viewer-root';
+
+  const safe = {
+    recommendationMessageId: String(payload?.recommendationMessageId || '').trim(),
+    entryKind: normalizedEntryKind,
+    text: String(payload?.text || '').trim(),
+    viewerEmail: normalizeOptionalString(payload?.viewerEmail),
+    viewerUsername: normalizeOptionalString(payload?.viewerUsername),
+  };
+
+  return `${CHANNEL_RING_RECOMMENDATION_THREAD_MESSAGE_PREFIX}${JSON.stringify(safe)}`;
 };
 
 const parseChannelImageMessage = (raw: string): { url: string; caption: string } | null => {
@@ -738,6 +953,7 @@ const parseChannelEventMessage = (raw: string): ChannelEventMessagePayload | nul
       typeKey,
       hypeCost,
       imageUrl: String(parsed?.imageUrl || '').trim(),
+      eventAudio: sanitizeChannelEventVoiceNote(parsed?.eventAudio),
       tasksEnabled,
       durationMinutes,
       expiresAt,
@@ -764,6 +980,126 @@ const parseChannelEventMessage = (raw: string): ChannelEventMessagePayload | nul
   }
 };
 
+const parseChannelRingRecommendationMessage = (raw: string): ChannelRingRecommendationMessagePayload | null => {
+  const text = String(raw || '');
+  if (!text.startsWith(CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX)) {return null;}
+
+  const json = text.slice(CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX.length);
+  try {
+    const parsed = JSON.parse(json);
+    const sourcePublicationId = String(parsed?.sourcePublicationId || '').trim();
+    const sourceImageUrl = String(parsed?.sourceImageUrl || '').trim();
+    const sourceImageAspectRatio = parsed?.sourceImageAspectRatio === '3:4'
+      ? '3:4'
+      : null;
+
+    const ring: ProfileRingPoint = {
+      id: String(parsed?.ring?.id || '').trim(),
+      imageIndex: Math.max(0, Math.floor(Number(parsed?.ring?.imageIndex) || 0)),
+      x: Number.isFinite(Number(parsed?.ring?.x)) ? Number(parsed.ring.x) : 0.5,
+      y: Number.isFinite(Number(parsed?.ring?.y)) ? Number(parsed.ring.y) : 0.5,
+      color: String(parsed?.ring?.color || '#FFFFFF').trim() || '#FFFFFF',
+      colorSelected: !!parsed?.ring?.colorSelected,
+      name: String(parsed?.ring?.name || '').trim(),
+      description: String(parsed?.ring?.description || '').trim(),
+      linkNetwork: normalizeOptionalString(parsed?.ring?.linkNetwork),
+      linkUrl: String(parsed?.ring?.linkUrl || '').trim(),
+      locationLabel: String(parsed?.ring?.locationLabel || '').trim(),
+      locationUrl: String(parsed?.ring?.locationUrl || '').trim(),
+      locationPlaceId: normalizeOptionalString(parsed?.ring?.locationPlaceId),
+      locationLat: typeof parsed?.ring?.locationLat === 'number' ? parsed.ring.locationLat : null,
+      locationLng: typeof parsed?.ring?.locationLng === 'number' ? parsed.ring.locationLng : null,
+      isCreated: !!parsed?.ring?.isCreated,
+    };
+
+    const creatorUsername = String(parsed?.creator?.username || '').trim();
+    if (!sourcePublicationId || !sourceImageUrl || !ring.id || !creatorUsername) {return null;}
+
+    return {
+      sourcePublicationId,
+      sourceImageUrl,
+      sourceImageAspectRatio,
+      ring,
+      creator: {
+        username: creatorUsername,
+        email: normalizeOptionalString(parsed?.creator?.email),
+        profilePhotoUri: normalizeOptionalString(parsed?.creator?.profilePhotoUri),
+        socialNetworks: Array.isArray(parsed?.creator?.socialNetworks)
+          ? parsed.creator.socialNetworks
+            .map((item: any) => ({
+              network: String(item?.network || '').trim(),
+              link: String(item?.link || '').trim(),
+            }))
+            .filter((item: { network: string; link: string }) => item.network && item.link)
+          : [],
+        accountVerified: !!parsed?.creator?.accountVerified,
+        keintiVerified: !!parsed?.creator?.keintiVerified,
+      },
+    };
+  } catch {
+    return null;
+  }
+};
+
+const buildChannelRingRecommendationSignature = (payload: {
+  sourcePublicationId?: string | number | null;
+  ring?: { id?: string | number | null } | null;
+  ringId?: string | number | null;
+} | null | undefined): string => {
+  const sourcePublicationId = String(payload?.sourcePublicationId || '').trim();
+  const ringId = String(payload?.ringId ?? payload?.ring?.id ?? '').trim();
+  if (!sourcePublicationId || !ringId) {return '';}
+  return `${sourcePublicationId}:${ringId}`;
+};
+
+const extractChannelRingRecommendationSignatures = (messages: any[]): Record<string, 1> => {
+  const signatures: Record<string, 1> = {};
+  messages.forEach((messageItem: any) => {
+    const payload = parseChannelRingRecommendationMessage(String(messageItem?.message || ''));
+    const signature = buildChannelRingRecommendationSignature(payload);
+    if (signature) {
+      signatures[signature] = 1;
+    }
+  });
+  return signatures;
+};
+
+const parseChannelRingRecommendationThreadMessage = (raw: string): ChannelRingRecommendationThreadMessagePayload | null => {
+  const text = String(raw || '');
+  if (!text.startsWith(CHANNEL_RING_RECOMMENDATION_THREAD_MESSAGE_PREFIX)) {return null;}
+
+  const json = text.slice(CHANNEL_RING_RECOMMENDATION_THREAD_MESSAGE_PREFIX.length);
+  try {
+    const parsed = JSON.parse(json);
+    const recommendationMessageId = String(parsed?.recommendationMessageId || '').trim();
+    const entryKind: ChannelRingRecommendationThreadEntryKind | null = parsed?.entryKind === 'host-global'
+      ? 'host-global'
+      : parsed?.entryKind === 'host-direct'
+        ? 'host-direct'
+        : parsed?.entryKind === 'viewer-root'
+          ? 'viewer-root'
+          : null;
+    const textContent = String(parsed?.text || '').trim();
+    const viewerEmail = normalizeOptionalString(parsed?.viewerEmail);
+    const viewerUsername = normalizeOptionalString(parsed?.viewerUsername);
+
+    if (!recommendationMessageId || !entryKind || !textContent) {return null;}
+    if (entryKind !== 'host-global' && !viewerEmail && !viewerUsername) {return null;}
+
+    return {
+      recommendationMessageId,
+      entryKind,
+      text: textContent,
+      viewerEmail,
+      viewerUsername,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const isChannelRingRecommendationRootMessage = (raw: string) => !!parseChannelRingRecommendationMessage(raw);
+
 const parseChannelReadingMessage = (raw: string): ChannelReadingMessagePayload | null => {
   const text = String(raw || '');
   if (!text.startsWith(CHANNEL_READING_MESSAGE_PREFIX)) {return null;}
@@ -779,6 +1115,20 @@ const parseChannelReadingMessage = (raw: string): ChannelReadingMessagePayload |
       return null;
     }
 
+    const parseVoiceNote = (item: any): ChannelReadingMessageVoiceNote | null => {
+      const url = String(item?.url || '').trim();
+      if (!url) {
+        return null;
+      }
+
+      return {
+        url,
+        durationSeconds: Math.max(0, Math.floor(Number(item?.durationSeconds) || 0)),
+        mimeType: typeof item?.mimeType === 'string' ? item.mimeType.trim() || null : null,
+        noteText: typeof item?.noteText === 'string' ? item.noteText.trim() || null : null,
+      };
+    };
+
     return {
       title,
       subtitle,
@@ -788,6 +1138,7 @@ const parseChannelReadingMessage = (raw: string): ChannelReadingMessagePayload |
       hypeCost: typeof parsed?.hypeCost === 'number' && Number.isFinite(parsed.hypeCost)
         ? Math.max(0, Math.floor(parsed.hypeCost))
         : null,
+      introAudio: parseVoiceNote(parsed?.introAudio),
       bodySections: Array.isArray(parsed?.bodySections)
         ? parsed.bodySections.map((item: any) => String(item || ''))
         : [],
@@ -811,11 +1162,26 @@ const parseChannelReadingMessage = (raw: string): ChannelReadingMessagePayload |
             if (intertitleText) {
               normalizedInsertions.push({ type: 'intertitle', text: intertitleText });
             }
+            return;
+          }
+
+          if (item?.type === 'voice-note') {
+            const voiceNote = parseVoiceNote(item);
+            if (voiceNote) {
+              normalizedInsertions.push({
+                type: 'voice-note',
+                url: voiceNote.url,
+                durationSeconds: voiceNote.durationSeconds,
+                mimeType: voiceNote.mimeType,
+                noteText: voiceNote.noteText,
+              });
+            }
           }
         });
 
         return normalizedInsertions;
       })(),
+      outroAudio: parseVoiceNote(parsed?.outroAudio),
       imageUrls: Array.isArray(parsed?.imageUrls)
         ? parsed.imageUrls.map((item: any) => String(item || '').trim()).filter(Boolean)
         : [],
@@ -1566,6 +1932,8 @@ const HOME_CARD_WIDTH = Math.max(1, SCREEN_WIDTH - 4);
 const PROFILE_SCREEN_SIDE_PADDING = 2;
 const PROFILE_CONTENT_WIDTH = Math.max(1, SCREEN_WIDTH - (PROFILE_SCREEN_SIDE_PADDING * 2));
 const REACTION_ITEM_SIZE = (SCREEN_WIDTH - 40) * 0.16 - 6;
+const REACTION_PANEL_NUM_COLUMNS = 6;
+const REACTION_PANEL_ROW_GAP = 12;
 const CHAT_TABS_DEFAULT_OFFSET = 90;
 const CHAT_TABS_TOP = 20;
 const CHAT_TABS_GAP = 10;
@@ -1913,6 +2281,14 @@ type ProfileRingPoint = {
   isCreated: boolean;
 };
 
+type ProfileRingLocationDraftSnapshot = {
+  label: string;
+  url: string;
+  placeId: string | null;
+  lat: number | null;
+  lng: number | null;
+};
+
 interface PresentationContent {
   images: CarouselImageData[];
   title: string;
@@ -1947,6 +2323,20 @@ interface Publication {
   intimidades: Intimidad[];
   createdAt: Date;
 }
+
+type HomeProfileRingViewerContext = {
+  publicationId: string;
+  ring: ProfileRingPoint;
+  image: Pick<CarouselImageData, 'uri' | 'aspectRatio'> | null;
+  creator: {
+    username: string;
+    email?: string;
+    profilePhotoUri?: string;
+    socialNetworks: SocialNetwork[];
+    accountVerified?: boolean;
+    keintiVerified?: boolean;
+  };
+};
 
 interface Group {
   id: string;
@@ -2295,11 +2685,13 @@ const ChannelEventField = ({
 
 const ChannelEventApplyButton = ({
   label,
+  subLabel,
   disabled = false,
   loading = false,
   onPress,
 }: {
   label: string;
+  subLabel?: string;
   disabled?: boolean;
   loading?: boolean;
   onPress?: () => void;
@@ -2312,22 +2704,27 @@ const ChannelEventApplyButton = ({
       accessibilityState={{ disabled, busy: loading }}
       style={[styles.channelEventApplyButtonShell, disabled && styles.channelEventApplyButtonShellDisabled]}
     >
-      <View style={styles.channelEventApplyButtonInner}>
+      <View style={[styles.channelEventApplyButtonInner, subLabel ? styles.channelEventApplyButtonInnerMultiline : null]}>
         <MeasuredSvgGradientBorder
           gradientId="channel_event_apply_button_grad"
           colors={['#ffe040', '#ff7a00']}
           borderRadius={18}
           strokeWidth={1.6}
         />
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-          {loading ? (
-            <ActivityIndicator
-              size="small"
-              color="#FFFFFF"
-              style={{ marginRight: 10 }}
-            />
+        <View style={styles.channelEventApplyButtonContent}>
+          <View style={styles.channelEventApplyButtonTitleRow}>
+            {loading ? (
+              <ActivityIndicator
+                size="small"
+                color="#FFFFFF"
+                style={{ marginRight: 10 }}
+              />
+            ) : null}
+            <Text style={styles.channelEventApplyButtonText}>{label}</Text>
+          </View>
+          {subLabel ? (
+            <Text style={styles.channelEventApplyButtonSubtext}>{subLabel}</Text>
           ) : null}
-          <Text style={styles.channelEventApplyButtonText}>{label}</Text>
         </View>
       </View>
     </TouchableOpacity>
@@ -2473,6 +2870,7 @@ const HomeActivePublicationCard = React.memo(({
   const presentationRings: ProfileRingPoint[] = Array.isArray(publication.presentation?.profileRings)
     ? (publication.presentation.profileRings as ProfileRingPoint[])
     : EMPTY_HOME_PROFILE_RING_POINTS;
+  const presentationRingsCount = presentationRings.length;
   const hasPresentationRings = presentationRings.length > 0;
   const trimmedTitle = publication.presentation.title?.trim() ?? '';
   const trimmedText = publication.presentation.text?.trim() ?? '';
@@ -2849,7 +3247,7 @@ const HomeActivePublicationCard = React.memo(({
                     const imageUri = getServerResourceUrl(item.uri);
 
                     return (
-                      <View style={[styles.profilePresentationSlide, { width: HOME_CARD_WIDTH }]}> 
+                      <View style={[styles.profilePresentationSlide, { width: HOME_CARD_WIDTH }]}>
                         <TouchableWithoutFeedback onPress={() => handlers.onPublicationDoubleTap(publicationId, publication.reactions)}>
                           <View
                             style={[
@@ -3009,23 +3407,28 @@ const HomeActivePublicationCard = React.memo(({
               <View style={[styles.profileMetaContainer, { paddingBottom: 0 }]}>
                 <View style={styles.profileLikeRow}>
                   <View style={{ position: 'absolute', left: 0, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <TouchableOpacity
-                      activeOpacity={0.7}
-                      onPress={() => {
-                        if (!hasPresentationRings) {return;}
-                        handlers.onToggleHomeProfileRingsVisible(publicationId);
-                      }}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      style={{ paddingVertical: 2, paddingHorizontal: 2, opacity: hasPresentationRings ? 1 : 0.35 }}
-                    >
-                      <Animated.View style={ringsVisible ? { transform: [{ scale: animations.homeRingIconPulseAnim }] } : undefined}>
-                        <GradientIcon
-                          name="panorama-fish-eye"
-                          size={16}
-                          colors={['#FFB74D', '#ffe45c']}
-                        />
-                      </Animated.View>
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, opacity: hasPresentationRings ? 1 : 0.35 }}>
+                      <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '600' }}>
+                        {presentationRingsCount}
+                      </Text>
+                      <TouchableOpacity
+                        activeOpacity={0.7}
+                        onPress={() => {
+                          if (!hasPresentationRings) {return;}
+                          handlers.onToggleHomeProfileRingsVisible(publicationId);
+                        }}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        style={{ paddingVertical: 2, paddingHorizontal: 2 }}
+                      >
+                        <Animated.View style={ringsVisible ? { transform: [{ scale: animations.homeRingIconPulseAnim }] } : undefined}>
+                          <GradientIcon
+                            name="panorama-fish-eye"
+                            size={16}
+                            colors={['#FFB74D', '#ffe45c']}
+                          />
+                        </Animated.View>
+                      </TouchableOpacity>
+                    </View>
 
                     <CountdownTimer
                       createdAt={publication.createdAt}
@@ -4888,6 +5291,18 @@ const FrontScreen = ({
   const [chatInputValue, setChatInputValue] = useState('');
   const [showChannelAttachmentPanel, setShowChannelAttachmentPanel] = useState(false);
   const [showChannelEventPanel, setShowChannelEventPanel] = useState(false);
+  const [showHomeRingRecommendationPanel, setShowHomeRingRecommendationPanel] = useState(false);
+  const [isSubmittingHomeRingRecommendation, setIsSubmittingHomeRingRecommendation] = useState(false);
+  const [ownChannelRecommendedRingState, setOwnChannelRecommendedRingState] = useState<{
+    postId: string;
+    signatures: Record<string, 1>;
+  }>({
+    postId: '',
+    signatures: {},
+  });
+  const ownChannelRecommendationSignatureFetchSeqRef = useRef(0);
+  const [homeRingRecommendationCountsBySourcePublication, setHomeRingRecommendationCountsBySourcePublication] = useState<Record<string, Record<string, number>>>({});
+  const homeRingRecommendationCountsFetchSeqRef = useRef<Record<string, number>>({});
   const [isChannelEventPanelMinimized, setIsChannelEventPanelMinimized] = useState(false);
   const channelEventPanelScrollRef = useRef<ScrollView | null>(null);
   const channelEventHypeCostSectionYRef = useRef(0);
@@ -4934,6 +5349,18 @@ const FrontScreen = ({
   const [completingChannelEventTaskKey, setCompletingChannelEventTaskKey] = useState<string | null>(null);
   const [channelEventCountdownNowMs, setChannelEventCountdownNowMs] = useState(() => Date.now());
   const [channelEventImageUri, setChannelEventImageUri] = useState<string | null>(null);
+  const channelEventVoiceNoteRecordingUriRef = useRef<string | null>(null);
+  const channelEventVoiceNoteDurationMsRef = useRef(0);
+  const channelEventVoiceNoteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const channelEventVoiceNoteLimitNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isRecordingChannelEventVoiceNoteRef = useRef(false);
+  const isStoppingChannelEventVoiceNoteRef = useRef(false);
+  const [channelEventVoiceNote, setChannelEventVoiceNote] = useState<ChannelEventVoiceNote | null>(null);
+  const [channelEventVoiceNoteText, setChannelEventVoiceNoteText] = useState('');
+  const [isChannelEventVoiceNoteLimitNoticeVisible, setIsChannelEventVoiceNoteLimitNoticeVisible] = useState(false);
+  const [isRecordingChannelEventVoiceNote, setIsRecordingChannelEventVoiceNote] = useState(false);
+  const [isChannelEventVoiceNotePending, setIsChannelEventVoiceNotePending] = useState(false);
+  const [channelEventVoiceNoteDurationMs, setChannelEventVoiceNoteDurationMs] = useState(0);
   const [channelEventHypeCostInput, setChannelEventHypeCostInput] = useState('');
   const [showChannelEventHypeCostInfo, setShowChannelEventHypeCostInfo] = useState(false);
   const [activeChannelEventDonationPanelKey, setActiveChannelEventDonationPanelKey] = useState<string | null>(null);
@@ -4946,6 +5373,13 @@ const FrontScreen = ({
   const [isSendingChannelImage, setIsSendingChannelImage] = useState(false);
   const [showChannelImageViewer, setShowChannelImageViewer] = useState(false);
   const [channelImageViewerUri, setChannelImageViewerUri] = useState<string | null>(null);
+
+  useEffect(() => () => {
+    if (channelEventVoiceNoteLimitNoticeTimeoutRef.current) {
+      clearTimeout(channelEventVoiceNoteLimitNoticeTimeoutRef.current);
+      channelEventVoiceNoteLimitNoticeTimeoutRef.current = null;
+    }
+  }, []);
   const [expandedChannelReading, setExpandedChannelReading] = useState<{ payload: ChannelReadingMessagePayload; message?: any } | null>(null);
   const [expandedChannelReadingCitation, setExpandedChannelReadingCitation] = useState<ChannelReadingCitation | null>(null);
   const expandedChannelReadingScrollRef = useRef<ScrollView | null>(null);
@@ -4971,6 +5405,7 @@ const FrontScreen = ({
   const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
   const [replyingToMessageIndex, setReplyingToMessageIndex] = useState<number | null>(null);
   const [replyingToUsername, setReplyingToUsername] = useState<string | null>(null);
+  const [activeRecommendationReplyContext, setActiveRecommendationReplyContext] = useState<RecommendationReplyComposerContext | null>(null);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [groupChatMessages, setGroupChatMessages] = useState<any[]>([]);
   const [groupChatLoadingGroupId, setGroupChatLoadingGroupId] = useState<string | null>(null);
@@ -5016,6 +5451,60 @@ const FrontScreen = ({
   const [channelMessagesTab, setChannelMessagesTab] = useState<ChannelMessagesTab>('General');
   const isPublished = !!myPublication;
   const userPublication = myPublication;
+  const hasActiveOwnChannel = useMemo(() => {
+    if (!myPublication) {return false;}
+    const created = parseServerDate(myPublication.createdAt as any);
+    if (!Number.isFinite(created.getTime())) {return false;}
+    return Date.now() < (created.getTime() + POST_TTL_MS);
+  }, [myPublication]);
+  const homeRingRecommendationPanelTitle = localize({
+    es: 'Recomienda este panel de aro en tu canal',
+    en: 'Recommend this ring panel in your channel',
+    fr: 'Recommande ce panneau d\'anneau dans ton canal',
+    pt: 'Recomenda este painel de aro no teu canal',
+    de: 'Empfiehl dieses Ring-Panel in deinem Kanal',
+    it: 'Consiglia questo pannello dell\'anello nel tuo canale',
+  });
+  const homeRingRecommendationButtonText = localize({
+    es: 'Recomendar',
+    en: 'Recommend',
+    fr: 'Recommander',
+    pt: 'Recomendar',
+    de: 'Empfehlen',
+    it: 'Consiglia',
+  });
+  const homeRingRecommendationButtonSubtext = localize({
+    es: 'en tu canal',
+    en: 'in your channel',
+    fr: 'dans ton canal',
+    pt: 'no teu canal',
+    de: 'in deinem Kanal',
+    it: 'nel tuo canale',
+  });
+  const homeRingRecommendationInactiveChannelNotice = localize({
+    es: 'Publica tu perfil y tu canal se activará para poder recomendar aros',
+    en: 'Publish your profile and your channel will activate so you can recommend rings',
+    fr: 'Publie ton profil et ton canal s\'activera pour que tu puisses recommander des anneaux',
+    pt: 'Publica o teu perfil e o teu canal será ativado para poderes recomendar aros',
+    de: 'Veröffentliche dein Profil und dein Kanal wird aktiviert, damit du Ringe empfehlen kannst',
+    it: 'Pubblica il tuo profilo e il tuo canale si attiverà per permetterti di consigliare anelli',
+  });
+  const homeRingRecommendationAlreadyRecommendedNotice = localize({
+    es: 'Este aro ya fue recomendado en este canal',
+    en: 'This ring was already recommended in this channel',
+    fr: 'Cet anneau a déjà été recommandé dans ce canal',
+    pt: 'Este aro já foi recomendado neste canal',
+    de: 'Dieser Ring wurde in diesem Kanal bereits empfohlen',
+    it: 'Questo anello è già stato consigliato in questo canale',
+  });
+  const homeRingRecommendationLockedNotice = localize({
+    es: 'Desbloquea el contenido extra del contenedor intimidad',
+    en: 'Unlock the extra intimacy container content',
+    fr: 'Débloque le contenu supplémentaire du conteneur intimité',
+    pt: 'Desbloqueia o conteúdo extra do contentor de intimidade',
+    de: 'Schalte den zusätzlichen Inhalt des Intimitäts-Containers frei',
+    it: 'Sblocca il contenuto extra del contenitore intimità',
+  });
   const channelEventSourceCreatedAt = selectedChannel?.post_created_at
     ?? selectedChannel?.postCreatedAt
     ?? selectedChannel?.created_at
@@ -5023,6 +5512,10 @@ const FrontScreen = ({
     ?? userPublication?.createdAt
     ?? null;
   const channelEventDurationMaxMinutes = getChannelEventRemainingDurationMinutes(channelEventSourceCreatedAt);
+  const closeHomeRingRecommendationPanel = useCallback(() => {
+    if (isSubmittingHomeRingRecommendation) {return;}
+    setShowHomeRingRecommendationPanel(false);
+  }, [isSubmittingHomeRingRecommendation]);
   const channelEventDurationHourOptions = Array.from(
     { length: Math.max(1, Math.floor(channelEventDurationMaxMinutes / 60) + 1) },
     (_, hour) => `${hour}`.padStart(2, '0'),
@@ -5121,6 +5614,8 @@ const FrontScreen = ({
     setShowChannelEventHypeCostInfo(previousValue => !previousValue);
   }, []);
   const canCreateChannelEvent = !isCreatingChannelEvent
+    && !isRecordingChannelEventVoiceNote
+    && !isChannelEventVoiceNotePending
     && !!selectedChannelEventType
     && channelEventName.trim().length > 0
     && channelEventDescription.trim().length > 0
@@ -5768,6 +6263,10 @@ const FrontScreen = ({
       const isOwnerMessage = String(msg?.sender_email ?? '') === ownerEmailValue;
       const messageText = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
 
+      if (parseChannelRingRecommendationThreadMessage(messageText)) {
+        return;
+      }
+
       if (!isOwnerMessage) {
         const senderHandle = normalizeChannelMessageUsername(msg);
         const activeKey = senderHandle ? activeThreadKeyByUsername[senderHandle] : '';
@@ -5874,6 +6373,7 @@ const FrontScreen = ({
     };
 
     const repliesByMessageKey: Record<string, InlineReply[]> = {};
+    const recommendationThreadEntriesByMessageKey: Record<string, ChannelRecommendationThreadEntry[]> = {};
     const processedMessages: any[] = [];
     const rawMessageKeysByConversationKey: Record<string, string[]> = {};
     const isViewerMode = options?.viewerMode ?? !!selectedChannel;
@@ -5885,6 +6385,28 @@ const FrontScreen = ({
       const rawKey = getChannelRawMessageKey(msg, rawIndex);
       const isOwnerMessage = String(msg?.sender_email ?? '') === ownerEmailForThisChat;
       const messageText = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
+      const parsedRecommendationThreadMessage = parseChannelRingRecommendationThreadMessage(messageText);
+
+      if (parsedRecommendationThreadMessage) {
+        const recommendationMessageKey = String(parsedRecommendationThreadMessage.recommendationMessageId || '').trim();
+        if (recommendationMessageKey) {
+          if (!recommendationThreadEntriesByMessageKey[recommendationMessageKey]) {
+            recommendationThreadEntriesByMessageKey[recommendationMessageKey] = [];
+          }
+          recommendationThreadEntriesByMessageKey[recommendationMessageKey].push({
+            id: msg?.id,
+            created_at: msg?.created_at,
+            text: parsedRecommendationThreadMessage.text,
+            entryKind: parsedRecommendationThreadMessage.entryKind,
+            viewerEmail: parsedRecommendationThreadMessage.viewerEmail,
+            viewerUsername: parsedRecommendationThreadMessage.viewerUsername,
+            senderEmail: normalizeOptionalString(msg?.sender_email),
+          });
+          if (!rawMessageKeysByConversationKey[recommendationMessageKey]) {rawMessageKeysByConversationKey[recommendationMessageKey] = [];}
+          rawMessageKeysByConversationKey[recommendationMessageKey].push(rawKey);
+        }
+        return;
+      }
 
       if (!isOwnerMessage) {
         const senderHandle = normalizeChannelMessageUsername(msg);
@@ -5950,6 +6472,12 @@ const FrontScreen = ({
           activityTimeByKey[key] = Math.max(activityTimeByKey[key] || 0, getChannelMessageSortKey(reply?.created_at, reply?.id));
         });
       });
+      Object.keys(recommendationThreadEntriesByMessageKey).forEach((key) => {
+        const entries = recommendationThreadEntriesByMessageKey[key] || [];
+        entries.forEach((entry) => {
+          activityTimeByKey[key] = Math.max(activityTimeByKey[key] || 0, getChannelMessageSortKey(entry?.created_at, entry?.id));
+        });
+      });
       processedMessages.sort((a: any, b: any) => {
         const ka = String(a?.__key ?? a?.id ?? '');
         const kb = String(b?.__key ?? b?.id ?? '');
@@ -5963,6 +6491,7 @@ const FrontScreen = ({
     return {
       processedMessages,
       repliesByMessageKey,
+      recommendationThreadEntriesByMessageKey,
       conversationKeysInOrder: processedMessages.map((msg: any, index: number) => String(msg?.__key ?? msg?.id ?? `idx-${index}`)),
       rawMessageKeysByConversationKey,
     };
@@ -6015,7 +6544,7 @@ const FrontScreen = ({
   }), [buildChannelChatThreadArtifacts, chatMessages, currentChannelOwnerEmail, selectedChannel]);
 
   const channelChatRenderModel = useMemo(() => {
-    const { processedMessages, repliesByMessageKey } = channelChatThreadArtifacts;
+    const { processedMessages, repliesByMessageKey, recommendationThreadEntriesByMessageKey } = channelChatThreadArtifacts;
 
     const normalizedUserEmail = String(userEmail ?? '').trim();
     const normalizedChannelOwnerEmail = String(currentChannelOwnerEmail ?? '').trim();
@@ -6028,6 +6557,11 @@ const FrontScreen = ({
         if (!key) {return false;}
 
         if (channelMessagesTab === 'Hilos') {
+          const rawMessage = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
+          if (isChannelRingRecommendationRootMessage(rawMessage)) {
+            return false;
+          }
+
           if (isChannelHostForThisView) {
             const replies = repliesByMessageKey[key] || [];
             return replies.some(r => r.author === 'publisher');
@@ -6045,6 +6579,10 @@ const FrontScreen = ({
         }
 
         const rawMessage = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
+        if (channelMessagesTab === 'Recomendaciones') {
+          return isChannelRingRecommendationRootMessage(rawMessage);
+        }
+
         if (channelMessagesTab === 'Eventos') {
           return !!parseChannelEventMessage(rawMessage);
         }
@@ -6059,6 +6597,7 @@ const FrontScreen = ({
     return {
       messagesToRender: baseMessagesToRender,
       repliesByMessageKey,
+      recommendationThreadEntriesByMessageKey,
     };
   }, [
     channelChatThreadArtifacts,
@@ -6254,6 +6793,7 @@ const FrontScreen = ({
       setIsSendingChannelImage(false);
       setShowChannelImageViewer(false);
       setChannelImageViewerUri(null);
+      setActiveRecommendationReplyContext(null);
     }
   }, [chatView, channelTab]);
 
@@ -6555,7 +7095,256 @@ const FrontScreen = ({
     ImageCropPicker.clean().catch(() => undefined);
   };
 
+  const requestChannelEventAudioPermission = async () => {
+    if (Platform.OS !== 'android') {
+      Alert.alert(permissionRequiredTitle, localize({
+        es: 'La nota de evento esta disponible solo en Android.',
+        en: 'The event note is currently available only on Android.',
+        fr: 'La note d\'événement est actuellement disponible uniquement sur Android.',
+        pt: 'A nota do evento está disponível apenas no Android.',
+        de: 'Die Event-Notiz ist derzeit nur auf Android verfügbar.',
+        it: 'La nota dell\'evento è attualmente disponibile solo su Android.',
+      }));
+      return false;
+    }
+
+    try {
+      const alreadyGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+      if (alreadyGranted) {
+        return true;
+      }
+
+      const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO, {
+        title: localize({
+          es: 'Permiso de microfono',
+          en: 'Microphone permission',
+          fr: 'Autorisation du microphone',
+          pt: 'Permissão do microfone',
+          de: 'Mikrofonberechtigung',
+          it: 'Autorizzazione del microfono',
+        }),
+        message: localize({
+          es: 'Keinti necesita acceso al microfono para grabar la nota del evento.',
+          en: 'Keinti needs microphone access to record the event note.',
+          fr: 'Keinti a besoin d\'accéder au microphone pour enregistrer la note de l\'événement.',
+          pt: 'A Keinti precisa de acesso ao microfone para gravar a nota do evento.',
+          de: 'Keinti benötigt Mikrofonzugriff, um die Event-Notiz aufzunehmen.',
+          it: 'Keinti ha bisogno dell\'accesso al microfono per registrare la nota dell\'evento.',
+        }),
+        buttonNeutral: t('reading.galleryPermissionAskLater' as TranslationKey),
+        buttonNegative: t('common.cancel' as TranslationKey),
+        buttonPositive: t('common.accept' as TranslationKey),
+      });
+
+      if (result === PermissionsAndroid.RESULTS.GRANTED) {
+        return true;
+      }
+
+      if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+        Alert.alert(permissionRequiredTitle, localize({
+          es: 'Activa el permiso de microfono desde los ajustes del dispositivo para grabar la nota del evento.',
+          en: 'Enable microphone access in your device settings to record the event note.',
+          fr: 'Active l\'accès au microphone dans les paramètres de l\'appareil pour enregistrer la note de l\'événement.',
+          pt: 'Ative o acesso ao microfone nas configurações do dispositivo para gravar a nota do evento.',
+          de: 'Aktiviere den Mikrofonzugriff in den Geräteeinstellungen, um die Event-Notiz aufzunehmen.',
+          it: 'Attiva l\'accesso al microfono nelle impostazioni del dispositivo per registrare la nota dell\'evento.',
+        }));
+      }
+    } catch {
+      // ignore
+    }
+
+    return false;
+  };
+
+  const resetChannelEventVoiceNoteRecordingState = () => {
+    if (channelEventVoiceNoteTimeoutRef.current) {
+      clearTimeout(channelEventVoiceNoteTimeoutRef.current);
+      channelEventVoiceNoteTimeoutRef.current = null;
+    }
+    channelEventVoiceNoteRecordingUriRef.current = null;
+    channelEventVoiceNoteDurationMsRef.current = 0;
+    isRecordingChannelEventVoiceNoteRef.current = false;
+    isStoppingChannelEventVoiceNoteRef.current = false;
+    setIsRecordingChannelEventVoiceNote(false);
+    setIsChannelEventVoiceNotePending(false);
+    setChannelEventVoiceNoteDurationMs(0);
+  };
+
+  const handleChangeChannelEventVoiceNoteText = (nextValue: string) => {
+    const normalizedValue = sanitizeChannelEventVoiceNoteTextInput(nextValue);
+    setChannelEventVoiceNoteText(normalizedValue);
+    setChannelEventVoiceNote(previousValue => (
+      previousValue
+        ? { ...previousValue, noteText: normalizedValue }
+        : previousValue
+    ));
+  };
+
+  const handleRemoveChannelEventVoiceNote = () => {
+    if (channelEventVoiceNoteLimitNoticeTimeoutRef.current) {
+      clearTimeout(channelEventVoiceNoteLimitNoticeTimeoutRef.current);
+      channelEventVoiceNoteLimitNoticeTimeoutRef.current = null;
+    }
+    setIsChannelEventVoiceNoteLimitNoticeVisible(false);
+    setChannelEventVoiceNote(null);
+  };
+
+  const markChannelEventVoiceNoteStoppingState = () => {
+    if (channelEventVoiceNoteTimeoutRef.current) {
+      clearTimeout(channelEventVoiceNoteTimeoutRef.current);
+      channelEventVoiceNoteTimeoutRef.current = null;
+    }
+
+    audioRecorderPlayer.removeRecordBackListener();
+    isRecordingChannelEventVoiceNoteRef.current = false;
+    isStoppingChannelEventVoiceNoteRef.current = true;
+    setIsRecordingChannelEventVoiceNote(false);
+    setIsChannelEventVoiceNotePending(true);
+  };
+
+  const handleStopChannelEventVoiceNoteRecording = async (reachedLimit = false) => {
+    if (!isRecordingChannelEventVoiceNoteRef.current || isStoppingChannelEventVoiceNoteRef.current) {
+      return;
+    }
+
+    const fallbackUri = channelEventVoiceNoteRecordingUriRef.current;
+    const capturedDurationMs = channelEventVoiceNoteDurationMsRef.current;
+    markChannelEventVoiceNoteStoppingState();
+    try {
+      const stoppedUri = await Promise.race<string>([
+        audioRecorderPlayer.stopRecorder().catch(() => fallbackUri || ''),
+        new Promise<string>(resolve => {
+          setTimeout(() => resolve(fallbackUri || ''), CHANNEL_EVENT_VOICE_NOTE_STOP_TIMEOUT_MS);
+        }),
+      ]);
+
+      const nextUri = String(stoppedUri || fallbackUri || '').trim();
+      if (!nextUri) {
+        Alert.alert(errorTitle, localize({
+          es: 'No se pudo guardar la nota del evento.',
+          en: 'The event note could not be saved.',
+          fr: 'La note de l\'événement n\'a pas pu être enregistrée.',
+          pt: 'Não foi possível guardar a nota do evento.',
+          de: 'Die Event-Notiz konnte nicht gespeichert werden.',
+          it: 'Non è stato possibile salvare la nota dell\'evento.',
+        }));
+        return;
+      }
+
+      const durationSeconds = Math.max(
+        1,
+        Math.min(CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_SECONDS, Math.ceil(capturedDurationMs / 1000)),
+      );
+
+      setChannelEventVoiceNote({
+        uri: nextUri,
+        durationSeconds,
+        mimeType: CHANNEL_EVENT_VOICE_NOTE_MIME_TYPE,
+        noteText: channelEventVoiceNoteText,
+      });
+
+      if (reachedLimit) {
+        if (channelEventVoiceNoteLimitNoticeTimeoutRef.current) {
+          clearTimeout(channelEventVoiceNoteLimitNoticeTimeoutRef.current);
+        }
+        setIsChannelEventVoiceNoteLimitNoticeVisible(true);
+        channelEventVoiceNoteLimitNoticeTimeoutRef.current = setTimeout(() => {
+          setIsChannelEventVoiceNoteLimitNoticeVisible(false);
+          channelEventVoiceNoteLimitNoticeTimeoutRef.current = null;
+        }, CHANNEL_EVENT_VOICE_NOTE_LIMIT_NOTICE_DURATION_MS);
+      }
+    } catch (error) {
+      console.error('Error al detener la nota de evento:', error);
+      Alert.alert(errorTitle, localize({
+        es: 'No se pudo detener la grabacion de la nota del evento.',
+        en: 'The event note recording could not be stopped.',
+        fr: 'L\'enregistrement de la note de l\'événement n\'a pas pu être arrêté.',
+        pt: 'Não foi possível parar a gravação da nota do evento.',
+        de: 'Die Aufnahme der Event-Notiz konnte nicht gestoppt werden.',
+        it: 'Non è stato possibile interrompere la registrazione della nota dell\'evento.',
+      }));
+    } finally {
+      resetChannelEventVoiceNoteRecordingState();
+    }
+  };
+
+  const handleStartChannelEventVoiceNoteRecording = async () => {
+    if (isRecordingChannelEventVoiceNote || isChannelEventVoiceNotePending) {
+      return;
+    }
+
+    const hasPermission = await requestChannelEventAudioPermission();
+    if (!hasPermission) {
+      return;
+    }
+
+    setIsChannelEventVoiceNotePending(true);
+    if (channelEventVoiceNoteLimitNoticeTimeoutRef.current) {
+      clearTimeout(channelEventVoiceNoteLimitNoticeTimeoutRef.current);
+      channelEventVoiceNoteLimitNoticeTimeoutRef.current = null;
+    }
+    setIsChannelEventVoiceNoteLimitNoticeVisible(false);
+    try {
+      await stopSharedVoiceNotePlayback();
+      await audioRecorderPlayer.stopRecorder().catch(() => undefined);
+      audioRecorderPlayer.removeRecordBackListener();
+      audioRecorderPlayer.setSubscriptionDuration(0.2);
+
+      channelEventVoiceNoteRecordingUriRef.current = null;
+      channelEventVoiceNoteDurationMsRef.current = 0;
+      isRecordingChannelEventVoiceNoteRef.current = false;
+      isStoppingChannelEventVoiceNoteRef.current = false;
+      setChannelEventVoiceNoteDurationMs(0);
+
+      const startedUri = await audioRecorderPlayer.startRecorder(undefined, CHANNEL_EVENT_VOICE_NOTE_AUDIO_SET, false);
+      channelEventVoiceNoteRecordingUriRef.current = String(startedUri || '').trim() || null;
+      isRecordingChannelEventVoiceNoteRef.current = true;
+      setIsRecordingChannelEventVoiceNote(true);
+      channelEventVoiceNoteTimeoutRef.current = setTimeout(() => {
+        channelEventVoiceNoteDurationMsRef.current = CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_MS;
+        setChannelEventVoiceNoteDurationMs(CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_MS);
+        audioRecorderPlayer.removeRecordBackListener();
+        void handleStopChannelEventVoiceNoteRecording(true);
+      }, CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_MS);
+
+      audioRecorderPlayer.addRecordBackListener((event: RecordBackType) => {
+        const nextDurationMs = Math.max(0, Math.floor(Number(event.currentPosition) || 0));
+        if (nextDurationMs >= CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_MS && !isStoppingChannelEventVoiceNoteRef.current) {
+          if (channelEventVoiceNoteTimeoutRef.current) {
+            clearTimeout(channelEventVoiceNoteTimeoutRef.current);
+            channelEventVoiceNoteTimeoutRef.current = null;
+          }
+          audioRecorderPlayer.removeRecordBackListener();
+          channelEventVoiceNoteDurationMsRef.current = CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_MS;
+          setChannelEventVoiceNoteDurationMs(CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_MS);
+          void handleStopChannelEventVoiceNoteRecording(true);
+          return;
+        }
+
+        channelEventVoiceNoteDurationMsRef.current = nextDurationMs;
+        setChannelEventVoiceNoteDurationMs(nextDurationMs);
+      });
+    } catch (error) {
+      console.error('Error al iniciar la nota de evento:', error);
+      resetChannelEventVoiceNoteRecordingState();
+      Alert.alert(errorTitle, localize({
+        es: 'No se pudo iniciar la grabacion de la nota del evento.',
+        en: 'The event note recording could not be started.',
+        fr: 'L\'enregistrement de la note de l\'événement n\'a pas pu démarrer.',
+        pt: 'Não foi possível iniciar a gravação da nota do evento.',
+        de: 'Die Aufnahme der Event-Notiz konnte nicht gestartet werden.',
+        it: 'Non è stato possibile avviare la registrazione della nota dell\'evento.',
+      }));
+    } finally {
+      setIsChannelEventVoiceNotePending(false);
+    }
+  };
+
   const resetChannelEventDraft = () => {
+    audioRecorderPlayer.removeRecordBackListener();
+    audioRecorderPlayer.stopRecorder().catch(() => undefined);
+    stopSharedVoiceNotePlayback().catch(() => undefined);
     setShowChannelEventTypeOptions(false);
     setShowChannelEventSocialOptions(false);
     setChannelEventTypeSearchQuery('');
@@ -6580,6 +7369,8 @@ const FrontScreen = ({
     setChannelEventHypeCostInput('');
     setShowChannelEventHypeCostInfo(false);
     setChannelEventImageUri(null);
+    setChannelEventVoiceNote(null);
+    setChannelEventVoiceNoteText('');
     setChannelEventTasksEnabled(false);
     setChannelEventAssignTaskEnabled(false);
     setChannelEventRewardTaskEnabled(false);
@@ -6589,6 +7380,7 @@ const FrontScreen = ({
     setChannelEventTaskAssigneeErrors(['', '', '']);
     setChannelEventTaskAssignments([[], [], []]);
     setChannelEventDurationMinutes(null);
+    resetChannelEventVoiceNoteRecordingState();
   };
 
   const handleCreateBasicChannelEvent = async () => {
@@ -6666,6 +7458,23 @@ const FrontScreen = ({
         imageUrl = await uploadImage(imageUrl, authToken, { postId: targetPostId, timeoutMs: 120000 });
       }
 
+      let uploadedEventAudio: ChannelEventMessageVoiceNote | null = null;
+      if (channelEventVoiceNote) {
+        let eventAudioUrl = String(channelEventVoiceNote.uri || '').trim();
+        if (eventAudioUrl && !eventAudioUrl.startsWith('http')) {
+          eventAudioUrl = await uploadImage(eventAudioUrl, authToken, { postId: targetPostId, timeoutMs: 120000 });
+        }
+
+        if (eventAudioUrl) {
+          uploadedEventAudio = {
+            url: eventAudioUrl,
+            durationSeconds: Math.max(1, Math.floor(Number(channelEventVoiceNote.durationSeconds) || 0)),
+            mimeType: channelEventVoiceNote.mimeType || CHANNEL_EVENT_VOICE_NOTE_MIME_TYPE,
+            noteText: normalizeChannelEventVoiceNoteText(channelEventVoiceNote.noteText),
+          };
+        }
+      }
+
       const taskEventExpiresAt = isTaskEvent
         ? getChannelEventExpiresAtIso(channelEventDurationMinutes, channelEventSourceCreatedAt)
         : null;
@@ -6678,6 +7487,7 @@ const FrontScreen = ({
         typeKey: selectedChannelEventType,
         hypeCost: Number.parseInt(sanitizeChannelEventAmountInput(channelEventHypeCostInput), 10) || 0,
         imageUrl,
+        eventAudio: uploadedEventAudio,
         tasksEnabled: isTaskEvent,
         durationMinutes: isTaskEvent ? channelEventDurationMinutes : null,
         expiresAt: taskEventExpiresAt,
@@ -7354,7 +8164,7 @@ const FrontScreen = ({
     if (!/^https?:/i.test(candidate)) {return candidate;}
 
     try {
-      const hostMatch = candidate.match(/^https?:\/\/([^\/?#]+)/i);
+      const hostMatch = candidate.match(/^https?:\/\/([^/?#]+)/i);
       const host = String(hostMatch?.[1] || '').toLowerCase();
       if (!host) {return candidate;}
 
@@ -7463,6 +8273,115 @@ const FrontScreen = ({
     }, []);
   };
 
+  const getRecommendationThreadViewerKey = useCallback((viewerEmail?: string | null, viewerUsername?: string | null) => {
+    const emailKey = normalizeEmailKey(viewerEmail);
+    if (emailKey) {
+      return emailKey;
+    }
+
+    return String(viewerUsername || '').trim().replace(/^@+/, '').toLowerCase();
+  }, []);
+
+  const buildRecommendationThreadItems = useCallback((recommendationMessageKey: string): ChannelRecommendationThreadItem[] => {
+    const entries = channelChatRenderModel.recommendationThreadEntriesByMessageKey[recommendationMessageKey] || [];
+    if (!entries.length) {
+      return [];
+    }
+
+    const viewerItems = new Map<string, ChannelRecommendationThreadViewerItem>();
+    entries.forEach((entry) => {
+      if (entry.entryKind !== 'viewer-root') {
+        return;
+      }
+
+      const viewerKey = getRecommendationThreadViewerKey(entry.viewerEmail, entry.viewerUsername);
+      if (!viewerKey) {
+        return;
+      }
+
+      const entrySortKey = getChannelMessageSortKey(entry?.created_at, entry?.id);
+      const existing = viewerItems.get(viewerKey);
+      if (!existing || entrySortKey >= getChannelMessageSortKey(existing.rootEntry?.created_at, existing.rootEntry?.id)) {
+        viewerItems.set(viewerKey, {
+          type: 'viewer-root',
+          key: `viewer-root:${viewerKey}`,
+          viewerEmail: entry.viewerEmail,
+          viewerUsername: entry.viewerUsername,
+          rootEntry: entry,
+          directReplies: existing?.directReplies || [],
+          sortKey: Math.max(entrySortKey, existing?.sortKey || 0),
+        });
+      }
+    });
+
+    const globalItems: ChannelRecommendationThreadGlobalItem[] = [];
+    entries.forEach((entry, entryIndex) => {
+      if (entry.entryKind === 'host-global') {
+        globalItems.push({
+          type: 'host-global',
+          key: `host-global:${String(entry?.id ?? entry?.created_at ?? entryIndex)}`,
+          entry,
+          sortKey: getChannelMessageSortKey(entry?.created_at, entry?.id),
+        });
+        return;
+      }
+
+      if (entry.entryKind !== 'host-direct') {
+        return;
+      }
+
+      const viewerKey = getRecommendationThreadViewerKey(entry.viewerEmail, entry.viewerUsername);
+      if (!viewerKey) {
+        return;
+      }
+
+      const existing = viewerItems.get(viewerKey);
+      if (!existing) {
+        return;
+      }
+
+      existing.directReplies.push(entry);
+      existing.sortKey = Math.max(existing.sortKey, getChannelMessageSortKey(entry?.created_at, entry?.id));
+    });
+
+    const viewerResults = Array.from(viewerItems.values()).map((item) => ({
+      ...item,
+      directReplies: [...item.directReplies].sort((left, right) => (
+        getChannelMessageSortKey(right?.created_at, right?.id) - getChannelMessageSortKey(left?.created_at, left?.id)
+      )),
+      sortKey: Math.max(
+        getChannelMessageSortKey(item.rootEntry?.created_at, item.rootEntry?.id),
+        ...item.directReplies.map(reply => getChannelMessageSortKey(reply?.created_at, reply?.id)),
+      ),
+    }));
+
+    return [...viewerResults, ...globalItems].sort((left, right) => {
+      if (left.sortKey !== right.sortKey) {
+        return right.sortKey - left.sortKey;
+      }
+
+      return left.key.localeCompare(right.key);
+    });
+  }, [channelChatRenderModel.recommendationThreadEntriesByMessageKey, getChannelMessageSortKey, getRecommendationThreadViewerKey]);
+
+  const toggleRecommendationReplyContext = useCallback((context: RecommendationReplyComposerContext) => {
+    setShowChannelAttachmentPanel(false);
+    setReplyingToMessageIndex(null);
+    setReplyingToUsername(null);
+    setActiveRecommendationReplyContext(previousValue => {
+      const previousViewerKey = previousValue
+        ? getRecommendationThreadViewerKey(previousValue.viewerEmail, previousValue.viewerUsername)
+        : '';
+      const nextViewerKey = getRecommendationThreadViewerKey(context.viewerEmail, context.viewerUsername);
+      const isSameContext = !!previousValue
+        && previousValue.recommendationMessageKey === context.recommendationMessageKey
+        && previousValue.entryKind === context.entryKind
+        && previousViewerKey === nextViewerKey;
+
+      return isSameContext ? null : context;
+    });
+  }, [getRecommendationThreadViewerKey]);
+
   const openExpandedChannelReading = (payload: ChannelReadingMessagePayload, message?: any) => {
     setExpandedChannelReading({ payload, message });
   };
@@ -7560,6 +8479,14 @@ const FrontScreen = ({
     };
     const publishedDateLabel = formatChannelReadingPublishedDateLabel(payload.date, options?.message);
     const categoryLabel = formatChannelReadingCategoryLabel(payload.category);
+    const audioInsertionCount = Array.isArray(payload.insertions)
+      ? payload.insertions.reduce((count, insertion) => (
+        insertion?.type === 'voice-note' && insertion.url ? count + 1 : count
+      ), 0)
+      : 0;
+    const audioNoteCount = (payload.introAudio?.url ? 1 : 0)
+      + audioInsertionCount
+      + (payload.outroAudio?.url ? 1 : 0);
 
     const imageUris = Array.isArray(payload.imageUrls)
       ? payload.imageUrls.map((item) => normalizeReadingMediaUri(item)).filter(Boolean)
@@ -7573,6 +8500,14 @@ const FrontScreen = ({
       pt: 'Leitura',
       de: 'Lesung',
       it: 'Lettura',
+    });
+    const audioFooterLabel = localize({
+      es: 'Nota',
+      en: 'Note',
+      fr: 'Note',
+      pt: 'Nota',
+      de: 'Notiz',
+      it: 'Nota',
     });
 
     return (
@@ -7630,10 +8565,246 @@ const FrontScreen = ({
                 <MaterialIcons name="lock-outline" size={14} color="#FFFFFF" style={{ marginLeft: 6, opacity: 0.85 }} />
               ) : null}
             </TouchableOpacity>
+            {audioNoteCount > 0 ? (
+              <View style={styles.channelReadingMessageAudioMetaRow}>
+                <MaterialIcons name="graphic-eq" size={16} color="rgba(255,255,255,0.92)" />
+                <Text style={styles.channelReadingMessageAudioMetaLabel}>{audioFooterLabel}</Text>
+                <Text style={styles.channelReadingMessageAudioMetaCount}>{audioNoteCount}</Text>
+              </View>
+            ) : null}
             {!!publishedDateLabel && <Text style={styles.channelReadingMessagePublishedDate}>{publishedDateLabel}</Text>}
             {!!categoryLabel && <Text style={styles.channelReadingMessageCategory}>{categoryLabel}</Text>}
           </View>
         </View>
+      </View>
+    );
+  };
+
+  const renderChannelRingRecommendationMessageCard = (
+    payload: ChannelRingRecommendationMessagePayload,
+    options?: {
+      onOpenImage?: (uri: string) => void;
+      canOpenImage?: boolean;
+    }
+  ) => {
+    const normalizeRecommendationMediaUri = (rawUri: string) => {
+      const uri = String(rawUri || '').trim();
+      if (!uri) {return '';}
+      if (/^(https?:|file:|content:|data:)/i.test(uri)) {return uri;}
+      if (uri.startsWith('/api/') || uri.startsWith('/uploads/')) {return getServerResourceUrl(uri);}
+      if (uri.startsWith('api/') || uri.startsWith('uploads/')) {return getServerResourceUrl(`/${uri}`);}
+      return uri;
+    };
+
+    const recommendationLabel = localize({
+      es: 'Recomendación',
+      en: 'Recommendation',
+      fr: 'Recommandation',
+      pt: 'Recomendação',
+      de: 'Empfehlung',
+      it: 'Raccomandazione',
+    });
+    const creatorHandle = formatUsernameWithAt(String(payload?.creator?.username || fallbackUserLabel));
+    const creatorAvatarUri = payload?.creator?.profilePhotoUri
+      ? normalizeRecommendationMediaUri(payload.creator.profilePhotoUri)
+      : '';
+    const creatorSocials = getRenderableReadingCitationUserSocials(Array.isArray(payload?.creator?.socialNetworks)
+      ? payload.creator.socialNetworks
+      : []);
+    const creatorSocialViewportCount = Math.min(creatorSocials.length, HOME_PUBLICATION_SOCIAL_VIEWPORT_COUNT);
+    const creatorSocialViewportWidth = creatorSocialViewportCount > 0
+      ? (creatorSocialViewportCount * HOME_PUBLICATION_SOCIAL_ICON_SIZE)
+        + ((creatorSocialViewportCount - 1) * HOME_PUBLICATION_SOCIAL_ICON_GAP)
+      : 0;
+    const ringTitle = String(payload?.ring?.name || '').trim();
+    const recommendationRingColor = payload?.ring?.color || '#FFFFFF';
+    const imageUri = normalizeRecommendationMediaUri(payload?.sourceImageUrl || '');
+    const canOpenImage = options?.canOpenImage !== false;
+    const recommendationImageWidth = Math.max(
+      220,
+      Math.min(Math.round((SCREEN_WIDTH * 0.8) - 44), Math.round(220 * 1.2))
+    );
+    const openRecommendedRing = () => {
+      openHomeProfileRingViewerPanelFromContext({
+        publicationId: String(payload?.sourcePublicationId || '').trim(),
+        ring: payload.ring,
+        image: payload?.sourceImageUrl
+          ? {
+            uri: String(payload.sourceImageUrl || '').trim(),
+            aspectRatio: payload.sourceImageAspectRatio || undefined,
+          }
+          : null,
+        creator: {
+          username: String(payload?.creator?.username || '').trim(),
+          email: payload?.creator?.email || undefined,
+          profilePhotoUri: payload?.creator?.profilePhotoUri || undefined,
+          socialNetworks: Array.isArray(payload?.creator?.socialNetworks)
+            ? payload.creator.socialNetworks.map(item => ({
+              id: String(item?.network || '').trim(),
+              link: String(item?.link || '').trim(),
+            })).filter(item => item.id && item.link)
+            : [],
+          accountVerified: !!payload?.creator?.accountVerified,
+          keintiVerified: !!payload?.creator?.keintiVerified,
+        },
+      });
+    };
+
+    return (
+      <View style={styles.channelEventMessageCard}>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={openRecommendedRing}
+          style={{ paddingBottom: imageUri ? 10 : 0 }}
+        >
+          <View style={styles.channelEventMessageContent}>
+            <Text style={[styles.channelEventMessageName, { fontWeight: '400' }]}>{recommendationLabel}</Text>
+
+            {ringTitle ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
+                <Text
+                  style={{ color: '#FFFFFF', fontSize: 15, fontWeight: '800', flexShrink: 1 }}
+                  numberOfLines={2}
+                >
+                  {ringTitle}
+                </Text>
+                {!imageUri ? (
+                  <View
+                    style={{
+                      width: 14,
+                      height: 14,
+                      borderRadius: 7,
+                      borderWidth: 2,
+                      borderColor: recommendationRingColor,
+                      backgroundColor: withHexAlpha(recommendationRingColor, 0.38),
+                      marginLeft: 10,
+                      flexShrink: 0,
+                    }}
+                  />
+                ) : null}
+              </View>
+            ) : null}
+
+            <View style={{ marginTop: 12, flexDirection: 'row', alignItems: 'center' }}>
+              {creatorAvatarUri ? (
+                <Image
+                  source={{ uri: creatorAvatarUri }}
+                  style={{ width: 42, height: 42, borderRadius: 21, marginRight: 10 }}
+                  resizeMode="cover"
+                />
+              ) : (
+                <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: '#444', marginRight: 10, alignItems: 'center', justifyContent: 'center' }}>
+                  <MaterialIcons name="person" size={18} color="#FFFFFF" />
+                </View>
+              )}
+
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
+                  {payload?.creator?.accountVerified ? (
+                    <View style={{ marginRight: 6 }}>
+                      <VerifiedBadgeIcon size={12} solidColor="#FFFFFF" solidOpacity={0.6} />
+                    </View>
+                  ) : null}
+                  <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: '800', flexShrink: 1 }}>{creatorHandle}</Text>
+                  {payload?.creator?.keintiVerified ? (
+                    <View style={{ marginLeft: 6 }}>
+                      <VerifiedBadgeIcon size={12} variant="gradient" />
+                    </View>
+                  ) : null}
+                </View>
+
+                {creatorSocials.length > 0 ? (
+                  <View style={{ marginTop: 8 }}>
+                    <View
+                      style={{
+                        width: creatorSocialViewportWidth + (HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING * 2),
+                        height: 28,
+                        marginHorizontal: -HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING,
+                        paddingHorizontal: HOME_PUBLICATION_SOCIAL_TOUCH_HORIZONTAL_PADDING,
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <View style={{ width: creatorSocialViewportWidth, height: 24, overflow: 'hidden' }}>
+                        <ScrollView
+                          horizontal
+                          directionalLockEnabled
+                          showsHorizontalScrollIndicator={false}
+                          scrollEnabled={creatorSocials.length > HOME_PUBLICATION_SOCIAL_VIEWPORT_COUNT}
+                          style={{ height: 24 }}
+                          scrollEventThrottle={16}
+                          contentContainerStyle={{ alignItems: 'center', paddingVertical: 2, paddingRight: 4 }}
+                        >
+                          {creatorSocials.map((social, socialIndex) => {
+                            const isLastSocial = socialIndex === creatorSocials.length - 1;
+
+                            return (
+                              <TouchableOpacity
+                                key={`recommendation-social-${social.key}`}
+                                onPress={() => openExternalLink(social.link)}
+                                activeOpacity={0.7}
+                                style={{ marginRight: isLastSocial ? 0 : HOME_PUBLICATION_SOCIAL_ICON_GAP, paddingVertical: 2 }}
+                              >
+                                <Image
+                                  source={social.iconSource}
+                                  style={{ width: HOME_PUBLICATION_SOCIAL_ICON_SIZE, height: HOME_PUBLICATION_SOCIAL_ICON_SIZE, resizeMode: 'contain' }}
+                                />
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </ScrollView>
+                      </View>
+                    </View>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+          </View>
+        </TouchableOpacity>
+
+        {imageUri ? (
+          <TouchableOpacity
+            activeOpacity={canOpenImage ? 0.9 : 1}
+            disabled={!canOpenImage}
+            onPress={() => {
+              if (!canOpenImage) {return;}
+              options?.onOpenImage ? options.onOpenImage(imageUri) : openChannelImageViewer(imageUri);
+            }}
+            style={{ width: '100%', alignItems: 'center' }}
+          >
+            <View style={{ width: recommendationImageWidth, maxWidth: recommendationImageWidth }}>
+              <Image
+                source={{ uri: imageUri }}
+                style={styles.channelEventMessageImage}
+                resizeMode="cover"
+              />
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  top: 10,
+                  right: 10,
+                  width: 22,
+                  height: 22,
+                  borderRadius: 11,
+                  backgroundColor: 'rgba(0,0,0,0.28)',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <View
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: 7,
+                    borderWidth: 2,
+                    borderColor: recommendationRingColor,
+                    backgroundColor: withHexAlpha(recommendationRingColor, 0.38),
+                  }}
+                />
+              </View>
+            </View>
+          </TouchableOpacity>
+        ) : null}
       </View>
     );
   };
@@ -7690,8 +8861,10 @@ const FrontScreen = ({
       ? (expandedReadingHostSocialViewportCount * READING_CITATION_USER_SOCIAL_ICON_SIZE)
         + ((expandedReadingHostSocialViewportCount - 1) * READING_CITATION_USER_SOCIAL_ICON_GAP)
       : 0;
+    const introAudio = payload.introAudio || null;
     const bodySections = Array.isArray(payload.bodySections) ? payload.bodySections : [];
     const insertions = Array.isArray(payload.insertions) ? payload.insertions : [];
+    const outroAudio = payload.outroAudio || null;
     const citationsBySection = (Array.isArray(payload.citations) ? payload.citations : []).reduce<Record<number, ChannelReadingCitation[]>>((accumulator, citation) => {
       if (!accumulator[citation.sectionIndex]) {
         accumulator[citation.sectionIndex] = [];
@@ -7711,6 +8884,18 @@ const FrontScreen = ({
 
     return (
       <>
+        {introAudio?.url ? (
+          <View style={styles.expandedChannelReadingVoiceNoteSection}>
+            <VoiceNotePlayer
+              uri={resolveReadingMediaUri(introAudio.url)}
+              durationSeconds={introAudio.durationSeconds}
+              title="Nota inicial"
+              subtitle={introAudio.noteText || 'Se reproduce antes del contenido principal.'}
+              variant="reader"
+            />
+          </View>
+        ) : null}
+
         {bodySections.map((sectionText, index) => {
           const trailingInsertion = insertions[index] ?? null;
           const hasSectionContent = String(sectionText || '').length > 0;
@@ -7741,9 +8926,33 @@ const FrontScreen = ({
                   />
                 </TouchableOpacity>
               ) : null}
+
+              {trailingInsertion?.type === 'voice-note' && trailingInsertion.url ? (
+                <View style={styles.expandedChannelReadingVoiceNoteSection}>
+                  <VoiceNotePlayer
+                    uri={resolveReadingMediaUri(trailingInsertion.url)}
+                    durationSeconds={trailingInsertion.durationSeconds}
+                    title="Nota de voz"
+                    subtitle={trailingInsertion.noteText || 'Audio insertado en el cuerpo de la lectura.'}
+                    variant="reader"
+                  />
+                </View>
+              ) : null}
             </React.Fragment>
           );
         })}
+
+        {outroAudio?.url ? (
+          <View style={styles.expandedChannelReadingVoiceNoteSection}>
+            <VoiceNotePlayer
+              uri={resolveReadingMediaUri(outroAudio.url)}
+              durationSeconds={outroAudio.durationSeconds}
+              title="Nota final"
+              subtitle={outroAudio.noteText || 'Se reproduce despues del cuerpo de la lectura.'}
+              variant="reader"
+            />
+          </View>
+        ) : null}
 
         {!!publishedDateLabel && (
           <Text style={styles.expandedChannelReadingPublishedDate}>{publishedDateLabel}</Text>
@@ -7888,14 +9097,33 @@ const FrontScreen = ({
       payload.durationMinutes,
       channelEventCountdownNowMs,
     );
-    const imageUriRaw = String(payload.imageUrl || '').trim();
-    const imageUri = imageUriRaw && !/^(https?:|file:|content:|data:)/i.test(imageUriRaw)
-      ? (imageUriRaw.startsWith('/api/') || imageUriRaw.startsWith('/uploads/')
-        ? getServerResourceUrl(imageUriRaw)
-        : imageUriRaw.startsWith('api/') || imageUriRaw.startsWith('uploads/')
-          ? getServerResourceUrl(`/${imageUriRaw}`)
-          : imageUriRaw)
-      : imageUriRaw;
+    const normalizeChannelEventMediaUri = (rawUri: string) => {
+      const trimmedUri = String(rawUri || '').trim();
+      if (!trimmedUri) {return '';}
+      if (/^(https?:|file:|content:|data:)/i.test(trimmedUri)) {return trimmedUri;}
+      if (trimmedUri.startsWith('/api/') || trimmedUri.startsWith('/uploads/')) {return getServerResourceUrl(trimmedUri);}
+      if (trimmedUri.startsWith('api/') || trimmedUri.startsWith('uploads/')) {return getServerResourceUrl(`/${trimmedUri}`);}
+      return trimmedUri;
+    };
+    const imageUri = normalizeChannelEventMediaUri(payload.imageUrl || '');
+    const eventAudio = payload.eventAudio || null;
+    const eventAudioUri = eventAudio?.url ? normalizeChannelEventMediaUri(eventAudio.url) : '';
+    const eventAudioTitle = localize({
+      es: 'Nota de evento',
+      en: 'Event note',
+      fr: 'Note d\'événement',
+      pt: 'Nota do evento',
+      de: 'Event-Notiz',
+      it: 'Nota evento',
+    });
+    const eventAudioSubtitle = eventAudio?.noteText || localize({
+      es: 'Se reproduce antes del nombre del evento.',
+      en: 'It plays before the event name.',
+      fr: 'Elle se lit avant le nom de l\'événement.',
+      pt: 'É reproduzida antes do nome do evento.',
+      de: 'Sie wird vor dem Eventnamen abgespielt.',
+      it: 'Viene riprodotta prima del nome dell\'evento.',
+    });
     const canOpenImage = options?.canOpenImage !== false;
 
     return (
@@ -7921,6 +9149,17 @@ const FrontScreen = ({
           </TouchableOpacity>
         )}
         <View style={styles.channelEventMessageContent}>
+          {eventAudioUri ? (
+            <View style={styles.channelEventMessageVoiceNoteSection}>
+              <VoiceNotePlayer
+                uri={eventAudioUri}
+                durationSeconds={eventAudio?.durationSeconds}
+                title={eventAudioTitle}
+                subtitle={eventAudioSubtitle}
+                variant="reader"
+              />
+            </View>
+          ) : null}
           <Text style={styles.channelEventMessageName}>{payload.name}</Text>
           <Text style={styles.channelEventMessageDescription}>{payload.description}</Text>
 
@@ -8052,6 +9291,190 @@ const FrontScreen = ({
           ) : null}
         </View>
       </View>
+    );
+  };
+
+  const renderChannelEventVoiceNoteComposer = () => {
+    const voiceNoteTitle = localize({
+      es: 'Nota de evento',
+      en: 'Event note',
+      fr: 'Note d\'événement',
+      pt: 'Nota do evento',
+      de: 'Event-Notiz',
+      it: 'Nota evento',
+    });
+    const voiceNotePlaceholder = localize({
+      es: 'Se reproducira antes del nombre del evento.',
+      en: 'It will play before the event name.',
+      fr: 'Elle se lira avant le nom de l\'événement.',
+      pt: 'Será reproduzida antes do nome do evento.',
+      de: 'Sie wird vor dem Eventnamen abgespielt.',
+      it: 'Verrà riprodotta prima del nome dell\'evento.',
+    });
+    const recordLabel = localize({
+      es: 'Grabar',
+      en: 'Record',
+      fr: 'Enregistrer',
+      pt: 'Gravar',
+      de: 'Aufnehmen',
+      it: 'Registra',
+    });
+    const rerecordLabel = localize({
+      es: 'Regrabar',
+      en: 'Record again',
+      fr: 'Réenregistrer',
+      pt: 'Gravar novamente',
+      de: 'Neu aufnehmen',
+      it: 'Registra di nuovo',
+    });
+    const recordingLabel = localize({
+      es: 'Grabando',
+      en: 'Recording',
+      fr: 'Enregistrement',
+      pt: 'Gravando',
+      de: 'Aufnahme',
+      it: 'Registrazione',
+    });
+    const limitNoticeTitle = localize({
+      es: 'Duracion maxima alcanzada',
+      en: 'Maximum duration reached',
+      fr: 'Durée maximale atteinte',
+      pt: 'Duração máxima atingida',
+      de: 'Maximale Dauer erreicht',
+      it: 'Durata massima raggiunta',
+    });
+    const limitNoticeBody = localize({
+      es: 'La nota del evento se ha detenido al alcanzar 60 segundos.',
+      en: 'The event note stopped after reaching 60 seconds.',
+      fr: 'La note de l\'événement s\'est arrêtée après 60 secondes.',
+      pt: 'A nota do evento foi interrompida ao atingir 60 segundos.',
+      de: 'Die Event-Notiz wurde nach 60 Sekunden gestoppt.',
+      it: 'La nota dell\'evento si è fermata dopo 60 secondi.',
+    });
+    const recordButtonDisabled = isChannelEventVoiceNotePending;
+    const limitNotice = isChannelEventVoiceNoteLimitNoticeVisible ? (
+      <View style={styles.channelEventVoiceNoteLimitNotice}>
+        <MaterialIcons name="schedule" size={44} color="rgba(255,255,255,0.7)" />
+        <Text style={styles.channelEventVoiceNoteLimitNoticeTitle}>{limitNoticeTitle}</Text>
+        <Text style={styles.channelEventVoiceNoteLimitNoticeBody}>{limitNoticeBody}</Text>
+      </View>
+    ) : null;
+    const noteTextInput = (
+      <TextInput
+        value={channelEventVoiceNoteText}
+        onChangeText={handleChangeChannelEventVoiceNoteText}
+        placeholder={voiceNotePlaceholder}
+        placeholderTextColor="rgba(255,255,255,0.45)"
+        style={styles.channelEventVoiceNoteTextInput}
+        maxLength={CHANNEL_EVENT_VOICE_NOTE_TEXT_MAX_LENGTH}
+        autoCapitalize="sentences"
+        autoCorrect
+      />
+    );
+
+    if (isRecordingChannelEventVoiceNote) {
+      const recordingSeconds = Math.min(
+        CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_SECONDS,
+        Math.max(1, Math.ceil(channelEventVoiceNoteDurationMs / 1000)),
+      );
+
+      return (
+        <>
+          {limitNotice}
+          <View style={styles.channelEventVoiceNoteRecordingCard}>
+            <View style={styles.channelEventVoiceNoteRecordingIndicator} />
+            <View style={styles.channelEventVoiceNoteComposerCopy}>
+              <Text style={styles.channelEventVoiceNoteComposerTitle}>{voiceNoteTitle}</Text>
+              {noteTextInput}
+              <Text style={styles.channelEventVoiceNoteRecordingStatus}>{`${recordingLabel} ${recordingSeconds}/${CHANNEL_EVENT_VOICE_NOTE_MAX_DURATION_SECONDS} s`}</Text>
+            </View>
+            <Pressable
+              disabled={isChannelEventVoiceNotePending}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              pressRetentionOffset={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              onPressIn={() => { void handleStopChannelEventVoiceNoteRecording(); }}
+              style={({ pressed }) => [
+                styles.channelEventVoiceNoteStopButton,
+                pressed && !isChannelEventVoiceNotePending ? styles.channelEventVoiceNoteStopButtonPressed : null,
+              ]}
+            >
+              {isChannelEventVoiceNotePending ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <MaterialIcons name="stop" size={18} color="#FFFFFF" />
+              )}
+            </Pressable>
+          </View>
+        </>
+      );
+    }
+
+    if (channelEventVoiceNote) {
+      return (
+        <>
+          {limitNotice}
+          <VoiceNotePlayer
+            uri={channelEventVoiceNote.uri}
+            durationSeconds={channelEventVoiceNote.durationSeconds}
+            title={voiceNoteTitle}
+            subtitleInputValue={channelEventVoiceNoteText}
+            onChangeSubtitleInput={handleChangeChannelEventVoiceNoteText}
+            subtitleInputPlaceholder={voiceNotePlaceholder}
+            subtitleInputMaxLength={CHANNEL_EVENT_VOICE_NOTE_TEXT_MAX_LENGTH}
+            onRemove={handleRemoveChannelEventVoiceNote}
+            variant="composer"
+          />
+
+          <TouchableOpacity
+            activeOpacity={recordButtonDisabled ? 1 : 0.85}
+            disabled={recordButtonDisabled}
+            onPress={() => { void handleStartChannelEventVoiceNoteRecording(); }}
+            style={[
+              styles.channelEventVoiceNoteSecondaryButton,
+              recordButtonDisabled ? styles.channelEventVoiceNoteActionDisabled : null,
+            ]}
+          >
+            {recordButtonDisabled ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <MaterialIcons name="keyboard-voice" size={16} color="#FFFFFF" />
+            )}
+            <Text style={styles.channelEventVoiceNoteSecondaryButtonText}>{rerecordLabel}</Text>
+          </TouchableOpacity>
+        </>
+      );
+    }
+
+    return (
+      <>
+        {limitNotice}
+        <View style={styles.channelEventVoiceNoteComposerCard}>
+          <View style={styles.channelEventVoiceNoteComposerHeader}>
+            <MaterialIcons name="keyboard-voice" size={18} color="#FFFFFF" />
+            <View style={styles.channelEventVoiceNoteComposerCopy}>
+              <Text style={styles.channelEventVoiceNoteComposerTitle}>{voiceNoteTitle}</Text>
+              {noteTextInput}
+            </View>
+          </View>
+
+          <TouchableOpacity
+            activeOpacity={recordButtonDisabled ? 1 : 0.85}
+            disabled={recordButtonDisabled}
+            onPress={() => { void handleStartChannelEventVoiceNoteRecording(); }}
+            style={[
+              styles.channelEventVoiceNotePrimaryAction,
+              recordButtonDisabled ? styles.channelEventVoiceNoteActionDisabled : null,
+            ]}
+          >
+            {recordButtonDisabled ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <MaterialIcons name="keyboard-voice" size={16} color="#FFFFFF" />
+            )}
+            <Text style={styles.channelEventVoiceNotePrimaryActionText}>{recordLabel}</Text>
+          </TouchableOpacity>
+        </View>
+      </>
     );
   };
 
@@ -8287,6 +9710,7 @@ const FrontScreen = ({
     setChannelMessagesTab('General');
     setReplyingToMessageIndex(null);
     setReplyingToUsername(null);
+    setActiveRecommendationReplyContext(null);
     setExpandedMention(null);
     setChannelInteractions([]);
     // IMPORTANT: set the ref synchronously so the first fetch can reliably clear the loader.
@@ -9045,12 +10469,17 @@ const FrontScreen = ({
   const profileRingPlacementEnabledRef = useRef(false);
   const profileRingHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [profileRingPoints, setProfileRingPoints] = useState<ProfileRingPoint[]>([]);
+  const profileRingPointsRef = useRef<ProfileRingPoint[]>([]);
   const [profileCarouselImageLayouts, setProfileCarouselImageLayouts] = useState<Record<number, { width: number; height: number }>>({});
 
   const [isProfileRingsHydrating, setIsProfileRingsHydrating] = useState(false);
   const isProfileRingsHydratingRef = useRef(false);
   const profileRingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const profileRingsLastSavedSigRef = useRef<string>('');
+
+  useEffect(() => {
+    profileRingPointsRef.current = profileRingPoints;
+  }, [profileRingPoints]);
 
   useEffect(() => {
     isProfileRingsHydratingRef.current = isProfileRingsHydrating;
@@ -9145,6 +10574,7 @@ const FrontScreen = ({
   // Hydrate created rings from Supabase (via backend) when session starts.
   useEffect(() => {
     if (!authToken) {
+      profileRingPointsRef.current = [];
       setProfileRingPoints([]);
       profileRingsLastSavedSigRef.current = '';
       return;
@@ -9171,6 +10601,7 @@ const FrontScreen = ({
         profileRingsLastSavedSigRef.current = sig;
 
         if (!didCancel) {
+          profileRingPointsRef.current = rings;
           setProfileRingPoints(rings);
         }
       } catch (e) {
@@ -9294,12 +10725,36 @@ const FrontScreen = ({
   const [profileRingColorPanelAnimation] = useState(new Animated.Value(PROFILE_RING_PANEL_HIDDEN_Y));
   const profileRingPanelScrollRef = useRef<ScrollView | null>(null);
   const [selectedProfileRingId, setSelectedProfileRingId] = useState<string | null>(null);
+  const selectedProfileRingIdRef = useRef<string | null>(null);
+  const profileRingPanelOverlayGuardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    selectedProfileRingIdRef.current = selectedProfileRingId;
+  }, [selectedProfileRingId]);
+
+  const armProfileRingPanelOverlayGuard = useCallback(() => {
+    if (profileRingPanelOverlayGuardTimeoutRef.current) {
+      clearTimeout(profileRingPanelOverlayGuardTimeoutRef.current);
+    }
+    profileRingPanelOverlayGuardTimeoutRef.current = setTimeout(() => {
+      profileRingPanelOverlayGuardTimeoutRef.current = null;
+    }, 280);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (profileRingPanelOverlayGuardTimeoutRef.current) {
+        clearTimeout(profileRingPanelOverlayGuardTimeoutRef.current);
+        profileRingPanelOverlayGuardTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const [showProfileRingViewerPanel, setShowProfileRingViewerPanel] = useState(false);
   const [profileRingViewerPanelAnimation] = useState(new Animated.Value(PROFILE_RING_PANEL_HIDDEN_Y));
   const [viewingProfileRingId, setViewingProfileRingId] = useState<string | null>(null);
   const [viewingProfileRingSource, setViewingProfileRingSource] = useState<'profile' | 'home'>('profile');
-  const [, setViewingProfileRingHomePostId] = useState<string | null>(null);
+  const [viewingHomeProfileRingContext, setViewingHomeProfileRingContext] = useState<HomeProfileRingViewerContext | null>(null);
   const [viewingProfileRingOverride, setViewingProfileRingOverride] = useState<ProfileRingPoint | null>(null);
 
   const [showDeleteProfileRingModal, setShowDeleteProfileRingModal] = useState(false);
@@ -9320,6 +10775,37 @@ const FrontScreen = ({
   const [profileRingLocationPlaceIdDraft, setProfileRingLocationPlaceIdDraft] = useState<string | null>(null);
   const [profileRingLocationLatDraft, setProfileRingLocationLatDraft] = useState<number | null>(null);
   const [profileRingLocationLngDraft, setProfileRingLocationLngDraft] = useState<number | null>(null);
+  const profileRingLocationDraftRef = useRef<ProfileRingLocationDraftSnapshot>({
+    label: '',
+    url: '',
+    placeId: null,
+    lat: null,
+    lng: null,
+  });
+  const setProfileRingLocationDraftState = useCallback((next: {
+    label?: string | null;
+    url?: string | null;
+    placeId?: string | null;
+    lat?: number | null;
+    lng?: number | null;
+  }) => {
+    const nextLat = next.lat == null ? null : Number(next.lat);
+    const nextLng = next.lng == null ? null : Number(next.lng);
+    const snapshot = {
+      label: String(next.label || ''),
+      url: String(next.url || ''),
+      placeId: next.placeId ? String(next.placeId) : null,
+      lat: Number.isFinite(nextLat) ? nextLat : null,
+      lng: Number.isFinite(nextLng) ? nextLng : null,
+    };
+
+    profileRingLocationDraftRef.current = snapshot;
+    setProfileRingLocationLabelDraft(snapshot.label);
+    setProfileRingLocationUrlDraft(snapshot.url);
+    setProfileRingLocationPlaceIdDraft(snapshot.placeId);
+    setProfileRingLocationLatDraft(snapshot.lat);
+    setProfileRingLocationLngDraft(snapshot.lng);
+  }, []);
 
   const makeGoogleMapsLatLngUrl = useCallback((lat: number, lng: number, label?: string | null, placeId?: string | null) => {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {return 'https://www.google.com/maps';}
@@ -9360,13 +10846,31 @@ const FrontScreen = ({
   const viewingProfileRing = useMemo(() => {
     if (!viewingProfileRingId) {return null;}
     if (viewingProfileRingSource === 'profile') {
-      return profileRingPoints.find(p => p.id === viewingProfileRingId) ?? null;
+      const localRing = profileRingPoints.find(p => p.id === viewingProfileRingId) ?? null;
+      if (localRing) {return localRing;}
+      if (!viewingProfileRingOverride) {return null;}
+      if (String(viewingProfileRingOverride.id) !== String(viewingProfileRingId)) {return null;}
+      return viewingProfileRingOverride;
+    }
+
+    const contextualRing = viewingHomeProfileRingContext?.ring ?? null;
+    if (contextualRing && String(contextualRing.id) === String(viewingProfileRingId)) {
+      return contextualRing;
     }
 
     if (!viewingProfileRingOverride) {return null;}
     if (String(viewingProfileRingOverride?.id) !== String(viewingProfileRingId)) {return null;}
     return viewingProfileRingOverride;
-  }, [profileRingPoints, viewingProfileRingId, viewingProfileRingOverride, viewingProfileRingSource]);
+  }, [profileRingPoints, viewingHomeProfileRingContext, viewingProfileRingId, viewingProfileRingOverride, viewingProfileRingSource]);
+  const viewingHomeProfileRingCreatorHandle = useMemo(() => (
+    formatUsernameWithAt(String(viewingHomeProfileRingContext?.creator?.username || fallbackUserLabel))
+  ), [fallbackUserLabel, viewingHomeProfileRingContext]);
+  const viewingHomeProfileRingCreatorAvatarUri = useMemo(() => {
+    const rawUri = String(viewingHomeProfileRingContext?.creator?.profilePhotoUri || '').trim();
+    if (!rawUri) {return '';}
+    if (/^(https?:|file:|content:|data:)/i.test(rawUri)) {return rawUri;}
+    return getServerResourceUrl(rawUri);
+  }, [viewingHomeProfileRingContext]);
 
   const requestLocationPermissionIfNeeded = useCallback(async () => {
     if (Platform.OS !== 'android') {return true;}
@@ -9400,6 +10904,7 @@ const FrontScreen = ({
       return;
     }
 
+    armProfileRingPanelOverlayGuard();
     setActiveLocationPickerTarget('profileRing');
 
     // Pre-fill search with current draft (or saved) label.
@@ -9442,7 +10947,7 @@ const FrontScreen = ({
       },
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 15000 }
     );
-  }, [profileRingLocationLabelDraft, profileRingLocationLatDraft, profileRingLocationLngDraft, profileRingLocationPlaceIdDraft, profileRingPickedLatLng, requestLocationPermissionIfNeeded]);
+  }, [armProfileRingPanelOverlayGuard, profileRingLocationLabelDraft, profileRingLocationLatDraft, profileRingLocationLngDraft, profileRingLocationPlaceIdDraft, profileRingPickedLatLng, requestLocationPermissionIfNeeded]);
 
   const openChannelEventLocationPicker = useCallback(async () => {
     const ok = await requestLocationPermissionIfNeeded();
@@ -9675,13 +11180,14 @@ const FrontScreen = ({
   }, [isPlacesSearchEnabled, moveProfileRingLocationMapTo, authToken, API_URL, language]);
 
   const closeProfileRingLocationPicker = useCallback(() => {
+    armProfileRingPanelOverlayGuard();
     setShowProfileRingLocationPicker(false);
     setActiveLocationPickerTarget(null);
     setIsProfileRingLocating(false);
     setProfileRingLocationPredictions([]);
     setProfileRingLocationSearchError('');
     setProfileRingPickedLocationPlaceId(null);
-  }, []);
+  }, [armProfileRingPanelOverlayGuard]);
 
   const applyProfileRingPickedLocation = useCallback(() => {
     const picked = profileRingPickedLatLng;
@@ -9699,16 +11205,20 @@ const FrontScreen = ({
       setChannelEventLocationUrlDraft(url);
       setChannelEventLocationPlaceIdDraft(profileRingPickedLocationPlaceId ? String(profileRingPickedLocationPlaceId) : null);
     } else {
-      if (!selectedProfileRingId) {return;}
-      setProfileRingLocationLatDraft(lat);
-      setProfileRingLocationLngDraft(lng);
-      setProfileRingLocationLabelDraft(label);
-      setProfileRingLocationUrlDraft(url);
-      setProfileRingLocationPlaceIdDraft(profileRingPickedLocationPlaceId ? String(profileRingPickedLocationPlaceId) : null);
+      const activeRingId = selectedProfileRingIdRef.current || selectedProfileRingId;
+      if (!activeRingId) {return;}
+      selectedProfileRingIdRef.current = activeRingId;
+      setProfileRingLocationDraftState({
+        label,
+        url,
+        placeId: profileRingPickedLocationPlaceId ? String(profileRingPickedLocationPlaceId) : null,
+        lat,
+        lng,
+      });
     }
 
     closeProfileRingLocationPicker();
-  }, [activeLocationPickerTarget, closeProfileRingLocationPicker, makeGoogleMapsLatLngUrl, profileRingPickedLatLng, profileRingPickedLocationLabel, profileRingPickedLocationPlaceId, selectedProfileRingId]);
+  }, [activeLocationPickerTarget, closeProfileRingLocationPicker, makeGoogleMapsLatLngUrl, profileRingPickedLatLng, profileRingPickedLocationLabel, profileRingPickedLocationPlaceId, selectedProfileRingId, setProfileRingLocationDraftState]);
 
   const clearChannelEventLocationDraft = useCallback(() => {
     setChannelEventLocationLabelDraft('');
@@ -9718,13 +11228,87 @@ const FrontScreen = ({
     setChannelEventLocationLngDraft(null);
   }, []);
 
-  const canCreateProfileRingMeta = useMemo(() => {
-    const hasColor = !!profileRingColorSelectedDraft;
+  const getSelectedProfileRingLocationDraft = useCallback(() => {
+    const stateLabel = String(profileRingLocationLabelDraft || '').trim();
+    const stateUrl = String(profileRingLocationUrlDraft || '').trim();
+    const statePlaceId = String(profileRingLocationPlaceIdDraft || '').trim();
+    const stateLat = profileRingLocationLatDraft == null ? null : Number(profileRingLocationLatDraft);
+    const stateLng = profileRingLocationLngDraft == null ? null : Number(profileRingLocationLngDraft);
+
+    const refDraft = profileRingLocationDraftRef.current;
+    const refLabel = String(refDraft.label || '').trim();
+    const refUrl = String(refDraft.url || '').trim();
+    const refPlaceId = String(refDraft.placeId || '').trim();
+    const refLat = refDraft.lat == null ? null : Number(refDraft.lat);
+    const refLng = refDraft.lng == null ? null : Number(refDraft.lng);
+
+    const locationLat = Number.isFinite(stateLat) ? stateLat : (Number.isFinite(refLat) ? refLat : null);
+    const locationLng = Number.isFinite(stateLng) ? stateLng : (Number.isFinite(refLng) ? refLng : null);
+    const locationLabel = stateLabel || refLabel;
+    const locationPlaceId = statePlaceId || refPlaceId || null;
+    let locationUrl = stateUrl || refUrl;
+    if (!locationUrl && locationLat !== null && locationLng !== null) {
+      locationUrl = makeGoogleMapsLatLngUrl(locationLat, locationLng, locationLabel || null, locationPlaceId);
+    }
+
+    return {
+      label: locationLabel,
+      url: String(locationUrl || '').trim(),
+      placeId: locationPlaceId,
+      lat: Number.isFinite(locationLat) ? locationLat : null,
+      lng: Number.isFinite(locationLng) ? locationLng : null,
+    };
+  }, [makeGoogleMapsLatLngUrl, profileRingLocationLabelDraft, profileRingLocationLatDraft, profileRingLocationLngDraft, profileRingLocationPlaceIdDraft, profileRingLocationUrlDraft]);
+
+  const buildSelectedProfileRingDraft = useCallback((ring: ProfileRingPoint): ProfileRingPoint => {
+    const nextName = String(profileRingNameDraft || '').slice(0, 38);
+    const nextDescription = String(profileRingDescriptionDraft || '').slice(0, 280);
+    const draftNetwork = String(profileRingLinkNetworkDraft || '').trim();
+    const draftUrl = String(profileRingLinkUrlDraft || '').trim();
+    const nextColor = String(profileRingColorDraft || ring.color || '#FFFFFF');
+    const normalizedNextColor = nextColor.trim().toUpperCase();
+    const hasPersistedSelectedColor = Boolean(ring.isCreated) && !!normalizedNextColor && normalizedNextColor !== '#FFFFFF';
+    const locationDraft = getSelectedProfileRingLocationDraft();
+    const trimmedLocationLabel = String(locationDraft.label || '').trim();
+    const trimmedLocationUrl = String(locationDraft.url || '').trim();
+    const trimmedLocationPlaceId = String(locationDraft.placeId || '').trim();
+    const locationLat = locationDraft.lat == null ? null : Number(locationDraft.lat);
+    const locationLng = locationDraft.lng == null ? null : Number(locationDraft.lng);
+    const hasAnyLocation = !!trimmedLocationLabel || (Number.isFinite(locationLat) && Number.isFinite(locationLng));
+
+    let nextLinkNetwork: string | null = ring.linkNetwork;
+    let nextLinkUrl = ring.linkUrl;
+    if (!draftNetwork && !draftUrl) {
+      nextLinkNetwork = null;
+      nextLinkUrl = '';
+    } else if (draftNetwork && draftUrl && !profileRingLinkErrorDraft) {
+      nextLinkNetwork = draftNetwork;
+      nextLinkUrl = draftUrl;
+    }
+
+    return {
+      ...ring,
+      isCreated: true,
+      color: nextColor,
+      colorSelected: Boolean(profileRingColorSelectedDraft) || hasPersistedSelectedColor,
+      name: nextName,
+      description: nextDescription,
+      linkNetwork: nextLinkNetwork,
+      linkUrl: nextLinkUrl,
+      locationLabel: hasAnyLocation ? trimmedLocationLabel : '',
+      locationUrl: hasAnyLocation ? trimmedLocationUrl : '',
+      locationPlaceId: hasAnyLocation ? (trimmedLocationPlaceId || null) : null,
+      locationLat: hasAnyLocation && Number.isFinite(locationLat) ? locationLat : null,
+      locationLng: hasAnyLocation && Number.isFinite(locationLng) ? locationLng : null,
+    };
+  }, [getSelectedProfileRingLocationDraft, profileRingColorDraft, profileRingColorSelectedDraft, profileRingDescriptionDraft, profileRingLinkErrorDraft, profileRingLinkNetworkDraft, profileRingLinkUrlDraft, profileRingNameDraft]);
+
+  const canPersistSelectedProfileRing = useMemo(() => {
+    if (!selectedProfileRingId) {return false;}
     const hasName = String(profileRingNameDraft || '').trim().length >= 1;
     const hasDescription = String(profileRingDescriptionDraft || '').trim().length >= 1;
-    const hasValidLinkDraft = !profileRingLinkErrorDraft;
-    return hasColor && hasName && hasDescription && hasValidLinkDraft;
-  }, [profileRingColorSelectedDraft, profileRingDescriptionDraft, profileRingLinkErrorDraft, profileRingNameDraft]);
+    return hasName && hasDescription && profileRingColorSelectedDraft && !String(profileRingLinkErrorDraft || '').trim();
+  }, [profileRingColorSelectedDraft, profileRingDescriptionDraft, profileRingLinkErrorDraft, profileRingNameDraft, selectedProfileRingId]);
 
   const [isProfileTextExpanded, setIsProfileTextExpanded] = useState(false);
   const [isPresentationOverlayVisible, setIsPresentationOverlayVisible] = useState(true);
@@ -9822,6 +11406,7 @@ const FrontScreen = ({
     }).start(({ finished }) => {
       if (!finished) {return;}
       setShowProfileRingColorPanel(false);
+      selectedProfileRingIdRef.current = null;
       setSelectedProfileRingId(null);
       setIsProfileRingLinkExpanded(false);
       setProfileRingLinkNetworkDraft(null);
@@ -9831,20 +11416,26 @@ const FrontScreen = ({
       setProfileRingColorSelectedDraft(false);
       setProfileRingNameDraft('');
       setProfileRingDescriptionDraft('');
-      setProfileRingLocationLabelDraft('');
-      setProfileRingLocationUrlDraft('');
-      setProfileRingLocationPlaceIdDraft(null);
-      setProfileRingLocationLatDraft(null);
-      setProfileRingLocationLngDraft(null);
+      setProfileRingLocationDraftState({
+        label: '',
+        url: '',
+        placeId: null,
+        lat: null,
+        lng: null,
+      });
       afterClose?.();
     });
-  }, [PROFILE_RING_PANEL_HIDDEN_Y, profileRingColorPanelAnimation, showProfileRingColorPanel]);
+  }, [PROFILE_RING_PANEL_HIDDEN_Y, profileRingColorPanelAnimation, setProfileRingLocationDraftState, showProfileRingColorPanel]);
 
   const closeProfileRingColorPanel = useCallback(() => {
     closeProfileRingColorPanelAndThen();
   }, [closeProfileRingColorPanelAndThen]);
 
   const closeProfileRingViewerPanelAndThen = useCallback((afterClose?: () => void) => {
+    if (showHomeRingRecommendationPanel) {
+      setShowHomeRingRecommendationPanel(false);
+    }
+
     if (!showProfileRingViewerPanel) {
       setHomeProfileRingBannerReady(false);
       setHomeProfileRingBannerSize(HOME_PROFILE_RING_DEFAULT_BANNER_SIZE);
@@ -9852,24 +11443,39 @@ const FrontScreen = ({
       return;
     }
 
-    Keyboard.dismiss();
-    profileRingViewerPanelAnimation.stopAnimation();
-    Animated.timing(profileRingViewerPanelAnimation, {
-      toValue: PROFILE_RING_PANEL_HIDDEN_Y,
-      duration: 260,
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (!finished) {return;}
+    let didFinalizeClose = false;
+    const finalizeClose = () => {
+      if (didFinalizeClose) {return;}
+      didFinalizeClose = true;
+
+      profileRingViewerPanelAnimation.stopAnimation();
+      profileRingViewerPanelAnimation.setValue(PROFILE_RING_PANEL_HIDDEN_Y);
       setShowProfileRingViewerPanel(false);
       setHomeProfileRingBannerReady(false);
       setHomeProfileRingBannerSize(HOME_PROFILE_RING_DEFAULT_BANNER_SIZE);
       setViewingProfileRingId(null);
       setViewingProfileRingSource('profile');
-      setViewingProfileRingHomePostId(null);
+      setViewingHomeProfileRingContext(null);
       setViewingProfileRingOverride(null);
       afterClose?.();
+    };
+
+    Keyboard.dismiss();
+    profileRingViewerPanelAnimation.stopAnimation();
+    const fallbackFinalizeTimeout = setTimeout(finalizeClose, 320);
+    Animated.timing(profileRingViewerPanelAnimation, {
+      toValue: PROFILE_RING_PANEL_HIDDEN_Y,
+      duration: 260,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      clearTimeout(fallbackFinalizeTimeout);
+      if (!finished) {
+        requestAnimationFrame(finalizeClose);
+        return;
+      }
+      finalizeClose();
     });
-  }, [PROFILE_RING_PANEL_HIDDEN_Y, profileRingViewerPanelAnimation, showProfileRingViewerPanel]);
+  }, [PROFILE_RING_PANEL_HIDDEN_Y, profileRingViewerPanelAnimation, showHomeRingRecommendationPanel, showProfileRingViewerPanel]);
 
   const closeProfileRingViewerPanel = useCallback(() => {
     closeProfileRingViewerPanelAndThen();
@@ -9883,23 +11489,28 @@ const FrontScreen = ({
   }, [closeProfileRingViewerPanel, showProfileRingViewerPanel, viewingProfileRing, viewingProfileRingId]);
 
   const openProfileRingColorPanel = useCallback((ringId: string) => {
-    const ring = profileRingPoints.find(p => p.id === ringId) ?? null;
+    const ring = profileRingPointsRef.current.find(p => p.id === ringId) ?? null;
+    const ringColor = String(ring?.color || '#FFFFFF');
+    const hasPersistedSelectedColor = Boolean(ring?.isCreated) && ringColor.trim().toUpperCase() !== '#FFFFFF';
 
+    selectedProfileRingIdRef.current = ringId;
     setSelectedProfileRingId(ringId);
     setIsProfileRingLinkExpanded(false);
     setProfileRingLinkNetworkDraft(ring?.linkNetwork ?? null);
     setProfileRingLinkUrlDraft(ring?.linkUrl ?? '');
     setProfileRingLinkErrorDraft('');
 
-    setProfileRingColorDraft(ring?.color ?? '#FFFFFF');
-    setProfileRingColorSelectedDraft(Boolean(ring?.colorSelected));
+    setProfileRingColorDraft(ringColor);
+    setProfileRingColorSelectedDraft(Boolean(ring?.colorSelected) || hasPersistedSelectedColor);
     setProfileRingNameDraft(ring?.name ?? '');
     setProfileRingDescriptionDraft(ring?.description ?? '');
-    setProfileRingLocationLabelDraft(ring?.locationLabel ?? '');
-    setProfileRingLocationUrlDraft(ring?.locationUrl ?? '');
-    setProfileRingLocationPlaceIdDraft(ring?.locationPlaceId ? String(ring.locationPlaceId) : null);
-    setProfileRingLocationLatDraft(ring?.locationLat ?? null);
-    setProfileRingLocationLngDraft(ring?.locationLng ?? null);
+    setProfileRingLocationDraftState({
+      label: ring?.locationLabel ?? '',
+      url: ring?.locationUrl ?? '',
+      placeId: ring?.locationPlaceId ? String(ring.locationPlaceId) : null,
+      lat: ring?.locationLat ?? null,
+      lng: ring?.locationLng ?? null,
+    });
 
     if (showProfileRingViewerPanel) {
       closeProfileRingViewerPanelAndThen();
@@ -9922,7 +11533,7 @@ const FrontScreen = ({
       duration: 260,
       useNativeDriver: true,
     }).start();
-  }, [PROFILE_RING_PANEL_HIDDEN_Y, closeProfileRingViewerPanelAndThen, profileRingColorPanelAnimation, profileRingPoints, showProfileRingColorPanel, showProfileRingViewerPanel, showReactionPanel, reactionPanelAnimation]);
+  }, [PROFILE_RING_PANEL_HIDDEN_Y, closeProfileRingViewerPanelAndThen, profileRingColorPanelAnimation, reactionPanelAnimation, setProfileRingLocationDraftState, showProfileRingColorPanel, showProfileRingViewerPanel, showReactionPanel]);
 
   const openProfileRingViewerPanel = useCallback((ringId: string) => {
     setViewingProfileRingId(ringId);
@@ -9959,19 +11570,45 @@ const FrontScreen = ({
     const rid = String(ringId || '').trim();
     if (!rid) {return;}
     setViewingProfileRingSource('home');
-    setViewingProfileRingHomePostId(String(postId || '').trim() || null);
+    setViewingHomeProfileRingContext(prev => {
+      if (!prev) {return null;}
+      if (String(prev.publicationId || '') !== String(postId || '').trim()) {return null;}
+      if (String(prev.ring?.id || '') !== rid) {return null;}
+      return prev;
+    });
     setViewingProfileRingOverride(null);
     openProfileRingViewerPanel(rid);
   }, [openProfileRingViewerPanel]);
 
-  const openHomeProfileRingViewerPanelFromRing = useCallback((ring: ProfileRingPoint) => {
-    const rid = String(ring?.id || '').trim();
-    if (!rid) {return;}
+  const openHomeProfileRingViewerPanelFromContext = useCallback((context: HomeProfileRingViewerContext | null) => {
+    const rid = String(context?.ring?.id || '').trim();
+    if (!rid || !context) {return;}
     setViewingProfileRingSource('home');
-    setViewingProfileRingHomePostId(null);
-    setViewingProfileRingOverride(ring);
+    setViewingHomeProfileRingContext(context);
+    setViewingProfileRingOverride(context.ring);
     openProfileRingViewerPanel(rid);
   }, [openProfileRingViewerPanel]);
+
+  const openHomeProfileRingViewerPanelFromRing = useCallback((publication: Publication, ring: ProfileRingPoint) => {
+    const publicationId = String(publication?.id || '').trim();
+    const imageIndex = Number(ring?.imageIndex);
+    const image = Number.isInteger(imageIndex) && imageIndex >= 0
+      ? (publication?.presentation?.images?.[imageIndex] ?? null)
+      : null;
+    openHomeProfileRingViewerPanelFromContext(publicationId ? {
+      publicationId,
+      ring,
+      image: image ? { uri: String(image.uri || '').trim(), aspectRatio: image.aspectRatio } : null,
+      creator: {
+        username: String(publication?.user?.username || '').trim(),
+        email: typeof publication?.user?.email === 'string' ? publication.user.email.trim() : undefined,
+        profilePhotoUri: typeof publication?.user?.profilePhotoUri === 'string' ? publication.user.profilePhotoUri.trim() : undefined,
+        socialNetworks: Array.isArray(publication?.user?.socialNetworks) ? publication.user.socialNetworks : [],
+        accountVerified: !!publication?.user?.accountVerified,
+        keintiVerified: !!publication?.user?.keintiVerified,
+      },
+    } : null);
+  }, [openHomeProfileRingViewerPanelFromContext]);
 
   const handleEditViewingProfileRing = useCallback(() => {
     if (viewingProfileRingSource !== 'profile') {return;}
@@ -9997,83 +11634,55 @@ const FrontScreen = ({
     const id = pendingDeleteProfileRingId;
     if (!id) {return;}
 
-    const next = profileRingPoints.filter(p => p.id !== id);
+    const next = profileRingPointsRef.current.filter(p => p.id !== id);
+    profileRingPointsRef.current = next;
     setProfileRingPoints(next);
     closeProfileRingViewerPanel();
     closeDeleteProfileRingModal();
     void persistProfileRingsImmediately(next);
-  }, [closeDeleteProfileRingModal, closeProfileRingViewerPanel, pendingDeleteProfileRingId, persistProfileRingsImmediately, profileRingPoints]);
+  }, [closeDeleteProfileRingModal, closeProfileRingViewerPanel, pendingDeleteProfileRingId, persistProfileRingsImmediately]);
 
   const handleProfileRingPress = useCallback((ringId: string) => {
-    const ring = profileRingPoints.find(p => p.id === ringId);
+    const ring = profileRingPointsRef.current.find(p => p.id === ringId);
     if (!ring) {return;}
     if (ring.isCreated) {
       setViewingProfileRingSource('profile');
-      setViewingProfileRingHomePostId(null);
-      setViewingProfileRingOverride(null);
+      setViewingHomeProfileRingContext(null);
+      setViewingProfileRingOverride(ring);
       openProfileRingViewerPanel(ringId);
       return;
     }
     setViewingProfileRingSource('profile');
-    setViewingProfileRingHomePostId(null);
+    setViewingHomeProfileRingContext(null);
     setViewingProfileRingOverride(null);
     openProfileRingColorPanel(ringId);
-  }, [openProfileRingColorPanel, openProfileRingViewerPanel, profileRingPoints]);
+  }, [openProfileRingColorPanel, openProfileRingViewerPanel]);
 
   const createSelectedProfileRing = useCallback(() => {
-    if (!selectedProfileRingId) {return;}
-    if (!canCreateProfileRingMeta) {return;}
+    const ringId = selectedProfileRingIdRef.current;
+    if (!ringId) {return;}
+    if (!canPersistSelectedProfileRing) {return;}
 
-    const ringId = selectedProfileRingId;
-    const draftNetwork = String(profileRingLinkNetworkDraft || '').trim();
-    const draftUrl = String(profileRingLinkUrlDraft || '').trim();
-
-    const next = profileRingPoints.map(p => {
+    const next = profileRingPointsRef.current.map(p => {
       if (p.id !== ringId) {return p;}
 
-      const nextName = String(profileRingNameDraft || '').slice(0, 38);
-      const nextDescription = String(profileRingDescriptionDraft || '').slice(0, 280);
-
-      const trimmedLocationLabel = String(profileRingLocationLabelDraft || '').trim();
-      const hasAnyLocation = !!trimmedLocationLabel || (profileRingLocationLatDraft != null && profileRingLocationLngDraft != null);
-
-      let nextLinkNetwork: string | null = p.linkNetwork;
-      let nextLinkUrl: string = p.linkUrl;
-      if (!draftNetwork && !draftUrl) {
-        nextLinkNetwork = null;
-        nextLinkUrl = '';
-      } else if (draftNetwork && draftUrl && !profileRingLinkErrorDraft) {
-        nextLinkNetwork = draftNetwork;
-        nextLinkUrl = draftUrl;
-      }
-
-      return {
-        ...p,
-        isCreated: true,
-        color: String(profileRingColorDraft || '#FFFFFF'),
-        colorSelected: Boolean(profileRingColorSelectedDraft),
-        name: nextName,
-        description: nextDescription,
-        linkNetwork: nextLinkNetwork,
-        linkUrl: nextLinkUrl,
-        locationLabel: hasAnyLocation ? String(profileRingLocationLabelDraft || '') : '',
-        locationUrl: hasAnyLocation ? String(profileRingLocationUrlDraft || '') : '',
-        locationPlaceId: hasAnyLocation ? (profileRingLocationPlaceIdDraft ? String(profileRingLocationPlaceIdDraft) : null) : null,
-        locationLat: hasAnyLocation ? (profileRingLocationLatDraft == null ? null : Number(profileRingLocationLatDraft)) : null,
-        locationLng: hasAnyLocation ? (profileRingLocationLngDraft == null ? null : Number(profileRingLocationLngDraft)) : null,
-      };
+      return buildSelectedProfileRingDraft(p);
     });
 
+    const createdRing = next.find(p => p.id === ringId) ?? null;
+    if (!createdRing) {return;}
+
+    profileRingPointsRef.current = next;
     setProfileRingPoints(next);
     void persistProfileRingsImmediately(next);
 
     closeProfileRingColorPanelAndThen(() => {
       setViewingProfileRingSource('profile');
-      setViewingProfileRingHomePostId(null);
-      setViewingProfileRingOverride(null);
+      setViewingHomeProfileRingContext(null);
+      setViewingProfileRingOverride(createdRing);
       openProfileRingViewerPanel(ringId);
     });
-  }, [canCreateProfileRingMeta, closeProfileRingColorPanelAndThen, openProfileRingViewerPanel, persistProfileRingsImmediately, profileRingColorDraft, profileRingColorSelectedDraft, profileRingDescriptionDraft, profileRingLinkErrorDraft, profileRingLinkNetworkDraft, profileRingLinkUrlDraft, profileRingLocationLabelDraft, profileRingLocationLatDraft, profileRingLocationLngDraft, profileRingLocationPlaceIdDraft, profileRingLocationUrlDraft, profileRingNameDraft, profileRingPoints, selectedProfileRingId]);
+  }, [buildSelectedProfileRingDraft, canPersistSelectedProfileRing, closeProfileRingColorPanelAndThen, openProfileRingViewerPanel, persistProfileRingsImmediately]);
 
   const toggleProfileRingLinkExpanded = useCallback(() => {
     setIsProfileRingLinkExpanded(prev => {
@@ -10128,11 +11737,13 @@ const FrontScreen = ({
   }, []);
 
   const clearProfileRingLocationDraft = useCallback(() => {
-    setProfileRingLocationLabelDraft('');
-    setProfileRingLocationUrlDraft('');
-    setProfileRingLocationPlaceIdDraft(null);
-    setProfileRingLocationLatDraft(null);
-    setProfileRingLocationLngDraft(null);
+    setProfileRingLocationDraftState({
+      label: '',
+      url: '',
+      placeId: null,
+      lat: null,
+      lng: null,
+    });
 
     // Also reset picker local state so the next open starts clean.
     setProfileRingPickedLocationLabel(null);
@@ -10140,7 +11751,7 @@ const FrontScreen = ({
     setProfileRingLocationSearchQuery('');
     setProfileRingLocationPredictions([]);
     setProfileRingLocationSearchError('');
-  }, []);
+  }, [setProfileRingLocationDraftState]);
 
   const applyProfileRingLinkDraft = useCallback(() => {
     if (!selectedProfileRingId) {return;}
@@ -10178,16 +11789,18 @@ const FrontScreen = ({
   }, []);
 
   const deleteSelectedProfileRing = useCallback(() => {
-    if (!selectedProfileRingId) {
+    const ringId = selectedProfileRingIdRef.current;
+    if (!ringId) {
       closeProfileRingColorPanel();
       return;
     }
 
-    const next = profileRingPoints.filter(p => p.id !== selectedProfileRingId);
+    const next = profileRingPointsRef.current.filter(p => p.id !== ringId);
+    profileRingPointsRef.current = next;
     setProfileRingPoints(next);
     void persistProfileRingsImmediately(next);
     closeProfileRingColorPanel();
-  }, [closeProfileRingColorPanel, persistProfileRingsImmediately, profileRingPoints, selectedProfileRingId]);
+  }, [closeProfileRingColorPanel, persistProfileRingsImmediately]);
 
   const handleProfileRingIconPress = useCallback(() => {
     if (profileRingHintTimerRef.current) {
@@ -10248,7 +11861,7 @@ const FrontScreen = ({
     const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setProfileRingPoints(prev => {
       if (prev.length >= 5) {return prev;}
-      return [...prev, {
+      const next = [...prev, {
         id,
         imageIndex,
         x,
@@ -10266,6 +11879,8 @@ const FrontScreen = ({
         locationLng: null,
         isCreated: false,
       }];
+      profileRingPointsRef.current = next;
+      return next;
     });
   }, [profileRingPoints.length, showProfileRingHint, profileCarouselImageLayouts, t]);
 
@@ -10495,6 +12110,7 @@ const FrontScreen = ({
       setChannelMessagesTab('General');
       setReplyingToMessageIndex(null);
       setReplyingToUsername(null);
+      setActiveRecommendationReplyContext(null);
       setExpandedMention(null);
       if (restoredFromCache) {
         channelChatLoadingPostIdRef.current = null;
@@ -11002,7 +12618,6 @@ const FrontScreen = ({
     });
 
     setPendingJoinedGroupToast(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingJoinedGroupToast, activeBottomTab, chatView, groupsTab]);
 
   const fetchGroupChatMessages = async (
@@ -12213,6 +13828,355 @@ const FrontScreen = ({
   const [activeIntimidadIndices, setActiveIntimidadIndices] = useState<Record<string, number>>({});
   const [intimidadesVisible, setIntimidadesVisible] = useState<Record<string, boolean>>({});
   const [homeIntimidadesUnlockSigs, setHomeIntimidadesUnlockSigs] = useState<Record<string, 1>>({});
+  useEffect(() => {
+    const ownPostId = String(userPublication?.id || '').trim();
+    if (!authToken || !ownPostId || !hasActiveOwnChannel) {
+      setOwnChannelRecommendedRingState({
+        postId: ownPostId,
+        signatures: {},
+      });
+      return;
+    }
+
+    setOwnChannelRecommendedRingState({
+      postId: ownPostId,
+      signatures: {},
+    });
+
+    let cancelled = false;
+    const fetchSeq = ownChannelRecommendationSignatureFetchSeqRef.current + 1;
+    ownChannelRecommendationSignatureFetchSeqRef.current = fetchSeq;
+
+    (async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/channels/messages/${ownPostId}/recommendation-signatures`, {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        });
+
+        if (!response.ok) {return;}
+
+        const data = await response.json().catch(() => ({} as any));
+        if (cancelled || fetchSeq !== ownChannelRecommendationSignatureFetchSeqRef.current) {return;}
+
+        const rawSignatures = Array.isArray((data as any)?.recommendationSignatures)
+          ? (data as any).recommendationSignatures
+          : [];
+        const nextSignatures: Record<string, 1> = {};
+        rawSignatures.forEach((signature: any) => {
+          const value = String(signature || '').trim();
+          if (value) {
+            nextSignatures[value] = 1;
+          }
+        });
+        setOwnChannelRecommendedRingState({
+          postId: ownPostId,
+          signatures: nextSignatures,
+        });
+      } catch (error) {
+        console.warn('Error loading own channel recommendation signatures:', error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [API_URL, authToken, hasActiveOwnChannel, userPublication?.id]);
+
+  useEffect(() => {
+    const sourcePublicationId = String(viewingHomeProfileRingContext?.publicationId || '').trim();
+    if (viewingProfileRingSource !== 'home' || !showProfileRingViewerPanel || !sourcePublicationId || !authToken) {return;}
+
+    let cancelled = false;
+    const fetchSeq = (homeRingRecommendationCountsFetchSeqRef.current[sourcePublicationId] || 0) + 1;
+    homeRingRecommendationCountsFetchSeqRef.current[sourcePublicationId] = fetchSeq;
+
+    (async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/channels/source-publications/${sourcePublicationId}/recommendation-counts`, {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        });
+
+        if (!response.ok) {
+          if (response.status === 410) {
+            delete homeRingRecommendationCountsFetchSeqRef.current[sourcePublicationId];
+            setHomeRingRecommendationCountsBySourcePublication(prev => {
+              if (!prev[sourcePublicationId]) {return prev;}
+              const next = { ...prev };
+              delete next[sourcePublicationId];
+              return next;
+            });
+
+            if (!cancelled && String(viewingHomeProfileRingContext?.publicationId || '').trim() === sourcePublicationId) {
+              closeProfileRingViewerPanel();
+            }
+          }
+          return;
+        }
+
+        const data = await response.json().catch(() => ({} as any));
+        if (cancelled || homeRingRecommendationCountsFetchSeqRef.current[sourcePublicationId] !== fetchSeq) {return;}
+
+        const rawCounts = (data as any)?.recommendationCounts;
+        const nextCounts: Record<string, number> = {};
+        if (rawCounts && typeof rawCounts === 'object') {
+          Object.entries(rawCounts).forEach(([signature, value]) => {
+            const normalizedSignature = String(signature || '').trim();
+            const normalizedCount = Math.max(0, Math.floor(Number(value) || 0));
+            if (normalizedSignature) {
+              nextCounts[normalizedSignature] = normalizedCount;
+            }
+          });
+        }
+
+        setHomeRingRecommendationCountsBySourcePublication(prev => ({
+          ...prev,
+          [sourcePublicationId]: nextCounts,
+        }));
+      } catch (error) {
+        console.warn('Error loading source publication ring recommendation counts:', error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [API_URL, authToken, closeProfileRingViewerPanel, showProfileRingViewerPanel, viewingHomeProfileRingContext, viewingProfileRingSource]);
+
+  const viewingHomeProfileRingUnlocked = useMemo(() => {
+    const publicationId = String(viewingHomeProfileRingContext?.publicationId || '').trim();
+    if (!publicationId) {return false;}
+    return intimidadesVisible[publicationId] === true;
+  }, [intimidadesVisible, viewingHomeProfileRingContext]);
+  const ownChannelKnownRecommendationSignatures = useMemo(() => {
+    const ownPostId = String(userPublication?.id || '').trim();
+    if (!ownPostId) {return {};}
+
+    const currentOwnChannelPostId = String(currentChannelPostIdRef.current || '').trim();
+    const knownMessages = currentOwnChannelPostId === ownPostId
+      ? chatMessages
+      : (channelChatStateCacheRef.current[ownPostId]?.messages || []);
+
+    return extractChannelRingRecommendationSignatures(Array.isArray(knownMessages) ? knownMessages : []);
+  }, [chatMessages, userPublication?.id]);
+  const viewingHomeProfileRingRecommendationSignature = useMemo(() => buildChannelRingRecommendationSignature({
+    sourcePublicationId: viewingHomeProfileRingContext?.publicationId,
+    ring: viewingHomeProfileRingContext?.ring,
+  }), [viewingHomeProfileRingContext]);
+  const viewingHomeProfileRingRecommendationCount = useMemo(() => {
+    const sourcePublicationId = String(viewingHomeProfileRingContext?.publicationId || '').trim();
+    if (!sourcePublicationId || !viewingHomeProfileRingRecommendationSignature) {return 0;}
+    return Math.max(0, Math.floor(Number(
+      homeRingRecommendationCountsBySourcePublication[sourcePublicationId]?.[viewingHomeProfileRingRecommendationSignature] || 0
+    )));
+  }, [homeRingRecommendationCountsBySourcePublication, viewingHomeProfileRingContext, viewingHomeProfileRingRecommendationSignature]);
+  const ownChannelRecommendedRingSignatures = useMemo(() => {
+    const ownPostId = String(userPublication?.id || '').trim();
+    if (!ownPostId || ownChannelRecommendedRingState.postId !== ownPostId) {return {};}
+    return ownChannelRecommendedRingState.signatures;
+  }, [ownChannelRecommendedRingState, userPublication?.id]);
+  const viewingHomeProfileRingAlreadyRecommended = useMemo(() => {
+    if (!viewingHomeProfileRingRecommendationSignature) {return false;}
+    return !!(
+      ownChannelRecommendedRingSignatures[viewingHomeProfileRingRecommendationSignature]
+      || ownChannelKnownRecommendationSignatures[viewingHomeProfileRingRecommendationSignature]
+    );
+  }, [ownChannelKnownRecommendationSignatures, ownChannelRecommendedRingSignatures, viewingHomeProfileRingRecommendationSignature]);
+  const isViewingHomeProfileRingRecommendationDisabled = !hasActiveOwnChannel || !viewingHomeProfileRingUnlocked || viewingHomeProfileRingAlreadyRecommended;
+  const handleOpenHomeRingRecommendationPanel = useCallback(() => {
+    if (!viewingHomeProfileRingContext) {return;}
+    if (!viewingHomeProfileRingUnlocked) {
+      showActionToast(homeRingRecommendationLockedNotice);
+      return;
+    }
+    if (!hasActiveOwnChannel || viewingHomeProfileRingAlreadyRecommended) {return;}
+    setShowHomeRingRecommendationPanel(true);
+  }, [hasActiveOwnChannel, homeRingRecommendationLockedNotice, showActionToast, viewingHomeProfileRingAlreadyRecommended, viewingHomeProfileRingContext, viewingHomeProfileRingUnlocked]);
+  const handleSubmitHomeRingRecommendation = useCallback(async () => {
+    if (isSubmittingHomeRingRecommendation) {return;}
+    if (!authToken) {
+      Alert.alert(sessionRequiredTitle, localize({
+        es: 'Inicia sesión para recomendar aros en tu canal.',
+        en: 'Sign in to recommend rings in your channel.',
+        fr: 'Connectez-vous pour recommander des anneaux dans votre canal.',
+        pt: 'Inicia sessão para recomendar aros no teu canal.',
+        de: 'Melde dich an, um Ringe in deinem Kanal zu empfehlen.',
+        it: 'Accedi per consigliare anelli nel tuo canale.',
+      }));
+      return;
+    }
+    if (!hasActiveOwnChannel || !viewingHomeProfileRingContext) {return;}
+    if (viewingHomeProfileRingAlreadyRecommended) {
+      Alert.alert(errorTitle, homeRingRecommendationAlreadyRecommendedNotice);
+      return;
+    }
+
+    const targetPostId = String(userPublication?.id || '').trim();
+    const sourcePublicationId = String(viewingHomeProfileRingContext.publicationId || '').trim();
+    const sourceImageUrl = String(viewingHomeProfileRingContext.image?.uri || '').trim();
+    const recommendationSignature = buildChannelRingRecommendationSignature({
+      sourcePublicationId,
+      ring: viewingHomeProfileRingContext.ring,
+    });
+    if (!sourcePublicationId || !targetPostId || !sourceImageUrl || !String(viewingHomeProfileRingContext.ring?.id || '').trim()) {
+      Alert.alert(errorTitle, localize({
+        es: 'No se pudo recomendar este aro. Intenta de nuevo.',
+        en: 'This ring could not be recommended. Please try again.',
+        fr: 'Cet anneau n’a pas pu être recommandé. Réessayez.',
+        pt: 'Não foi possível recomendar este aro. Tenta novamente.',
+        de: 'Dieser Ring konnte nicht empfohlen werden. Bitte versuche es erneut.',
+        it: 'Non è stato possibile consigliare questo anello. Riprova.',
+      }));
+      return;
+    }
+
+    setIsSubmittingHomeRingRecommendation(true);
+    try {
+      const encoded = encodeChannelRingRecommendationMessage({
+        sourcePublicationId,
+        sourceImageUrl,
+        sourceImageAspectRatio: viewingHomeProfileRingContext.image?.aspectRatio ?? null,
+        ring: viewingHomeProfileRingContext.ring,
+        creator: {
+          username: viewingHomeProfileRingContext.creator.username,
+          email: viewingHomeProfileRingContext.creator.email || null,
+          profilePhotoUri: viewingHomeProfileRingContext.creator.profilePhotoUri || null,
+          socialNetworks: Array.isArray(viewingHomeProfileRingContext.creator.socialNetworks)
+            ? viewingHomeProfileRingContext.creator.socialNetworks
+              .map(item => ({
+                network: String(item?.id || '').trim(),
+                link: String(item?.link || '').trim(),
+              }))
+              .filter(item => item.network && item.link)
+            : [],
+          accountVerified: !!viewingHomeProfileRingContext.creator.accountVerified,
+          keintiVerified: !!viewingHomeProfileRingContext.creator.keintiVerified,
+        },
+      });
+
+      const response = await fetch(`${API_URL}/api/channels/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          postId: targetPostId,
+          message: encoded,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        if (errorPayload?.code === 'RECOMMENDATION_ALREADY_POSTED' && recommendationSignature) {
+          setOwnChannelRecommendedRingState(prev => (
+            prev.postId === targetPostId
+              ? {
+                postId: prev.postId,
+                signatures: {
+                  ...prev.signatures,
+                  [recommendationSignature]: 1,
+                },
+              }
+              : {
+                postId: targetPostId,
+                signatures: {
+                  [recommendationSignature]: 1,
+                },
+              }
+          ));
+          setShowHomeRingRecommendationPanel(false);
+          showActionToast(homeRingRecommendationAlreadyRecommendedNotice);
+          return;
+        }
+        throw new Error(errorPayload?.error || localize({
+          es: 'No se pudo recomendar el aro. Intenta de nuevo.',
+          en: 'The ring could not be recommended. Please try again.',
+          fr: 'Impossible de recommander l’anneau. Réessayez.',
+          pt: 'Não foi possível recomendar o aro. Tenta novamente.',
+          de: 'Der Ring konnte nicht empfohlen werden. Bitte versuche es erneut.',
+          it: 'Non è stato possibile consigliare l’anello. Riprova.',
+        }));
+      }
+
+      const newMessage = await response.json().catch(() => null);
+      if (recommendationSignature) {
+        setOwnChannelRecommendedRingState(prev => (
+          prev.postId === targetPostId
+            ? {
+              postId: prev.postId,
+              signatures: {
+                ...prev.signatures,
+                [recommendationSignature]: 1,
+              },
+            }
+            : {
+              postId: targetPostId,
+              signatures: {
+                [recommendationSignature]: 1,
+              },
+            }
+        ));
+      }
+      if (recommendationSignature && sourcePublicationId) {
+        setHomeRingRecommendationCountsBySourcePublication(prev => {
+          const currentCounts = prev[sourcePublicationId] || {};
+          const currentCount = Math.max(0, Math.floor(Number(currentCounts[recommendationSignature] || 0)));
+          return {
+            ...prev,
+            [sourcePublicationId]: {
+              ...currentCounts,
+              [recommendationSignature]: currentCount + 1,
+            },
+          };
+        });
+      }
+      if (newMessage && currentChannelPostIdRef.current === targetPostId) {
+        setChatMessages(prev => {
+          const snapshot = resolveChannelChatStateSnapshot([...prev, newMessage], {
+            hasMoreOlderMessages: channelHasMoreOlderMessagesRef.current,
+            allowTrim: true,
+          });
+          channelOldestMessageIdRef.current = snapshot.oldestMessageId;
+          setChannelHasMoreOlderMessages(snapshot.hasMoreOlderMessages);
+          if (snapshot.didTrim) {
+            pendingChannelScrollToLatestAfterRefreshRef.current = true;
+          }
+          cacheChannelChatState(targetPostId, snapshot.messages, {
+            hasMoreOlderMessages: snapshot.hasMoreOlderMessages,
+            oldestMessageId: snapshot.oldestMessageId,
+            lastSig: snapshot.lastSig,
+          });
+          return snapshot.messages;
+        });
+      }
+
+      closeProfileRingViewerPanelAndThen(() => {
+        showActionToast(localize({
+          es: 'Aro recomendado en tu canal',
+          en: 'Ring recommended in your channel',
+          fr: 'Anneau recommandé dans votre canal',
+          pt: 'Aro recomendado no teu canal',
+          de: 'Ring in deinem Kanal empfohlen',
+          it: 'Anello consigliato nel tuo canale',
+        }));
+      });
+    } catch (error: any) {
+      Alert.alert(errorTitle, error?.message || localize({
+        es: 'No se pudo recomendar el aro. Intenta de nuevo.',
+        en: 'The ring could not be recommended. Please try again.',
+        fr: 'Impossible de recommander l’anneau. Réessayez.',
+        pt: 'Não foi possível recomendar o aro. Tenta novamente.',
+        de: 'Der Ring konnte nicht empfohlen werden. Bitte versuche es erneut.',
+        it: 'Non è stato possibile consigliare l’anello. Riprova.',
+      }));
+    } finally {
+      setIsSubmittingHomeRingRecommendation(false);
+    }
+  }, [API_URL, authToken, cacheChannelChatState, closeProfileRingViewerPanelAndThen, errorTitle, hasActiveOwnChannel, homeRingRecommendationAlreadyRecommendedNotice, isSubmittingHomeRingRecommendation, localize, resolveChannelChatStateSnapshot, sessionRequiredTitle, showActionToast, userPublication?.id, viewingHomeProfileRingAlreadyRecommended, viewingHomeProfileRingContext]);
   const homeIntimidadesSigByPubIdRef = useRef<Record<string, string>>({});
   const [activePresentationIndices, setActivePresentationIndices] = useState<Record<string, number>>({});
   const [presentationOverlayVisible, setPresentationOverlayVisible] = useState<Record<string, boolean>>({});
@@ -13516,7 +15480,6 @@ const FrontScreen = ({
     if (!authToken) {return;}
     setHasHomePostsLoadedOnce(false);
     fetchHomePosts({ showLoader: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]); // Re-fetch when authToken changes
 
   useEffect(() => {
@@ -13530,7 +15493,6 @@ const FrontScreen = ({
     if (!authToken) {return;}
 
     fetchHomePosts({ preservePosition: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeBottomTab, authToken, homeRefreshCounter, isHomeFeedTabActive]);
 
   useEffect(() => {
@@ -15012,9 +16974,11 @@ const FrontScreen = ({
   const handleOpenHomePublicationRing = useCallback((pubId: string | number, ring: ProfileRingPoint) => {
     const key = String(pubId ?? '').trim();
     if (!key) {return;}
+    const publication = publications.find(item => String(item?.id || '').trim() === key) ?? null;
+    if (!publication) {return;}
     homeRingTapSuppressUntilRef.current[key] = Date.now() + 350;
-    openHomeProfileRingViewerPanelFromRing(ring);
-  }, [openHomeProfileRingViewerPanelFromRing]);
+    openHomeProfileRingViewerPanelFromRing(publication, ring);
+  }, [openHomeProfileRingViewerPanelFromRing, publications]);
 
   const handleToggleHomePublicationExpandedText = useCallback((pubId: string | number) => {
     const key = String(pubId ?? '').trim();
@@ -15043,8 +17007,19 @@ const FrontScreen = ({
     const key = String(pubId ?? '').trim();
     if (!key) {return;}
 
+    delete homeRingRecommendationCountsFetchSeqRef.current[key];
+    setHomeRingRecommendationCountsBySourcePublication(prev => {
+      if (!prev[key]) {return prev;}
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
     setPublications(prev => prev.filter(publication => String(publication.id) !== key));
-  }, []);
+
+    if (viewingProfileRingSource === 'home' && String(viewingHomeProfileRingContext?.publicationId || '').trim() === key) {
+      closeProfileRingViewerPanel();
+    }
+  }, [closeProfileRingViewerPanel, viewingHomeProfileRingContext, viewingProfileRingSource]);
 
   const handleHomePublicationIntimidadesButtonPress = useCallback((pubId: string | number, intimidadesLength: number) => {
     const key = String(pubId ?? '').trim();
@@ -15397,39 +17372,28 @@ const FrontScreen = ({
   return (
     <View style={styles.container}>
       {actionToast && (
-        <Modal transparent visible animationType="none" statusBarTranslucent navigationBarTranslucent onRequestClose={() => { }}>
-          <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
-            <Animated.View
-              pointerEvents="none"
-              style={{
-                position: 'absolute',
-                left: 20,
-                right: 20,
-                bottom: Math.max((bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + 14, bottomSystemOffset + 24),
-                opacity: actionToastAnim,
-                transform: [
-                  {
-                    translateY: actionToastAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [30, 0],
-                    }),
-                  },
-                ],
-              }}
-            >
-              <View
-                style={{
-                  backgroundColor: 'rgba(50,50,50,0.95)',
-                  borderRadius: 14,
-                  paddingVertical: 12,
-                  paddingHorizontal: 14,
-                }}
-              >
-                <Text style={{ color: '#FFFFFF', fontSize: 13, textAlign: 'center' }}>{actionToast}</Text>
-              </View>
-            </Animated.View>
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.actionToastContainer,
+            {
+              bottom: Math.max((bottomNavHeight || BOTTOM_NAV_OVERLAY_HEIGHT) + 14, bottomSystemOffset + 24),
+              opacity: actionToastAnim,
+              transform: [
+                {
+                  translateY: actionToastAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [30, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <View style={styles.actionToastPanel}>
+            <Text style={styles.actionToastText}>{actionToast}</Text>
           </View>
-        </Modal>
+        </Animated.View>
       )}
       {/* Header superior izquierdo - Perfil */}
       {!isHomeFeedTabActive && activeBottomTab !== 'chat' && activeBottomTab !== 'hype' && (
@@ -15690,20 +17654,27 @@ const FrontScreen = ({
               <MaterialIcons name="check" size={20} color="#FFFFFF" />
             </TouchableOpacity>
           </View>
-          <ScrollView
+          <FlatList
             style={styles.reactionScrollView}
             contentContainerStyle={styles.reactionGrid}
-            showsVerticalScrollIndicator={false}
-          >
-            {REACTION_EMOJIS.map((emoji, index) => (
+            columnWrapperStyle={styles.reactionGridRow}
+            data={REACTION_EMOJIS}
+            keyExtractor={(emoji) => emoji}
+            renderItem={({ item }) => (
               <ReactionEmojiButton
-                key={index}
-                emoji={emoji}
-                selected={selectedReactions.includes(emoji)}
+                emoji={item}
+                selected={selectedReactions.includes(item)}
                 onPress={handleReactionSelect}
               />
-            ))}
-          </ScrollView>
+            )}
+            numColumns={REACTION_PANEL_NUM_COLUMNS}
+            initialNumToRender={24}
+            maxToRenderPerBatch={24}
+            updateCellsBatchingPeriod={16}
+            windowSize={5}
+            removeClippedSubviews={false}
+            showsVerticalScrollIndicator={false}
+          />
         </Animated.View>
       )}
 
@@ -15805,6 +17776,8 @@ const FrontScreen = ({
                     const { latitude, longitude } = e.nativeEvent.coordinate;
                     if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
                       moveProfileRingLocationMapTo(latitude, longitude);
+                      setProfileRingPickedLocationLabel(null);
+                      setProfileRingPickedLocationPlaceId(null);
                     }
                   }}
                 />
@@ -15813,15 +17786,24 @@ const FrontScreen = ({
               {/* Search overlay */}
               <View style={styles.profileRingLocationSearchContainer} pointerEvents="box-none">
                 <View style={styles.profileRingLocationSearchBar}>
-                  <MaterialIcons name="search" size={18} color="rgba(255,255,255,0.75)" />
+                  <MaterialIcons name="search" size={18} color="rgba(255,255,255,0.72)" />
                   <TextInput
                     style={styles.profileRingLocationSearchInput}
-                    placeholder={isPlacesSearchEnabled ? 'Buscar ubicación…' : 'Inicia sesión para buscar…'}
-                    placeholderTextColor="rgba(255,255,255,0.35)"
+                    placeholder={localize({
+                      es: 'Buscar ubicación',
+                      en: 'Search location',
+                      fr: 'Rechercher un lieu',
+                      pt: 'Procurar localização',
+                      de: 'Ort suchen',
+                      it: 'Cerca posizione',
+                    })}
+                    placeholderTextColor="rgba(255,255,255,0.45)"
                     value={profileRingLocationSearchQuery}
-                    onChangeText={(v) => {
-                      setProfileRingLocationSearchQuery(v);
+                    onChangeText={(text) => {
+                      setProfileRingLocationSearchQuery(text);
+                      setProfileRingLocationSearchError('');
                       setProfileRingPickedLocationLabel(null);
+                      setProfileRingPickedLocationPlaceId(null);
                     }}
                     editable={isPlacesSearchEnabled}
                     autoCapitalize="none"
@@ -16137,7 +18119,7 @@ const FrontScreen = ({
       }
 
       {
-        activeBottomTab === 'hype' && (
+          activeBottomTab === 'hype' && !expandedChannelReading && (
           <View
             style={[
               styles.hypeHeaderOverlay,
@@ -16441,9 +18423,6 @@ const FrontScreen = ({
                           || !hypeEventUnlockKey
                           || unlockedHypeChannelEventKeys[hypeEventUnlockKey] === true;
                         const isHypeEventLocked = !isHypeEventUnlocked;
-                        const shouldShowJoinChannelIcon = !isOwnedByViewer
-                          && !item?.viewer_is_subscribed
-                          && !isHypeEventLocked;
                       const rawPublisherSocialNetworks = Array.isArray(item?.publisher_social_networks)
                         ? item.publisher_social_networks
                         : [];
@@ -16555,23 +18534,6 @@ const FrontScreen = ({
                             </View>
                             <View style={styles.hypeEventHeaderRight}>
                               <View style={styles.hypeEventHeaderRankRow}>
-                                {shouldShowJoinChannelIcon ? (
-                                  <FireworkChatIcon
-                                    size={12}
-                                    onPress={() => {
-                                      const channelPostId = String(item?.post_id ?? '').trim();
-                                      if (!channelPostId || !publisherEmailValue) {return;}
-                                      void handleEnterChannel({
-                                        id: channelPostId,
-                                        user: {
-                                          email: String(item?.publisher_email || ''),
-                                          username: String(item?.publisher_username || item?.publisher_email || 'Canal'),
-                                        },
-                                      } as Publication);
-                                    }}
-                                    style={{ marginRight: 6 }}
-                                  />
-                                ) : null}
                                 <Text style={styles.hypeEventHeaderRankText}>{hypeRankLabel}</Text>
                               </View>
                               <View style={styles.hypeEventHeaderMetaRowRight}>
@@ -16709,9 +18671,6 @@ const FrontScreen = ({
                       || !hypeReadingUnlockKey
                       || unlockedHypeChannelReadingKeys[hypeReadingUnlockKey] === true;
                     const isHypeReadingLocked = !isHypeReadingUnlocked;
-                    const shouldShowJoinChannelIcon = !isOwnedByViewer
-                      && !item?.viewer_is_subscribed
-                      && !isHypeReadingLocked;
                     const rawPublisherSocialNetworks = Array.isArray(item?.publisher_social_networks)
                       ? item.publisher_social_networks
                       : [];
@@ -16823,23 +18782,6 @@ const FrontScreen = ({
                           </View>
                           <View style={styles.hypeEventHeaderRight}>
                             <View style={styles.hypeEventHeaderRankRow}>
-                              {shouldShowJoinChannelIcon ? (
-                                <FireworkChatIcon
-                                  size={12}
-                                  onPress={() => {
-                                    const channelPostId = String(item?.post_id ?? '').trim();
-                                    if (!channelPostId || !publisherEmailValue) {return;}
-                                    void handleEnterChannel({
-                                      id: channelPostId,
-                                      user: {
-                                        email: String(item?.publisher_email || ''),
-                                        username: String(item?.publisher_username || item?.publisher_email || 'Canal'),
-                                      },
-                                    } as Publication);
-                                  }}
-                                  style={{ marginRight: 6 }}
-                                />
-                              ) : null}
                               <Text style={styles.hypeEventHeaderRankText}>{hypeRankLabel}</Text>
                             </View>
                             <View style={styles.hypeEventHeaderMetaRowRight}>
@@ -19580,6 +21522,13 @@ const FrontScreen = ({
                               });
                             }
 
+                            const parsedRecommendation = parseChannelRingRecommendationMessage(rawText.trim());
+                            if (parsedRecommendation) {
+                              return renderChannelRingRecommendationMessageCard(parsedRecommendation, {
+                                onOpenImage: openChannelImageViewer,
+                              });
+                            }
+
                             const parsedReading = parseChannelReadingMessage(rawText.trim());
                             if (parsedReading) {
                               return renderChannelReadingMessageCard(parsedReading, {
@@ -19644,6 +21593,13 @@ const FrontScreen = ({
                                 message: sourceMessage,
                                 canCompleteRewardedTasks: !!userEmail && !!channelOwnerEmail && String(userEmail) === String(channelOwnerEmail),
                                 onCompleteRewardedTask: handleCompleteChannelEventRewardTask,
+                              });
+                            }
+
+                            const parsedRecommendation = parseChannelRingRecommendationMessage(rawText.trim());
+                            if (parsedRecommendation) {
+                              return renderChannelRingRecommendationMessageCard(parsedRecommendation, {
+                                onOpenImage: options?.onOpenImage || openChannelImageViewer,
                               });
                             }
 
@@ -19859,6 +21815,8 @@ const FrontScreen = ({
                             const isChannelEventMessage = !!parsedChannelEventMessage;
                             const parsedChannelReadingMessage = parseChannelReadingMessage(messageText.trim());
                             const isChannelReadingMessage = !!parsedChannelReadingMessage;
+                            const parsedChannelRecommendationMessage = parseChannelRingRecommendationMessage(messageText.trim());
+                            const isChannelRecommendationMessage = !!parsedChannelRecommendationMessage;
                             const isViewerInJoinedChannel =
                               !!selectedChannel &&
                               !!userEmail &&
@@ -19919,6 +21877,28 @@ const FrontScreen = ({
                             const isChannelEventDonationPanelOpen = activeChannelEventDonationPanelKey === messageKey;
                             const isDonatingThisChannelEvent = donatingChannelEventMessageKey === messageKey;
                             const myReplies = repliesByMessageKey[messageKey] || [];
+                            const recommendationThreadEntries = channelChatRenderModel.recommendationThreadEntriesByMessageKey[messageKey] || [];
+                            const recommendationThreadItems = isChannelRecommendationMessage ? buildRecommendationThreadItems(messageKey) : [];
+                            const normalizedCurrentUserEmail = normalizeEmailKey(userEmail);
+                            const viewerHasRecommendationReply = isChannelRecommendationMessage
+                              && !!normalizedCurrentUserEmail
+                              && recommendationThreadEntries.some((entry) => (
+                                entry.entryKind === 'viewer-root'
+                                && normalizeEmailKey(entry.viewerEmail || entry.senderEmail) === normalizedCurrentUserEmail
+                              ));
+                            const recommendationReplyLabel = localize({
+                              es: 'Recomendación',
+                              en: 'Recommendation',
+                              fr: 'Recommandation',
+                              pt: 'Recomendação',
+                              de: 'Empfehlung',
+                              it: 'Raccomandazione',
+                            });
+                            const channelOwnerDisplayName = selectedChannel
+                              ? String(selectedChannel.username || fallbackUserLabel)
+                              : String(userPublication?.user?.username || fallbackUserLabel);
+                            const channelOwnerHandle = formatUsernameWithAt(channelOwnerDisplayName);
+                            const isRecommendationReplyContextForThisMessage = activeRecommendationReplyContext?.recommendationMessageKey === messageKey;
 
                             const activeChannelPostId = String(
                               selectedChannel?.post_id ??
@@ -20092,7 +22072,7 @@ const FrontScreen = ({
                                       msg,
                                     )}
                                     </View>
-                                    {myReplies.length > 0 && (
+                                    {!isChannelRecommendationMessage && myReplies.length > 0 && (
                                       <View style={[{ marginTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)', paddingTop: 10 }, (msg as any)?.hidden ? { opacity: 0.35 } : undefined]}>
                                         {myReplies.map((reply, rIdx) => {
                                           const publisherUsername = selectedChannel ? selectedChannel.username : (userPublication ? userPublication.user.username : 'Publicador');
@@ -20171,9 +22151,179 @@ const FrontScreen = ({
                                         })}
                                       </View>
                                     )}
+                                    {isChannelRecommendationMessage && recommendationThreadItems.length > 0 && (
+                                      <View style={[{ marginTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.88)', paddingTop: 10 }, (msg as any)?.hidden ? { opacity: 0.35 } : undefined]}>
+                                        {recommendationThreadItems.map((threadItem, threadIndex) => {
+                                          if (threadItem.type === 'host-global') {
+                                            return (
+                                              <View key={threadItem.key} style={{ marginBottom: threadIndex === recommendationThreadItems.length - 1 ? 0 : 10 }}>
+                                                <TouchableOpacity
+                                                  activeOpacity={0.8}
+                                                  onPress={() => toggleMentionForMessage(index, channelOwnerHandle, true)}
+                                                >
+                                                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                                                    {shouldShowVerifiedBadgeForHandle(channelOwnerHandle) ? (
+                                                      <View style={{ marginRight: 6 }}>
+                                                        <VerifiedBadgeIcon size={12} solidColor="#FFFFFF" solidOpacity={0.6} />
+                                                      </View>
+                                                    ) : null}
+                                                    <Svg height="16" width="200">
+                                                      <Defs>
+                                                        <LinearGradient id={`gradRecommendationGlobal-${index}-${threadIndex}`} x1="0" y1="0" x2="1" y2="0">
+                                                          <Stop offset="0" stopColor="#ff9900" stopOpacity="1" />
+                                                          <Stop offset="1" stopColor="#ffe45c" stopOpacity="1" />
+                                                        </LinearGradient>
+                                                      </Defs>
+                                                      <SvgText
+                                                        fill={`url(#gradRecommendationGlobal-${index}-${threadIndex})`}
+                                                        stroke="none"
+                                                        fontSize="12"
+                                                        fontWeight="bold"
+                                                        x="0"
+                                                        y="12"
+                                                      >
+                                                        {channelOwnerHandle}
+                                                      </SvgText>
+                                                    </Svg>
+                                                  </View>
+                                                </TouchableOpacity>
+                                                <Text style={{ color: '#FFFFFF', fontSize: 13, lineHeight: 18 }}>
+                                                  {renderTextWithMentions(
+                                                    threadItem.entry.text,
+                                                    (mention) => toggleMentionForMessage(index, mention, true),
+                                                    true,
+                                                  )}
+                                                </Text>
+                                              </View>
+                                            );
+                                          }
+
+                                          const viewerHandle = formatUsernameWithAt(String(
+                                            threadItem.viewerUsername || threadItem.viewerEmail || fallbackUserLabel
+                                          ));
+                                          const isDirectReplyComposerActive = isRecommendationReplyContextForThisMessage
+                                            && activeRecommendationReplyContext?.entryKind === 'host-direct'
+                                            && getRecommendationThreadViewerKey(activeRecommendationReplyContext?.viewerEmail, activeRecommendationReplyContext?.viewerUsername)
+                                              === getRecommendationThreadViewerKey(threadItem.viewerEmail, threadItem.viewerUsername);
+
+                                          return (
+                                            <View key={threadItem.key} style={{ marginBottom: threadIndex === recommendationThreadItems.length - 1 ? 0 : 10 }}>
+                                              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                                                <Text
+                                                  style={{ color: 'rgba(255,255,255,0.88)', fontSize: 11, fontWeight: 'bold', flexShrink: 1 }}
+                                                  onPress={() => toggleMentionForMessage(index, viewerHandle, true)}
+                                                >
+                                                  {viewerHandle}
+                                                </Text>
+                                                {isHostInOwnChannel ? (
+                                                  <TouchableOpacity
+                                                    activeOpacity={0.8}
+                                                    onPress={() => toggleRecommendationReplyContext({
+                                                      recommendationMessageId: messageKey,
+                                                      recommendationMessageKey: messageKey,
+                                                      entryKind: 'host-direct',
+                                                      viewerEmail: threadItem.viewerEmail,
+                                                      viewerUsername: threadItem.viewerUsername,
+                                                      label: viewerHandle,
+                                                    })}
+                                                    style={{ marginLeft: 8 }}
+                                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                                  >
+                                                    <MaterialIcons
+                                                      name="reply"
+                                                      size={18}
+                                                      color={isDirectReplyComposerActive ? '#FFB74D' : 'rgba(255,255,255,0.7)'}
+                                                      style={{ transform: [{ scaleX: -1 }] }}
+                                                    />
+                                                  </TouchableOpacity>
+                                                ) : null}
+                                              </View>
+                                              <Text style={{ color: '#FFFFFF', fontSize: 13, lineHeight: 18 }}>
+                                                {renderTextWithMentions(
+                                                  threadItem.rootEntry.text,
+                                                  (mention) => toggleMentionForMessage(index, mention, true),
+                                                  true,
+                                                )}
+                                              </Text>
+
+                                              {threadItem.directReplies.map((directReply, directIndex) => (
+                                                <View
+                                                  key={`recommendation-direct-${String(directReply.id ?? directReply.created_at ?? directIndex)}`}
+                                                  style={{ marginTop: 8, marginLeft: 12, paddingLeft: 10, borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.35)' }}
+                                                >
+                                                  <TouchableOpacity
+                                                    activeOpacity={0.8}
+                                                    onPress={() => toggleMentionForMessage(index, channelOwnerHandle, true)}
+                                                  >
+                                                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                                                      {shouldShowVerifiedBadgeForHandle(channelOwnerHandle) ? (
+                                                        <View style={{ marginRight: 6 }}>
+                                                          <VerifiedBadgeIcon size={12} solidColor="#FFFFFF" solidOpacity={0.6} />
+                                                        </View>
+                                                      ) : null}
+                                                      <Svg height="16" width="200">
+                                                        <Defs>
+                                                          <LinearGradient id={`gradRecommendationDirect-${index}-${threadIndex}-${directIndex}`} x1="0" y1="0" x2="1" y2="0">
+                                                            <Stop offset="0" stopColor="#ff9900" stopOpacity="1" />
+                                                            <Stop offset="1" stopColor="#ffe45c" stopOpacity="1" />
+                                                          </LinearGradient>
+                                                        </Defs>
+                                                        <SvgText
+                                                          fill={`url(#gradRecommendationDirect-${index}-${threadIndex}-${directIndex})`}
+                                                          stroke="none"
+                                                          fontSize="12"
+                                                          fontWeight="bold"
+                                                          x="0"
+                                                          y="12"
+                                                        >
+                                                          {channelOwnerHandle}
+                                                        </SvgText>
+                                                      </Svg>
+                                                    </View>
+                                                  </TouchableOpacity>
+                                                  <Text style={{ color: '#FFFFFF', fontSize: 13, lineHeight: 18 }}>
+                                                    {renderTextWithMentions(
+                                                      directReply.text,
+                                                      (mention) => toggleMentionForMessage(index, mention, true),
+                                                      true,
+                                                    )}
+                                                  </Text>
+                                                </View>
+                                              ))}
+                                            </View>
+                                          );
+                                        })}
+                                      </View>
+                                    )}
                                   </View>
                                 </View>
-                                {!isMe && !selectedChannel && (
+                                {isChannelRecommendationMessage && (isHostInOwnChannel || (isViewerInJoinedChannel && !viewerHasRecommendationReply)) && (
+                                  <TouchableOpacity
+                                    onPress={() => toggleRecommendationReplyContext({
+                                      recommendationMessageId: messageKey,
+                                      recommendationMessageKey: messageKey,
+                                      entryKind: isHostInOwnChannel ? 'host-global' : 'viewer-root',
+                                      viewerEmail: isViewerInJoinedChannel ? normalizeOptionalString(userEmail) : null,
+                                      viewerUsername: isViewerInJoinedChannel ? normalizeOptionalString(username) : null,
+                                      label: recommendationReplyLabel,
+                                    })}
+                                    style={{ alignSelf: isMe ? 'flex-end' : 'flex-start', marginTop: 4 }}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                  >
+                                    <MaterialIcons
+                                      name="reply"
+                                      size={20}
+                                      color={
+                                        isRecommendationReplyContextForThisMessage
+                                        && activeRecommendationReplyContext?.entryKind === (isHostInOwnChannel ? 'host-global' : 'viewer-root')
+                                          ? '#FFB74D'
+                                          : 'rgba(255,255,255,0.7)'
+                                      }
+                                      style={{ transform: [{ scaleX: -1 }] }}
+                                    />
+                                  </TouchableOpacity>
+                                )}
+                                {!isChannelRecommendationMessage && !isMe && !selectedChannel && (
                                   <TouchableOpacity
                                     onPress={() => {
                                       if (replyingToMessageIndex === index) {
@@ -20389,7 +22539,7 @@ const FrontScreen = ({
                                   </View>
                                 )}
                                 {/* Botón Responder para el viewer en un canal unido — solo activo si la última respuesta del hilo es del publisher */}
-                                {isMe && !!selectedChannel && (() => {
+                                {!isChannelRecommendationMessage && isMe && !!selectedChannel && (() => {
                                   const lastReply = myReplies.length > 0 ? myReplies[myReplies.length - 1] : null;
                                   const canReply = !!lastReply && lastReply.author === 'publisher';
                                   if (!canReply) {return null;}
@@ -20879,6 +23029,7 @@ const FrontScreen = ({
                           const viewerTurnMustWait = (() => {
                             if (expired) {return false;}
                             if (!isViewer) {return false;}
+                            if (activeRecommendationReplyContext) {return false;}
 
                             const myHandle = username
                               ? (String(username).trim().startsWith('@') ? String(username).trim() : `@${String(username).trim()}`)
@@ -20892,7 +23043,10 @@ const FrontScreen = ({
 
                             const lastMy = [...chatMessages]
                               .reverse()
-                              .find((m: any) => String(m?.sender_email ?? '') === String(userEmail));
+                              .find((m: any) => (
+                                String(m?.sender_email ?? '') === String(userEmail)
+                                && !parseChannelRingRecommendationThreadMessage(String(m?.message ?? '').trim())
+                              ));
                             if (!lastMy?.id) {return false;} // nunca has enviado
 
                             const lastMyId = toMsgId(lastMy);
@@ -20929,7 +23083,7 @@ const FrontScreen = ({
                                 marginBottom: 0,
                                 position: 'relative',
                               }}>
-                                {(channelTab === 'Tu canal' && userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) && showChannelAttachmentPanel && (
+                                {(channelTab === 'Tu canal' && userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail) && !activeRecommendationReplyContext) && showChannelAttachmentPanel && (
                                   <View
                                     style={{
                                       position: 'absolute',
@@ -20988,7 +23142,7 @@ const FrontScreen = ({
                                   </Animated.View>
                                 )}
 
-                                {(channelTab === 'Tu canal' && userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail)) && (
+                                {(channelTab === 'Tu canal' && userEmail && channelOwnerEmail && String(userEmail) === String(channelOwnerEmail) && !activeRecommendationReplyContext) && (
                                   <TouchableOpacity
                                     activeOpacity={0.8}
                                     onPress={() => setShowChannelAttachmentPanel(prev => !prev)}
@@ -21004,14 +23158,16 @@ const FrontScreen = ({
                                   </TouchableOpacity>
                                 )}
 
-                                {replyingToUsername && (
-                                  <Text style={{ color: '#FFB74D', marginLeft: channelTab === 'Tu canal' ? 6 : 15, fontWeight: 'bold' }}>{replyingToUsername}</Text>
+                                {(activeRecommendationReplyContext?.label || replyingToUsername) && (
+                                  <Text style={{ color: '#FFB74D', marginLeft: channelTab === 'Tu canal' ? 6 : 15, fontWeight: 'bold' }}>
+                                    {activeRecommendationReplyContext?.label || replyingToUsername}
+                                  </Text>
                                 )}
                                 <TextInput
                                   style={{
                                     flex: 1,
                                     paddingHorizontal: 15,
-                                    paddingLeft: replyingToUsername ? 5 : 15,
+                                    paddingLeft: (activeRecommendationReplyContext?.label || replyingToUsername) ? 5 : 15,
                                     paddingVertical: 10,
                                     maxHeight: CHAT_INPUT_MAX_HEIGHT,
                                     color: '#FFFFFF',
@@ -21040,7 +23196,15 @@ const FrontScreen = ({
                                     setIsSendingChannelMessage(true);
                                     try {
                                       const targetPostId = selectedChannel ? selectedChannel.post_id : userPublication?.id;
-                                      const finalMessage = replyingToUsername ? `${replyingToUsername} ${trimmed}` : trimmed;
+                                      const finalMessage = activeRecommendationReplyContext
+                                        ? encodeChannelRingRecommendationThreadMessage({
+                                          recommendationMessageId: activeRecommendationReplyContext.recommendationMessageId,
+                                          entryKind: activeRecommendationReplyContext.entryKind,
+                                          text: trimmed,
+                                          viewerEmail: activeRecommendationReplyContext.viewerEmail,
+                                          viewerUsername: activeRecommendationReplyContext.viewerUsername,
+                                        })
+                                        : replyingToUsername ? `${replyingToUsername} ${trimmed}` : trimmed;
                                       const response = await fetch(`${API_URL}/api/channels/messages`, {
                                         method: 'POST',
                                         headers: {
@@ -21074,10 +23238,23 @@ const FrontScreen = ({
                                         setChatInputValue('');
                                         setReplyingToUsername(null);
                                         setReplyingToMessageIndex(null);
+                                        setActiveRecommendationReplyContext(null);
                                         setShowChannelAttachmentPanel(false);
                                       } else {
                                         const errorData = await response.json();
                                         const errorMessage = errorData.error || '';
+
+                                        if (errorData?.code === 'RECOMMENDATION_ALREADY_REPLIED') {
+                                          showActionToast(localize({
+                                            es: 'Ya respondiste a esta recomendación',
+                                            en: 'You already replied to this recommendation',
+                                            fr: 'Vous avez déjà répondu à cette recommandation',
+                                            pt: 'Já respondeste a esta recomendação',
+                                            de: 'Du hast auf diese Empfehlung bereits geantwortet',
+                                            it: 'Hai già risposto a questa raccomandazione',
+                                          }));
+                                          return;
+                                        }
 
                                         if (errorData?.code === 'WAIT_FOR_PUBLISHER_REPLY') {
                                           showActionToast(t('chat.waitCreatorReplyAgain' as TranslationKey));
@@ -21143,6 +23320,7 @@ const FrontScreen = ({
                                     setChannelMessagesTab(prev => getNextChannelMessagesTab(prev));
                                     setReplyingToMessageIndex(null);
                                     setReplyingToUsername(null);
+                                    setActiveRecommendationReplyContext(null);
                                     setExpandedMention(null);
                                   }}
                                   style={{ paddingHorizontal: 8, paddingVertical: 2, alignItems: 'center' }}
@@ -21152,6 +23330,8 @@ const FrontScreen = ({
                                       ? 'chat.generalTab'
                                       : channelMessagesTab === 'Hilos'
                                         ? 'chat.yourThreadsTab'
+                                        : channelMessagesTab === 'Recomendaciones'
+                                          ? 'chat.recommendationsTab'
                                         : channelMessagesTab === 'Eventos'
                                           ? 'chat.eventsTab'
                                           : channelMessagesTab === 'Lecturas'
@@ -21752,6 +23932,24 @@ const FrontScreen = ({
                 </TouchableOpacity>
               </View>
             )}
+            {viewingProfileRingSource === 'home' && (
+              <TouchableOpacity
+                onPress={handleOpenHomeRingRecommendationPanel}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                activeOpacity={isViewingHomeProfileRingRecommendationDisabled ? 1 : 0.75}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: isViewingHomeProfileRingRecommendationDisabled }}
+                accessibilityLabel={homeRingRecommendationButtonText}
+                style={{ opacity: isViewingHomeProfileRingRecommendationDisabled ? 0.3 : 1 }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <MaterialIcons name="recommend" size={22} color="#FFFFFF" />
+                  <Text style={{ marginLeft: 6, color: '#FFFFFF', fontSize: 14, fontWeight: '800' }}>
+                    {viewingHomeProfileRingRecommendationCount}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
           </View>
 
           <ScrollView
@@ -21762,6 +23960,24 @@ const FrontScreen = ({
             <Text style={styles.profileRingViewerName}>
               {viewingProfileRing.name}
             </Text>
+
+            {!!(viewingProfileRing.locationLabel) && (
+              <View style={[styles.profileRingViewerMetaSection, { marginTop: 0, marginBottom: 12 }]}>
+                <Text style={styles.profileRingViewerMetaLabel}>{t('front.profileRingLocationLabel' as TranslationKey)}</Text>
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={() => openExternalLink(viewingProfileRing.locationUrl || 'https://www.google.com/maps')}
+                  style={styles.profileRingViewerMetaRow}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <MaterialIcons name="place" size={18} color="#FFB74D" />
+                  <Text style={styles.profileRingViewerMetaText} numberOfLines={2}>
+                    {viewingProfileRing.locationLabel}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             <Text style={styles.profileRingViewerDescription}>
               {viewingProfileRing.description}
             </Text>
@@ -21793,22 +24009,6 @@ const FrontScreen = ({
               </View>
             )}
 
-            {!!(viewingProfileRing.locationLabel) && (
-              <View style={styles.profileRingViewerMetaSection}>
-                <Text style={styles.profileRingViewerMetaLabel}>{t('front.profileRingLocationLabel' as TranslationKey)}</Text>
-                <TouchableOpacity
-                  activeOpacity={0.75}
-                  onPress={() => openExternalLink(viewingProfileRing.locationUrl || 'https://www.google.com/maps')}
-                  style={styles.profileRingViewerMetaRow}
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                >
-                  <MaterialIcons name="place" size={18} color="#FFB74D" />
-                  <Text style={styles.profileRingViewerMetaText} numberOfLines={2}>
-                    {viewingProfileRing.locationLabel}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
           </ScrollView>
           {(viewingProfileRingSource === 'home' || isHomeFeedTabActive) && adsSdkReady && (
             <View
@@ -21854,17 +24054,92 @@ const FrontScreen = ({
         </Animated.View>
       )}
 
+      <Modal
+        visible={showHomeRingRecommendationPanel}
+        transparent
+        animationType={Platform.OS === 'android' ? 'none' : 'fade'}
+        onRequestClose={closeHomeRingRecommendationPanel}
+      >
+        <View style={styles.channelEventModalOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={closeHomeRingRecommendationPanel}
+          />
+          <View style={[styles.channelEventModalCard, { minHeight: 0, maxHeight: undefined }]}>
+            <View style={{ paddingHorizontal: 24, paddingTop: 26, paddingBottom: 24 }}>
+              <Text style={{ color: '#FFFFFF', fontSize: 20, fontWeight: '900', lineHeight: 26, textAlign: 'center' }}>
+                {homeRingRecommendationPanelTitle}
+              </Text>
+
+              <View style={{ marginTop: 22, flexDirection: 'row', alignItems: 'center', alignSelf: 'center', maxWidth: '100%' }}>
+                <TouchableOpacity
+                  activeOpacity={viewingHomeProfileRingCreatorAvatarUri ? 0.85 : 1}
+                  disabled={!viewingHomeProfileRingCreatorAvatarUri}
+                  onPress={() => {
+                    if (!viewingHomeProfileRingCreatorAvatarUri) {return;}
+                    setFullScreenAvatarUri(viewingHomeProfileRingCreatorAvatarUri);
+                  }}
+                  style={{ marginRight: 12 }}
+                >
+                  {viewingHomeProfileRingCreatorAvatarUri ? (
+                    <Image
+                      source={{ uri: viewingHomeProfileRingCreatorAvatarUri }}
+                      style={{ width: 48, height: 48, borderRadius: 24 }}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: '#444', alignItems: 'center', justifyContent: 'center' }}>
+                      <MaterialIcons name="person" size={22} color="#FFFFFF" />
+                    </View>
+                  )}
+                </TouchableOpacity>
+
+                <View style={{ flexShrink: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
+                    {viewingHomeProfileRingContext?.creator?.accountVerified ? (
+                      <View style={{ marginRight: 6 }}>
+                        <VerifiedBadgeIcon size={14} solidColor="#FFFFFF" solidOpacity={0.6} />
+                      </View>
+                    ) : null}
+                    <Text style={{ color: '#FFFFFF', fontSize: 15, fontWeight: '800' }} numberOfLines={1}>
+                      {viewingHomeProfileRingCreatorHandle}
+                    </Text>
+                    {viewingHomeProfileRingContext?.creator?.keintiVerified ? (
+                      <View style={{ marginLeft: 6 }}>
+                        <VerifiedBadgeIcon size={14} variant="gradient" />
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              </View>
+
+              <View style={{ marginTop: 24 }}>
+                <ChannelEventApplyButton
+                  label={homeRingRecommendationButtonText}
+                  subLabel={homeRingRecommendationButtonSubtext}
+                  disabled={!hasActiveOwnChannel || isSubmittingHomeRingRecommendation || viewingHomeProfileRingAlreadyRecommended}
+                  loading={isSubmittingHomeRingRecommendation}
+                  onPress={handleSubmitHomeRingRecommendation}
+                />
+              </View>
+
+              {!hasActiveOwnChannel ? (
+                <Text style={{ marginTop: 12, color: 'rgba(255,255,255,0.5)', fontSize: 13, lineHeight: 18, textAlign: 'center' }}>
+                  {homeRingRecommendationInactiveChannelNotice}
+                </Text>
+              ) : viewingHomeProfileRingAlreadyRecommended ? (
+                <Text style={{ marginTop: 12, color: 'rgba(255,255,255,0.5)', fontSize: 13, lineHeight: 18, textAlign: 'center' }}>
+                  {homeRingRecommendationAlreadyRecommendedNotice}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Profile ring color panel overlay */}
       {showProfileRingColorPanel && (
-        <TouchableWithoutFeedback onPress={() => {
-          if (isKeyboardVisible) {
-            Keyboard.dismiss();
-            return;
-          }
-          closeProfileRingColorPanel();
-        }}>
-          <View style={styles.socialPanelOverlay} />
-        </TouchableWithoutFeedback>
+        <View pointerEvents="none" style={styles.socialPanelOverlay} />
       )}
 
       {/* Profile ring color panel */}
@@ -21878,259 +24153,259 @@ const FrontScreen = ({
             { transform: [{ translateY: profileRingColorPanelAnimation }] },
           ]}
         >
-          <View style={styles.profileRingColorPanelHeader}>
-            <TouchableOpacity
-              onPress={createSelectedProfileRing}
-              activeOpacity={0.8}
-              disabled={!canCreateProfileRingMeta}
-              style={styles.profileRingApplyAction}
-            >
-              <MaterialIcons name="check" size={22} color="#FFFFFF" />
-              <Text style={styles.profileRingApplyActionText}>{t('common.create' as TranslationKey)}</Text>
-              {!canCreateProfileRingMeta && (
-                <View style={styles.profileRingApplyActionDisabledOverlay} pointerEvents="none" />
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={deleteSelectedProfileRing}
-              activeOpacity={0.8}
-              style={styles.profileRingDeleteAction}
-            >
-              <MaterialIcons name="delete" size={18} color="#FFFFFF" />
-              <Text style={styles.profileRingDeleteActionText}>{t('front.profileRingDelete' as TranslationKey)}</Text>
-            </TouchableOpacity>
-          </View>
-          <ScrollView
-            ref={profileRingPanelScrollRef}
-            style={styles.profileRingPanelScroll}
-            contentContainerStyle={styles.profileRingPanelScrollContent}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
-            showsVerticalScrollIndicator={false}
-          >
-            <View style={styles.profileRingColorOptionsRow}>
-              {PROFILE_RING_COLOR_OPTIONS.map(opt => {
-                const selectedColor = String(profileRingColorDraft || '').toLowerCase();
-                const isSelected = selectedColor === opt.color.toLowerCase();
-                const innerSize = 34;
-                return (
-                  <TouchableOpacity
-                    key={opt.key}
-                    activeOpacity={0.8}
-                    onPress={() => applyColorToSelectedRing(opt.color)}
-                    style={[
-                      styles.profileRingColorOptionOuter,
-                      isSelected && styles.profileRingColorOptionOuterSelected,
-                    ]}
-                  >
-                    <View
-                      style={[
-                        styles.profileRingColorOptionInner,
-                        { width: innerSize, height: innerSize, borderRadius: innerSize / 2, borderColor: opt.color },
-                      ]}
-                    />
-                  </TouchableOpacity>
-                );
-              })}
+            <View style={styles.profileRingColorPanelHeader}>
+              <TouchableOpacity
+                onPress={createSelectedProfileRing}
+                activeOpacity={0.8}
+                disabled={!canPersistSelectedProfileRing}
+                style={[
+                  styles.profileRingApplyAction,
+                  !canPersistSelectedProfileRing && styles.profileRingApplyActionDisabled,
+                ]}
+              >
+                <MaterialIcons name="check" size={22} color="#FFFFFF" />
+                <Text style={styles.profileRingApplyActionText}>{t('common.create' as TranslationKey)}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={deleteSelectedProfileRing}
+                activeOpacity={0.8}
+                style={styles.profileRingDeleteAction}
+              >
+                <MaterialIcons name="delete" size={18} color="#FFFFFF" />
+                <Text style={styles.profileRingDeleteActionText}>{t('front.profileRingDelete' as TranslationKey)}</Text>
+              </TouchableOpacity>
             </View>
-
-            <View style={styles.profileRingMetaContainer}>
-              <Text style={styles.profileRingFieldLabel}>{t('front.profileRingNameLabel' as TranslationKey)}</Text>
-              <Text style={styles.profileRingFieldHelper}>{t('front.profileRingNameHelper' as TranslationKey)}</Text>
-              <TextInput
-                style={styles.profileRingTextInput}
-                value={profileRingNameDraft}
-                onChangeText={updateSelectedProfileRingName}
-                maxLength={38}
-                placeholderTextColor="rgba(255, 255, 255, 0.3)"
-                autoCapitalize="sentences"
-                autoCorrect
-              />
-
-              <Text style={styles.profileRingFieldLabel}>{t('front.profileRingDescriptionLabel' as TranslationKey)}</Text>
-              <TextInput
-                style={[styles.profileRingTextInput, styles.profileRingTextArea]}
-                value={profileRingDescriptionDraft}
-                onChangeText={updateSelectedProfileRingDescription}
-                onFocus={ensureProfileRingFocusedFieldVisible}
-                maxLength={280}
-                placeholderTextColor="rgba(255, 255, 255, 0.3)"
-                autoCapitalize="sentences"
-                autoCorrect
-                multiline
-                textAlignVertical="top"
-              />
-
-              <View style={styles.profileRingLinkLocationContainer}>
-                <View style={styles.profileRingLinkLocationBlock}>
-                  <TouchableOpacity
-                    activeOpacity={0.75}
-                    onPress={toggleProfileRingLinkExpanded}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                  >
-                    <View style={styles.profileRingLinkLocationRow}>
-                      <MaterialIcons name="link" size={18} color="#FFFFFF" />
-                      <Text style={styles.profileRingLinkLocationText}>{t('front.profileRingLinkLabel' as TranslationKey)}</Text>
-                      <View style={{ flex: 1 }} />
-                      <MaterialIcons
-                        name={isProfileRingLinkExpanded ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
-                        size={22}
-                        color="rgba(255, 255, 255, 0.8)"
+            <ScrollView
+              ref={profileRingPanelScrollRef}
+              style={styles.profileRingPanelScroll}
+              contentContainerStyle={styles.profileRingPanelScrollContent}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.profileRingColorOptionsRow}>
+                {PROFILE_RING_COLOR_OPTIONS.map(opt => {
+                  const selectedColor = String(profileRingColorDraft || '').toLowerCase();
+                  const isSelected = selectedColor === opt.color.toLowerCase();
+                  const innerSize = 34;
+                  return (
+                    <TouchableOpacity
+                      key={opt.key}
+                      activeOpacity={0.8}
+                      onPress={() => applyColorToSelectedRing(opt.color)}
+                      style={[
+                        styles.profileRingColorOptionOuter,
+                        isSelected && styles.profileRingColorOptionOuterSelected,
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.profileRingColorOptionInner,
+                          { width: innerSize, height: innerSize, borderRadius: innerSize / 2, borderColor: opt.color },
+                        ]}
                       />
-                    </View>
-                  </TouchableOpacity>
-                  <Text style={styles.profileRingLinkLocationHelper}>{t('front.profileRingLinkHelper' as TranslationKey)}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
 
-                  {!!(profileRingLinkNetworkDraft && profileRingLinkUrlDraft) && !isProfileRingLinkExpanded && (() => {
-                    const key = String(profileRingLinkNetworkDraft || '').trim();
-                    const url = String(profileRingLinkUrlDraft || '').trim();
-                    if (!key || !url) {return null;}
-                    const source = (SOCIAL_ICONS as any)[key];
+              <View style={styles.profileRingMetaContainer}>
+                <Text style={styles.profileRingFieldLabel}>{t('front.profileRingNameLabel' as TranslationKey)}</Text>
+                <Text style={styles.profileRingFieldHelper}>{t('front.profileRingNameHelper' as TranslationKey)}</Text>
+                <TextInput
+                  style={styles.profileRingTextInput}
+                  value={profileRingNameDraft}
+                  onChangeText={updateSelectedProfileRingName}
+                  maxLength={38}
+                  placeholderTextColor="rgba(255, 255, 255, 0.3)"
+                  autoCapitalize="sentences"
+                  autoCorrect
+                />
 
-                    return (
-                      <View style={styles.profileRingLinkPreviewRow}>
+                <Text style={styles.profileRingFieldLabel}>{t('front.profileRingDescriptionLabel' as TranslationKey)}</Text>
+                <TextInput
+                  style={[styles.profileRingTextInput, styles.profileRingTextArea]}
+                  value={profileRingDescriptionDraft}
+                  onChangeText={updateSelectedProfileRingDescription}
+                  onFocus={ensureProfileRingFocusedFieldVisible}
+                  maxLength={280}
+                  placeholderTextColor="rgba(255, 255, 255, 0.3)"
+                  autoCapitalize="sentences"
+                  autoCorrect
+                  multiline
+                  textAlignVertical="top"
+                />
+
+                <View style={styles.profileRingLinkLocationContainer}>
+                  <View style={styles.profileRingLinkLocationBlock}>
+                    <TouchableOpacity
+                      activeOpacity={0.75}
+                      onPress={toggleProfileRingLinkExpanded}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <View style={styles.profileRingLinkLocationRow}>
+                        <MaterialIcons name="link" size={18} color="#FFFFFF" />
+                        <Text style={styles.profileRingLinkLocationText}>{t('front.profileRingLinkLabel' as TranslationKey)}</Text>
+                        <View style={{ flex: 1 }} />
+                        <MaterialIcons
+                          name={isProfileRingLinkExpanded ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                          size={22}
+                          color="rgba(255, 255, 255, 0.8)"
+                        />
+                      </View>
+                    </TouchableOpacity>
+                    <Text style={styles.profileRingLinkLocationHelper}>{t('front.profileRingLinkHelper' as TranslationKey)}</Text>
+
+                    {!!(profileRingLinkNetworkDraft && profileRingLinkUrlDraft) && !isProfileRingLinkExpanded && (() => {
+                      const key = String(profileRingLinkNetworkDraft || '').trim();
+                      const url = String(profileRingLinkUrlDraft || '').trim();
+                      if (!key || !url) {return null;}
+                      const source = (SOCIAL_ICONS as any)[key];
+
+                      return (
+                        <View style={styles.profileRingLinkPreviewRow}>
+                          <TouchableOpacity
+                            activeOpacity={0.75}
+                            onPress={clearProfileRingLinkDraft}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            accessibilityRole="button"
+                            accessibilityLabel="Eliminar enlace"
+                            style={styles.profileRingPreviewRemoveBtn}
+                          >
+                            <MaterialIcons name="close" size={14} color="#FFFFFF" />
+                          </TouchableOpacity>
+                          {source ? (
+                            <TouchableOpacity
+                              activeOpacity={0.75}
+                              onPress={() => openExternalLink(url)}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            >
+                              <Image source={source} style={styles.profileRingLinkedIcon} />
+                            </TouchableOpacity>
+                          ) : null}
+                          <TouchableOpacity
+                            activeOpacity={0.75}
+                            onPress={() => openExternalLink(url)}
+                            style={{ flex: 1 }}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          >
+                            <Text style={styles.profileRingLinkPreviewText} numberOfLines={1}>
+                              {url}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })()}
+
+                    {isProfileRingLinkExpanded && (
+                      <View style={styles.profileRingLinkPickerContainer}>
+                        <View style={styles.socialIconsRow}>
+                          {Object.entries(SOCIAL_ICONS).map(([key, source]) => (
+                            <TouchableOpacity
+                              key={key}
+                              onPress={() => handleSelectProfileRingLinkNetwork(key)}
+                              activeOpacity={0.7}
+                              style={[
+                                styles.socialIconContainer,
+                                profileRingLinkNetworkDraft === key && styles.socialIconSelected,
+                              ]}
+                            >
+                              <Image source={source as any} style={[styles.socialIcon, styles.profileRingSocialIcon]} />
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+
+                        <View style={styles.profileRingLinkInputContainer}>
+                          <TextInput
+                            style={[
+                              styles.socialPanelInput,
+                              !profileRingLinkNetworkDraft && styles.socialPanelInputDisabled,
+                              profileRingLinkErrorDraft ? styles.socialPanelInputError : null,
+                              { marginTop: 0 },
+                            ]}
+                            placeholder={profileRingLinkNetworkDraft ? t('front.link' as TranslationKey) : t('front.selectSocialNetwork' as TranslationKey)}
+                            placeholderTextColor="rgba(255, 255, 255, 0.3)"
+                            value={profileRingLinkUrlDraft}
+                            onChangeText={handleProfileRingLinkUrlChange}
+                            onFocus={ensureProfileRingFocusedFieldVisible}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            keyboardType="url"
+                            editable={!!profileRingLinkNetworkDraft}
+                            selectTextOnFocus={!!profileRingLinkNetworkDraft}
+                          />
+                          {profileRingLinkNetworkDraft && profileRingLinkErrorDraft ? (
+                            <Text style={styles.socialPanelErrorText}>{profileRingLinkErrorDraft}</Text>
+                          ) : null}
+                        </View>
+
+                        <TouchableOpacity
+                          style={[
+                            styles.linkButton,
+                            (!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft) && styles.linkButtonDisabled,
+                            styles.profileRingLinkApplyButton,
+                          ]}
+                          onPress={applyProfileRingLinkDraft}
+                          disabled={!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft}
+                          activeOpacity={0.7}
+                        >
+                          <Text
+                            style={[
+                              styles.linkButtonText,
+                              (!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft) && styles.linkButtonTextDisabled,
+                            ]}
+                          >
+                            {t('common.apply' as TranslationKey)}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.profileRingLinkLocationBlock}>
+                    <TouchableOpacity
+                      activeOpacity={0.75}
+                      onPress={openProfileRingLocationPicker}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <View style={styles.profileRingLinkLocationRow}>
+                        <MaterialIcons name="location-on" size={18} color="#FFFFFF" />
+                        <Text style={styles.profileRingLinkLocationText}>{t('front.profileRingLocationLabel' as TranslationKey)}</Text>
+                        <View style={{ flex: 1 }} />
+                        <MaterialIcons name="add" size={22} color="rgba(255, 255, 255, 0.8)" />
+                      </View>
+                    </TouchableOpacity>
+                    <Text style={styles.profileRingLinkLocationHelper}>{t('front.profileRingLocationHelper' as TranslationKey)}</Text>
+
+                    {!!(profileRingLocationLabelDraft) && (
+                      <View style={styles.profileRingLocationPreviewRow}>
                         <TouchableOpacity
                           activeOpacity={0.75}
-                          onPress={clearProfileRingLinkDraft}
+                          onPress={clearProfileRingLocationDraft}
                           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                           accessibilityRole="button"
-                          accessibilityLabel="Eliminar enlace"
+                          accessibilityLabel="Eliminar ubicación"
                           style={styles.profileRingPreviewRemoveBtn}
                         >
                           <MaterialIcons name="close" size={14} color="#FFFFFF" />
                         </TouchableOpacity>
-                        {source ? (
-                          <TouchableOpacity
-                            activeOpacity={0.75}
-                            onPress={() => openExternalLink(url)}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          >
-                            <Image source={source} style={styles.profileRingLinkedIcon} />
-                          </TouchableOpacity>
-                        ) : null}
+
                         <TouchableOpacity
                           activeOpacity={0.75}
-                          onPress={() => openExternalLink(url)}
-                          style={{ flex: 1 }}
+                          onPress={() => openExternalLink(profileRingLocationUrlDraft || 'https://www.google.com/maps')}
+                          style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
                           hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                         >
-                          <Text style={styles.profileRingLinkPreviewText} numberOfLines={1}>
-                            {url}
+                          <MaterialIcons name="place" size={16} color="rgba(255, 183, 77, 0.9)" />
+                          <Text style={styles.profileRingLocationPreviewText} numberOfLines={1}>
+                            {profileRingLocationLabelDraft}
                           </Text>
                         </TouchableOpacity>
                       </View>
-                    );
-                  })()}
-
-                  {isProfileRingLinkExpanded && (
-                    <View style={styles.profileRingLinkPickerContainer}>
-                      <View style={styles.socialIconsRow}>
-                        {Object.entries(SOCIAL_ICONS).map(([key, source]) => (
-                          <TouchableOpacity
-                            key={key}
-                            onPress={() => handleSelectProfileRingLinkNetwork(key)}
-                            activeOpacity={0.7}
-                            style={[
-                              styles.socialIconContainer,
-                              profileRingLinkNetworkDraft === key && styles.socialIconSelected,
-                            ]}
-                          >
-                            <Image source={source as any} style={[styles.socialIcon, styles.profileRingSocialIcon]} />
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-
-                      <View style={styles.profileRingLinkInputContainer}>
-                        <TextInput
-                          style={[
-                            styles.socialPanelInput,
-                            !profileRingLinkNetworkDraft && styles.socialPanelInputDisabled,
-                            profileRingLinkErrorDraft ? styles.socialPanelInputError : null,
-                            { marginTop: 0 },
-                          ]}
-                          placeholder={profileRingLinkNetworkDraft ? t('front.link' as TranslationKey) : t('front.selectSocialNetwork' as TranslationKey)}
-                          placeholderTextColor="rgba(255, 255, 255, 0.3)"
-                          value={profileRingLinkUrlDraft}
-                          onChangeText={handleProfileRingLinkUrlChange}
-                          onFocus={ensureProfileRingFocusedFieldVisible}
-                          autoCapitalize="none"
-                          autoCorrect={false}
-                          keyboardType="url"
-                          editable={!!profileRingLinkNetworkDraft}
-                          selectTextOnFocus={!!profileRingLinkNetworkDraft}
-                        />
-                        {profileRingLinkNetworkDraft && profileRingLinkErrorDraft ? (
-                          <Text style={styles.socialPanelErrorText}>{profileRingLinkErrorDraft}</Text>
-                        ) : null}
-                      </View>
-
-                      <TouchableOpacity
-                        style={[
-                          styles.linkButton,
-                          (!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft) && styles.linkButtonDisabled,
-                          styles.profileRingLinkApplyButton,
-                        ]}
-                        onPress={applyProfileRingLinkDraft}
-                        disabled={!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft}
-                        activeOpacity={0.7}
-                      >
-                        <Text
-                          style={[
-                            styles.linkButtonText,
-                            (!profileRingLinkNetworkDraft || !profileRingLinkUrlDraft || !!profileRingLinkErrorDraft) && styles.linkButtonTextDisabled,
-                          ]}
-                        >
-                          {t('common.apply' as TranslationKey)}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                </View>
-                <View style={styles.profileRingLinkLocationBlock}>
-                  <TouchableOpacity
-                    activeOpacity={0.75}
-                    onPress={openProfileRingLocationPicker}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                  >
-                    <View style={styles.profileRingLinkLocationRow}>
-                      <MaterialIcons name="location-on" size={18} color="#FFFFFF" />
-                      <Text style={styles.profileRingLinkLocationText}>{t('front.profileRingLocationLabel' as TranslationKey)}</Text>
-                      <View style={{ flex: 1 }} />
-                      <MaterialIcons name="add" size={22} color="rgba(255, 255, 255, 0.8)" />
-                    </View>
-                  </TouchableOpacity>
-                  <Text style={styles.profileRingLinkLocationHelper}>{t('front.profileRingLocationHelper' as TranslationKey)}</Text>
-
-                  {!!(profileRingLocationLabelDraft) && (
-                    <View style={styles.profileRingLocationPreviewRow}>
-                      <TouchableOpacity
-                        activeOpacity={0.75}
-                        onPress={clearProfileRingLocationDraft}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        accessibilityRole="button"
-                        accessibilityLabel="Eliminar ubicación"
-                        style={styles.profileRingPreviewRemoveBtn}
-                      >
-                        <MaterialIcons name="close" size={14} color="#FFFFFF" />
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        activeOpacity={0.75}
-                        onPress={() => openExternalLink(profileRingLocationUrlDraft || 'https://www.google.com/maps')}
-                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
-                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                      >
-                        <MaterialIcons name="place" size={16} color="rgba(255, 183, 77, 0.9)" />
-                        <Text style={styles.profileRingLocationPreviewText} numberOfLines={1}>
-                          {profileRingLocationLabelDraft}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
+                    )}
+                  </View>
                 </View>
               </View>
-            </View>
-          </ScrollView>
+            </ScrollView>
         </Animated.View>
       )}
 
@@ -22381,8 +24656,8 @@ const FrontScreen = ({
                 onPress={() => setShowChannelEventHypeCostInfo(false)}
               />
             ) : null}
-            <View style={styles.channelEventPanelTopActions}>
-              <View style={styles.channelEventWhiteKeysBadge}>
+            <View pointerEvents="box-none" style={styles.channelEventPanelTopActions}>
+              <View pointerEvents="none" style={styles.channelEventWhiteKeysBadge}>
                 <Text style={styles.channelEventWhiteKeysBadgeText}>
                   {channelEventWhiteKeysBalance === null ? '...' : channelEventWhiteKeysBalance}
                 </Text>
@@ -22405,7 +24680,7 @@ const FrontScreen = ({
               style={styles.channelEventScrollView}
               contentContainerStyle={styles.channelEventScrollContent}
               showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
+              keyboardShouldPersistTaps="always"
               nestedScrollEnabled
               bounces={false}
             >
@@ -22801,6 +25076,10 @@ const FrontScreen = ({
                     </TouchableOpacity>
                   </View>
                 )}
+              </View>
+
+              <View style={styles.channelEventSectionBlock}>
+                {renderChannelEventVoiceNoteComposer()}
               </View>
 
               <ChannelEventField
@@ -26147,6 +28426,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 9999,
   },
+  actionToastContainer: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    alignItems: 'center',
+    zIndex: 10001,
+    elevation: 10001,
+  },
+  actionToastPanel: {
+    backgroundColor: 'rgba(50,50,50,0.95)',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  actionToastText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    textAlign: 'center',
+  },
   bottomToastPanel: {
     backgroundColor: '#000000',
     paddingVertical: 12,
@@ -27472,13 +29770,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   reactionGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    rowGap: 12,
-    flexGrow: 0,
     paddingTop: 2,
     paddingBottom: 8,
+    rowGap: REACTION_PANEL_ROW_GAP,
+  },
+  reactionGridRow: {
+    justifyContent: 'space-between',
   },
   reactionItem: {
     width: REACTION_ITEM_SIZE,
@@ -27642,6 +29939,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 2,
     position: 'relative',
+  },
+  profileRingApplyActionDisabled: {
+    opacity: 0.3,
   },
   profileRingApplyActionText: {
     color: '#FFFFFF',
@@ -28283,6 +30583,138 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.58)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  channelEventVoiceNoteComposerCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  channelEventVoiceNoteComposerHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  channelEventVoiceNoteComposerCopy: {
+    flex: 1,
+    marginLeft: 12,
+    marginRight: 10,
+  },
+  channelEventVoiceNoteComposerTitle: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  channelEventVoiceNoteTextInput: {
+    color: 'rgba(255,255,255,0.68)',
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 3,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+  },
+  channelEventVoiceNoteLimitNotice: {
+    alignItems: 'center',
+    width: '100%',
+    paddingHorizontal: 22,
+    paddingTop: 12,
+    paddingBottom: 10,
+  },
+  channelEventVoiceNoteLimitNoticeTitle: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginTop: 14,
+    lineHeight: 20,
+  },
+  channelEventVoiceNoteLimitNoticeBody: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 12,
+    fontWeight: '500',
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 18,
+  },
+  channelEventVoiceNotePrimaryAction: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    minHeight: 34,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  channelEventVoiceNotePrimaryActionText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  channelEventVoiceNoteSecondaryButton: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    minHeight: 34,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  channelEventVoiceNoteSecondaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  channelEventVoiceNoteActionDisabled: {
+    opacity: 0.45,
+  },
+  channelEventVoiceNoteRecordingCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.34)',
+    backgroundColor: 'rgba(255, 183, 77, 0.08)',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  channelEventVoiceNoteRecordingIndicator: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#FF6F61',
+  },
+  channelEventVoiceNoteRecordingStatus: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 6,
+  },
+  channelEventVoiceNoteStopButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    flexShrink: 0,
+    marginLeft: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.28)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    zIndex: 1,
+    elevation: 1,
+  },
+  channelEventVoiceNoteStopButtonPressed: {
+    opacity: 0.78,
+    transform: [{ scale: 0.97 }],
   },
   channelEventSectionTitle: {
     color: '#FFFFFF',
@@ -28926,10 +31358,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
+  channelEventApplyButtonInnerMultiline: {
+    height: 52,
+    paddingVertical: 6,
+  },
+  channelEventApplyButtonContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelEventApplyButtonTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   channelEventApplyButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
+  },
+  channelEventApplyButtonSubtext: {
+    color: '#CFCFCF',
+    fontSize: 12,
+    fontWeight: '400',
+    marginTop: 1,
   },
   channelReadingMessageCard: {
     width: '100%',
@@ -28985,6 +31436,23 @@ const styles = StyleSheet.create({
   channelReadingMessageFooterLabel: {
     color: '#FFFFFF',
     fontSize: 12,
+    fontWeight: '800',
+    marginLeft: 6,
+  },
+  channelReadingMessageAudioMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 5,
+  },
+  channelReadingMessageAudioMetaLabel: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 11,
+    fontWeight: '700',
+    marginLeft: 6,
+  },
+  channelReadingMessageAudioMetaCount: {
+    color: '#FFFFFF',
+    fontSize: 11,
     fontWeight: '800',
     marginLeft: 6,
   },
@@ -29085,6 +31553,9 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 260,
     borderRadius: 18,
+  },
+  expandedChannelReadingVoiceNoteSection: {
+    marginTop: 18,
   },
   expandedChannelReadingPublishedDate: {
     color: 'rgba(255,255,255,0.82)',
@@ -29300,6 +31771,9 @@ const styles = StyleSheet.create({
   },
   channelEventMessageContent: {
     width: '100%',
+  },
+  channelEventMessageVoiceNoteSection: {
+    marginBottom: 12,
   },
   channelEventMessageName: {
     color: '#FFFFFF',

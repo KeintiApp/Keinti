@@ -86,6 +86,18 @@ async function findSupabaseUserIdByEmail(email) {
   return null;
 }
 
+async function resolveCanonicalSupabaseUserId(email, currentSupabaseUserId = null) {
+  const resolvedSupabaseUserId = await findSupabaseUserIdByEmail(email);
+  const fallbackSupabaseUserId = currentSupabaseUserId ? String(currentSupabaseUserId) : null;
+  const canonicalSupabaseUserId = resolvedSupabaseUserId || fallbackSupabaseUserId;
+
+  if (canonicalSupabaseUserId && canonicalSupabaseUserId !== fallbackSupabaseUserId) {
+    await ensureSupabaseUserIdMapped(email, canonicalSupabaseUserId);
+  }
+
+  return canonicalSupabaseUserId;
+}
+
 function generateEmailVerificationCode() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   while (true) {
@@ -210,8 +222,42 @@ async function sendPasswordResetEmail(toEmail, code) {
 function isStrongPassword(pass) {
   const value = String(pass || '');
   if (value.length < 10) return false;
-  const specialCharRegex = /[!@#$%^&*(),.?":{}|<>]/;
-  return specialCharRegex.test(value);
+  if (value.length > 20) return false;
+  const lowercaseRegex = /[a-z]/;
+  const uppercaseRegex = /[A-Z]/;
+  const numberRegex = /\d/;
+  const specialCharRegex = /[!@#$%^&*()_+\-=[\]{};':"\\|<>?,./`~]/;
+  return lowercaseRegex.test(value) && uppercaseRegex.test(value) && numberRegex.test(value) && specialCharRegex.test(value);
+}
+
+function getSupabasePasswordUpdateFailure(updateError) {
+  const code = String(updateError?.code || '').trim().toLowerCase();
+  const message = String(updateError?.message || '').trim().toLowerCase();
+
+  if (code === 'weak_password' || Number(updateError?.status) === 422) {
+    return {
+      status: 400,
+      body: { error: 'Contraseña inválida', code: 'INVALID_PASSWORD' },
+    };
+  }
+
+  if (code === 'user_not_found' || (message.includes('user') && message.includes('not found'))) {
+    return {
+      status: 500,
+      body: {
+        error: 'No se pudo localizar la cuenta principal para actualizar la contraseña.',
+        code: 'SUPABASE_USER_NOT_FOUND',
+      },
+    };
+  }
+
+  return {
+    status: 500,
+    body: {
+      error: 'No se pudo actualizar la contraseña principal.',
+      code: 'SUPABASE_PASSWORD_UPDATE_FAILED',
+    },
+  };
 }
 
 function normalizeBirthDateToIsoDateString(input) {
@@ -1379,23 +1425,36 @@ router.post('/password-reset/confirm', async (req, res) => {
 
     // Prefer updating Supabase Auth password when possible.
     let supabaseUserId = null;
+    let hasLocalPassword = false;
     const mapping = await pool
-      .query('SELECT supabase_user_id FROM users WHERE lower(email) = lower($1) LIMIT 1', [email])
+      .query('SELECT supabase_user_id, password FROM users WHERE lower(email) = lower($1) LIMIT 1', [email])
       .catch(() => null);
     supabaseUserId = mapping?.rows?.[0]?.supabase_user_id ? String(mapping.rows[0].supabase_user_id) : null;
+    hasLocalPassword = !!String(mapping?.rows?.[0]?.password || '').trim();
 
-    if (!supabaseUserId) {
-      supabaseUserId = await findSupabaseUserIdByEmail(email);
-      if (supabaseUserId) {
-        await ensureSupabaseUserIdMapped(email, supabaseUserId);
-      }
+    supabaseUserId = await resolveCanonicalSupabaseUserId(email, supabaseUserId);
+
+    const requiresSupabasePasswordUpdate = !!supabaseUserId || !hasLocalPassword;
+
+    if (requiresSupabasePasswordUpdate && !supabaseUserId) {
+      return res.status(500).json({
+        error: 'No se pudo localizar la cuenta principal para actualizar la contraseña.',
+        code: 'SUPABASE_USER_NOT_FOUND',
+      });
     }
 
-    if (supabaseUserId && isSupabaseConfigured()) {
+    if (requiresSupabasePasswordUpdate && !isSupabaseConfigured()) {
+      return res.status(500).json({
+        error: 'El servidor no está configurado para actualizar la contraseña principal.',
+        code: 'SUPABASE_ADMIN_NOT_CONFIGURED',
+      });
+    }
+
+    if (requiresSupabasePasswordUpdate) {
       const admin = getSupabaseAdminClient();
       const { error: updateError } = await admin.auth.admin.updateUserById(supabaseUserId, { password: newPassword });
       if (!updateError) {
-        await pool
+        const clearLocalPasswordResult = await pool
           .query(
             `UPDATE users
              SET password = NULL,
@@ -1405,20 +1464,28 @@ router.post('/password-reset/confirm', async (req, res) => {
                  updated_at = $2
              WHERE lower(email) = lower($1)`,
             [email, now]
-          )
-          .catch(() => {});
+          );
 
-        await pool.query('DELETE FROM password_reset_codes WHERE lower(email) = lower($1)', [email]).catch(() => {});
+        if (!Number.isFinite(Number(clearLocalPasswordResult?.rowCount)) || Number(clearLocalPasswordResult.rowCount) < 1) {
+          throw new Error('Could not clear local password state after Supabase password reset');
+        }
+
+        const deleteResetCodeResult = await pool.query('DELETE FROM password_reset_codes WHERE lower(email) = lower($1)', [email]);
+        if (!Number.isFinite(Number(deleteResetCodeResult?.rowCount)) || Number(deleteResetCodeResult.rowCount) < 1) {
+          throw new Error('Could not clear password reset token after successful password reset');
+        }
+
         return res.json({ ok: true });
       }
 
       console.error('Supabase updateUserById error:', updateError);
-      // Fall back to legacy local update.
+      const failure = getSupabasePasswordUpdateFailure(updateError);
+      return res.status(failure.status).json(failure.body);
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    await pool.query(
+    const updateLocalPasswordResult = await pool.query(
       `UPDATE users
        SET password = $2,
            account_locked = FALSE,
@@ -1429,7 +1496,14 @@ router.post('/password-reset/confirm', async (req, res) => {
       [email, hashedPassword, now]
     );
 
-    await pool.query('DELETE FROM password_reset_codes WHERE lower(email) = lower($1)', [email]).catch(() => {});
+    if (!Number.isFinite(Number(updateLocalPasswordResult?.rowCount)) || Number(updateLocalPasswordResult.rowCount) < 1) {
+      throw new Error('Could not update local password during password reset');
+    }
+
+    const deleteResetCodeResult = await pool.query('DELETE FROM password_reset_codes WHERE lower(email) = lower($1)', [email]);
+    if (!Number.isFinite(Number(deleteResetCodeResult?.rowCount)) || Number(deleteResetCodeResult.rowCount) < 1) {
+      throw new Error('Could not clear password reset token after local password update');
+    }
 
     return res.json({ ok: true });
   } catch (error) {

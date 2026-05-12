@@ -4,7 +4,16 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import MaskedView from '@react-native-masked-view/masked-view';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+import audioRecorderPlayer, {
+  AudioEncoderAndroidType,
+  AVEncoderAudioQualityIOSType,
+  AVEncodingOption,
+  OutputFormatAndroidType,
+  type AudioSet,
+  type RecordBackType,
+} from '../services/audioRecorderPlayer';
 import ImageCropPicker from 'react-native-image-crop-picker';
+import VoiceNotePlayer, { stopSharedVoiceNotePlayback } from '../components/VoiceNotePlayer';
 import { API_URL, getServerResourceUrl } from '../config/api';
 import { searchUsersByUsername, type UsernameSuggestion, uploadImage } from '../services/userService';
 import { useI18n } from '../i18n/I18nProvider';
@@ -17,6 +26,28 @@ interface ReadingScreenProps {
   channelPostId?: string | number | null;
 }
 
+type VoiceNotePlacement = 'intro' | 'inline' | 'outro';
+
+const READING_MAX_VOICE_NOTES = 3;
+const READING_MAX_INLINE_VOICE_NOTES = 1;
+const READING_MAX_VOICE_NOTE_DURATION_SECONDS = 60;
+const READING_MAX_VOICE_NOTE_DURATION_MS = READING_MAX_VOICE_NOTE_DURATION_SECONDS * 1000;
+const READING_VOICE_NOTE_TEXT_MAX_LENGTH = 40;
+const READING_VOICE_NOTE_MIME_TYPE = 'audio/mp4';
+
+const READING_VOICE_NOTE_AUDIO_SET: AudioSet = {
+  OutputFormatAndroid: OutputFormatAndroidType.MPEG_4,
+  AudioEncoderAndroid: AudioEncoderAndroidType.AAC,
+  AudioChannelsAndroid: 1,
+  AudioSamplingRateAndroid: 44100,
+  AudioEncodingBitRateAndroid: 64000,
+  MaxDurationMillis: READING_MAX_VOICE_NOTE_DURATION_MS,
+  AVFormatIDKeyIOS: AVEncodingOption.aac as AudioSet['AVFormatIDKeyIOS'],
+  AVNumberOfChannelsKeyIOS: 1,
+  AVSampleRateKeyIOS: 44100,
+  AVEncoderAudioQualityKeyIOS: AVEncoderAudioQualityIOSType.medium,
+  AVEncoderBitRateKeyIOS: 64000,
+};
 type ReadingInsertion =
   | {
       type: 'image';
@@ -25,7 +56,21 @@ type ReadingInsertion =
   | {
       type: 'intertitle';
       text: string;
+    }
+  | {
+      type: 'voice-note';
+      uri: string;
+      durationSeconds: number;
+      mimeType?: string | null;
+      noteText?: string | null;
     };
+
+type ReadingVoiceNote = {
+  uri: string;
+  durationSeconds: number;
+  mimeType?: string | null;
+  noteText?: string | null;
+};
 
 const TITLE_MAX_LENGTH = 80;
 const SUBTITLE_MAX_LENGTH = 120;
@@ -38,7 +83,21 @@ type ChannelReadingMessageInsertion =
   | {
       type: 'intertitle';
       text: string;
+    }
+  | {
+      type: 'voice-note';
+      url: string;
+      durationSeconds: number;
+      mimeType?: string | null;
+      noteText?: string | null;
     };
+
+type ChannelReadingMessageVoiceNote = {
+  url: string;
+  durationSeconds: number;
+  mimeType?: string | null;
+  noteText?: string | null;
+};
 
 type ChannelReadingMessagePayload = {
   title: string;
@@ -47,8 +106,10 @@ type ChannelReadingMessagePayload = {
   date: string;
   category: string;
   hypeCost?: number | null;
+  introAudio?: ChannelReadingMessageVoiceNote | null;
   bodySections: string[];
   insertions: ChannelReadingMessageInsertion[];
+  outroAudio?: ChannelReadingMessageVoiceNote | null;
   imageUrls: string[];
   citations: Array<{
     id: string;
@@ -148,6 +209,27 @@ const formatReadingIntegerInput = (raw: string) => {
 
 const sanitizeReadingAmountInput = (value: string) => value.replace(/\D+/g, '').replace(/^0+(?=\d)/, '');
 
+const sanitizeVoiceNoteTextInput = (value: string) => String(value || '').slice(0, READING_VOICE_NOTE_TEXT_MAX_LENGTH);
+
+const normalizeVoiceNoteText = (value: unknown) => {
+  const text = sanitizeVoiceNoteTextInput(String(value ?? '')).trim();
+  return text || null;
+};
+
+const sanitizeChannelReadingVoiceNote = (audio: ChannelReadingMessageVoiceNote | null | undefined) => {
+  const url = String(audio?.url || '').trim();
+  if (!url) {
+    return null;
+  }
+
+  return {
+    url,
+    durationSeconds: Math.max(0, Math.floor(Number(audio?.durationSeconds) || 0)),
+    mimeType: typeof audio?.mimeType === 'string' ? audio.mimeType.trim() || null : null,
+    noteText: normalizeVoiceNoteText(audio?.noteText),
+  };
+};
+
 const encodeChannelReadingMessage = (payload: ChannelReadingMessagePayload) => {
   const safe = {
     title: String(payload?.title || '').trim(),
@@ -158,6 +240,7 @@ const encodeChannelReadingMessage = (payload: ChannelReadingMessagePayload) => {
     hypeCost: typeof payload?.hypeCost === 'number' && Number.isFinite(payload.hypeCost)
       ? Math.max(0, Math.floor(payload.hypeCost))
       : null,
+    introAudio: sanitizeChannelReadingVoiceNote(payload?.introAudio),
     bodySections: Array.isArray(payload?.bodySections)
       ? payload.bodySections.map((section) => String(section || ''))
       : [],
@@ -176,11 +259,26 @@ const encodeChannelReadingMessage = (payload: ChannelReadingMessagePayload) => {
           if (text) {
             accumulator.push({ type: 'intertitle', text });
           }
+          return accumulator;
+        }
+
+        if (insertion?.type === 'voice-note') {
+          const url = String(insertion?.url || '').trim();
+          if (url) {
+            accumulator.push({
+              type: 'voice-note',
+              url,
+              durationSeconds: Math.max(0, Math.floor(Number(insertion?.durationSeconds) || 0)),
+              mimeType: typeof insertion?.mimeType === 'string' ? insertion.mimeType.trim() || null : null,
+              noteText: normalizeVoiceNoteText(insertion?.noteText),
+            });
+          }
         }
 
         return accumulator;
       }, [])
       : [],
+    outroAudio: sanitizeChannelReadingVoiceNote(payload?.outroAudio),
     imageUrls: Array.isArray(payload?.imageUrls)
       ? payload.imageUrls.map((item) => String(item || '').trim()).filter(Boolean)
       : [],
@@ -488,6 +586,11 @@ const getAndroidGalleryPermission = () => {
 const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps) => {
   const { t } = useI18n();
   const safeAreaInsets = useSafeAreaInsets();
+  const currentVoiceNoteRecordingUriRef = useRef<string | null>(null);
+  const voiceNoteRecordingTargetRef = useRef<VoiceNotePlacement | null>(null);
+  const voiceNoteRecordingDurationMsRef = useRef(0);
+  const voiceNoteRecordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isStoppingVoiceNoteRecordingRef = useRef(false);
   const [title, setTitle] = useState('');
   const [subtitle, setSubtitle] = useState('');
   const [lead, setLead] = useState('');
@@ -497,8 +600,15 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
   const [readingCategorySearchQuery, setReadingCategorySearchQuery] = useState('');
   const [readingHypeCostInput, setReadingHypeCostInput] = useState('');
   const [showReadingHypeCostInfo, setShowReadingHypeCostInfo] = useState(false);
+  const [introVoiceNote, setIntroVoiceNote] = useState<ReadingVoiceNote | null>(null);
   const [bodySections, setBodySections] = useState<string[]>(['']);
   const [readingInsertions, setReadingInsertions] = useState<ReadingInsertion[]>([]);
+  const [outroVoiceNote, setOutroVoiceNote] = useState<ReadingVoiceNote | null>(null);
+  const [voiceNoteDraftTexts, setVoiceNoteDraftTexts] = useState<Record<VoiceNotePlacement, string>>({
+    intro: '',
+    inline: '',
+    outro: '',
+  });
   const [focusedBodySectionIndex, setFocusedBodySectionIndex] = useState(0);
   const [imageViewerUri, setImageViewerUri] = useState<string | null>(null);
   const [actionToast, setActionToast] = useState<string | null>(null);
@@ -516,14 +626,23 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
   const [readingCitations, setReadingCitations] = useState<ReadingCitation[]>([]);
   const [expandedCitation, setExpandedCitation] = useState<ReadingCitation | null>(null);
   const [isCreatingReading, setIsCreatingReading] = useState(false);
+  const [recordingVoiceNoteTarget, setRecordingVoiceNoteTarget] = useState<VoiceNotePlacement | null>(null);
+  const [isRecordingVoiceNote, setIsRecordingVoiceNote] = useState(false);
+  const [isVoiceNoteOperationPending, setIsVoiceNoteOperationPending] = useState(false);
+  const [recordingVoiceNoteDurationMs, setRecordingVoiceNoteDurationMs] = useState(0);
   const actionToastAnim = useRef(new Animated.Value(0)).current;
   const bodyInputRefs = useRef<Array<TextInput | null>>([]);
   const readingDateInputRef = useRef<TextInput | null>(null);
 
   const totalBodyLength = bodySections.reduce((total, section) => total + section.length, 0);
   const selectedImageCount = readingInsertions.filter(insertion => insertion.type === 'image').length;
+  const selectedVoiceNoteCount = readingInsertions.filter(insertion => insertion.type === 'voice-note').length
+    + (introVoiceNote ? 1 : 0)
+    + (outroVoiceNote ? 1 : 0);
+  const hasInlineVoiceNote = readingInsertions.filter(insertion => insertion.type === 'voice-note').length >= READING_MAX_INLINE_VOICE_NOTES;
   const isCreateEnabled = [title, subtitle, lead].every((value) => String(value).trim().length > 0)
     && totalBodyLength >= BODY_MIN_LENGTH;
+  const isCreateActionEnabled = isCreateEnabled && !isRecordingVoiceNote && !isVoiceNoteOperationPending;
   const filteredReadingCategoryOptions = useMemo(() => {
     const query = readingCategorySearchQuery.trim().toLowerCase();
     if (!query) {
@@ -535,9 +654,20 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
 
   useEffect(() => {
     return () => {
+      if (voiceNoteRecordingTimeoutRef.current) {
+        clearTimeout(voiceNoteRecordingTimeoutRef.current);
+        voiceNoteRecordingTimeoutRef.current = null;
+      }
       ImageCropPicker.clean().catch(() => undefined);
+      audioRecorderPlayer.removeRecordBackListener();
+      audioRecorderPlayer.stopRecorder().catch(() => undefined);
+      stopSharedVoiceNotePlayback().catch(() => undefined);
     };
   }, []);
+
+  useEffect(() => {
+    voiceNoteRecordingDurationMsRef.current = recordingVoiceNoteDurationMs;
+  }, [recordingVoiceNoteDurationMs]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -785,6 +915,234 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
     }
 
     return false;
+  };
+
+  const requestRecordAudioPermission = async () => {
+    if (Platform.OS !== 'android') {
+      Alert.alert('Grabacion no disponible', 'La nota de voz esta disponible solo en Android.');
+      return false;
+    }
+
+    try {
+      const alreadyGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+      if (alreadyGranted) {
+        return true;
+      }
+
+      const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO, {
+        title: 'Permiso de microfono',
+        message: 'Keinti necesita acceso al microfono para grabar la nota de voz.',
+        buttonNeutral: t('reading.galleryPermissionAskLater' as TranslationKey),
+        buttonNegative: t('common.cancel' as TranslationKey),
+        buttonPositive: t('common.accept' as TranslationKey),
+      });
+
+      if (result === PermissionsAndroid.RESULTS.GRANTED) {
+        return true;
+      }
+
+      if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+        Alert.alert(
+          'Permiso requerido',
+          'Activa el microfono en Ajustes para poder grabar notas de voz.',
+          [
+            { text: t('common.cancel' as TranslationKey), style: 'cancel' },
+            { text: t('reading.openSettings' as TranslationKey), onPress: () => Linking.openSettings() },
+          ],
+        );
+      }
+    } catch {
+      // ignore
+    }
+
+    return false;
+  };
+
+  const resetVoiceNoteRecordingState = () => {
+    if (voiceNoteRecordingTimeoutRef.current) {
+      clearTimeout(voiceNoteRecordingTimeoutRef.current);
+      voiceNoteRecordingTimeoutRef.current = null;
+    }
+    currentVoiceNoteRecordingUriRef.current = null;
+    voiceNoteRecordingTargetRef.current = null;
+    voiceNoteRecordingDurationMsRef.current = 0;
+    isStoppingVoiceNoteRecordingRef.current = false;
+    setRecordingVoiceNoteTarget(null);
+    setIsRecordingVoiceNote(false);
+    setRecordingVoiceNoteDurationMs(0);
+  };
+
+  const handleChangeVoiceNoteDraftText = (target: VoiceNotePlacement, nextValue: string) => {
+    const normalizedValue = sanitizeVoiceNoteTextInput(nextValue);
+
+    setVoiceNoteDraftTexts(previous => (
+      previous[target] === normalizedValue
+        ? previous
+        : { ...previous, [target]: normalizedValue }
+    ));
+
+    if (target === 'intro') {
+      setIntroVoiceNote(previous => (previous ? { ...previous, noteText: normalizedValue } : previous));
+      return;
+    }
+
+    if (target === 'outro') {
+      setOutroVoiceNote(previous => (previous ? { ...previous, noteText: normalizedValue } : previous));
+      return;
+    }
+
+    setReadingInsertions(previous => previous.map((insertion) => (
+      insertion.type === 'voice-note'
+        ? { ...insertion, noteText: normalizedValue }
+        : insertion
+    )));
+  };
+
+  const persistVoiceNoteInTarget = (target: VoiceNotePlacement, voiceNote: ReadingVoiceNote) => {
+    const voiceNoteWithText = {
+      ...voiceNote,
+      noteText: voiceNoteDraftTexts[target],
+    };
+
+    if (target === 'intro') {
+      setIntroVoiceNote(voiceNoteWithText);
+      return;
+    }
+
+    if (target === 'outro') {
+      setOutroVoiceNote(voiceNoteWithText);
+      return;
+    }
+
+    insertReadingInsertion({
+      type: 'voice-note',
+      uri: voiceNoteWithText.uri,
+      durationSeconds: voiceNoteWithText.durationSeconds,
+      mimeType: voiceNoteWithText.mimeType,
+      noteText: voiceNoteWithText.noteText,
+    });
+  };
+
+  const handleStopVoiceNoteRecording = async (reachedLimit = false) => {
+    const recordingTarget = voiceNoteRecordingTargetRef.current;
+    if (!recordingTarget || isStoppingVoiceNoteRecordingRef.current) {
+      return;
+    }
+
+    if (voiceNoteRecordingTimeoutRef.current) {
+      clearTimeout(voiceNoteRecordingTimeoutRef.current);
+      voiceNoteRecordingTimeoutRef.current = null;
+    }
+    isStoppingVoiceNoteRecordingRef.current = true;
+    setIsVoiceNoteOperationPending(true);
+    try {
+      const fallbackUri = currentVoiceNoteRecordingUriRef.current;
+      const stoppedUri = await audioRecorderPlayer.stopRecorder().catch(() => fallbackUri || '');
+      audioRecorderPlayer.removeRecordBackListener();
+
+      const nextUri = String(stoppedUri || fallbackUri || '').trim();
+      const durationSeconds = Math.max(
+        1,
+        Math.min(READING_MAX_VOICE_NOTE_DURATION_SECONDS, Math.ceil(voiceNoteRecordingDurationMsRef.current / 1000)),
+      );
+
+      if (!nextUri) {
+        Alert.alert('Error', 'No se pudo guardar la grabacion.');
+        return;
+      }
+
+      persistVoiceNoteInTarget(recordingTarget, {
+        uri: nextUri,
+        durationSeconds,
+        mimeType: READING_VOICE_NOTE_MIME_TYPE,
+      });
+
+      if (reachedLimit) {
+        showActionToast('La nota de voz alcanzo 60 segundos y se guardo.');
+      }
+    } catch (error) {
+      console.error('Error al detener la nota de voz:', error);
+      Alert.alert('Error', 'No se pudo detener la grabacion.');
+    } finally {
+      resetVoiceNoteRecordingState();
+      setIsVoiceNoteOperationPending(false);
+    }
+  };
+
+  const handleStartVoiceNoteRecording = async (target: VoiceNotePlacement) => {
+    if (isRecordingVoiceNote || isVoiceNoteOperationPending) {
+      showActionToast('Finaliza la grabacion actual antes de continuar.');
+      return;
+    }
+
+    if (target === 'inline' && hasInlineVoiceNote) {
+      showActionToast('Solo puedes insertar una nota de voz en el cuerpo.');
+      return;
+    }
+
+    const targetAlreadyOccupied = target === 'intro'
+      ? !!introVoiceNote
+      : target === 'outro'
+        ? !!outroVoiceNote
+        : false;
+
+    if (!targetAlreadyOccupied && selectedVoiceNoteCount >= READING_MAX_VOICE_NOTES) {
+      showActionToast('Solo puedes anadir 3 notas de voz por lectura.');
+      return;
+    }
+
+    const hasPermission = await requestRecordAudioPermission();
+    if (!hasPermission) {
+      return;
+    }
+
+    setIsVoiceNoteOperationPending(true);
+    try {
+      await stopSharedVoiceNotePlayback();
+      await audioRecorderPlayer.stopRecorder().catch(() => undefined);
+      audioRecorderPlayer.removeRecordBackListener();
+      audioRecorderPlayer.setSubscriptionDuration(0.2);
+
+      currentVoiceNoteRecordingUriRef.current = null;
+      voiceNoteRecordingTargetRef.current = target;
+      voiceNoteRecordingDurationMsRef.current = 0;
+      setRecordingVoiceNoteDurationMs(0);
+      setRecordingVoiceNoteTarget(target);
+
+      const startedUri = await audioRecorderPlayer.startRecorder(undefined, READING_VOICE_NOTE_AUDIO_SET, false);
+      currentVoiceNoteRecordingUriRef.current = String(startedUri || '').trim() || null;
+      setIsRecordingVoiceNote(true);
+      voiceNoteRecordingTimeoutRef.current = setTimeout(() => {
+        voiceNoteRecordingDurationMsRef.current = READING_MAX_VOICE_NOTE_DURATION_MS;
+        setRecordingVoiceNoteDurationMs(READING_MAX_VOICE_NOTE_DURATION_MS);
+        audioRecorderPlayer.removeRecordBackListener();
+        void handleStopVoiceNoteRecording(true);
+      }, READING_MAX_VOICE_NOTE_DURATION_MS);
+
+      audioRecorderPlayer.addRecordBackListener((event: RecordBackType) => {
+        const nextDurationMs = Math.max(0, Math.floor(Number(event.currentPosition) || 0));
+        if (nextDurationMs >= READING_MAX_VOICE_NOTE_DURATION_MS && !isStoppingVoiceNoteRecordingRef.current) {
+          if (voiceNoteRecordingTimeoutRef.current) {
+            clearTimeout(voiceNoteRecordingTimeoutRef.current);
+            voiceNoteRecordingTimeoutRef.current = null;
+          }
+          voiceNoteRecordingDurationMsRef.current = READING_MAX_VOICE_NOTE_DURATION_MS;
+          setRecordingVoiceNoteDurationMs(READING_MAX_VOICE_NOTE_DURATION_MS);
+          audioRecorderPlayer.removeRecordBackListener();
+          void handleStopVoiceNoteRecording(true);
+          return;
+        }
+
+        voiceNoteRecordingDurationMsRef.current = nextDurationMs;
+        setRecordingVoiceNoteDurationMs(nextDurationMs);
+      });
+    } catch (error) {
+      console.error('Error al iniciar la nota de voz:', error);
+      resetVoiceNoteRecordingState();
+      Alert.alert('Error', 'No se pudo iniciar la grabacion de audio.');
+    } finally {
+      setIsVoiceNoteOperationPending(false);
+    }
   };
 
   const insertReadingInsertion = (insertion: ReadingInsertion) => {
@@ -1073,7 +1431,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
   };
 
   const handleCreateReading = async () => {
-    if (!isCreateEnabled || isCreatingReading) {
+    if (!isCreateActionEnabled || isCreatingReading) {
       return;
     }
 
@@ -1092,15 +1450,12 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
 
     setIsCreatingReading(true);
     try {
-      const uploadedInsertions = await Promise.all(readingInsertions.map(async (insertion) => {
-        if (insertion.type === 'intertitle') {
-          return {
-            type: 'intertitle' as const,
-            text: String(insertion.text || '').trim(),
-          };
+      const uploadReadingVoiceNote = async (voiceNote: ReadingVoiceNote | null): Promise<ChannelReadingMessageVoiceNote | null> => {
+        if (!voiceNote) {
+          return null;
         }
 
-        let uploadedUrl = String(insertion.uri || '').trim();
+        let uploadedUrl = String(voiceNote.uri || '').trim();
         if (uploadedUrl && !uploadedUrl.startsWith('http')) {
           uploadedUrl = await uploadImage(uploadedUrl, normalizedToken, {
             postId: normalizedChannelPostId,
@@ -1108,11 +1463,61 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
           });
         }
 
+        if (!uploadedUrl) {
+          return null;
+        }
+
         return {
-          type: 'image' as const,
           url: uploadedUrl,
+          durationSeconds: Math.max(1, Math.floor(Number(voiceNote.durationSeconds) || 0)),
+          mimeType: voiceNote.mimeType || READING_VOICE_NOTE_MIME_TYPE,
+          noteText: normalizeVoiceNoteText(voiceNote.noteText),
         };
-      }));
+      };
+
+      const [uploadedIntroAudio, uploadedInsertions, uploadedOutroAudio] = await Promise.all([
+        uploadReadingVoiceNote(introVoiceNote),
+        Promise.all(readingInsertions.map(async (insertion) => {
+          if (insertion.type === 'intertitle') {
+            return {
+              type: 'intertitle' as const,
+              text: String(insertion.text || '').trim(),
+            };
+          }
+
+          if (insertion.type === 'voice-note') {
+            let uploadedUrl = String(insertion.uri || '').trim();
+            if (uploadedUrl && !uploadedUrl.startsWith('http')) {
+              uploadedUrl = await uploadImage(uploadedUrl, normalizedToken, {
+                postId: normalizedChannelPostId,
+                timeoutMs: 120000,
+              });
+            }
+
+            return {
+              type: 'voice-note' as const,
+              url: uploadedUrl,
+              durationSeconds: Math.max(1, Math.floor(Number(insertion.durationSeconds) || 0)),
+              mimeType: insertion.mimeType || READING_VOICE_NOTE_MIME_TYPE,
+              noteText: normalizeVoiceNoteText(insertion.noteText),
+            };
+          }
+
+          let uploadedUrl = String(insertion.uri || '').trim();
+          if (uploadedUrl && !uploadedUrl.startsWith('http')) {
+            uploadedUrl = await uploadImage(uploadedUrl, normalizedToken, {
+              postId: normalizedChannelPostId,
+              timeoutMs: 120000,
+            });
+          }
+
+          return {
+            type: 'image' as const,
+            url: uploadedUrl,
+          };
+        })),
+        uploadReadingVoiceNote(outroVoiceNote),
+      ]);
 
       const imageUrls = uploadedInsertions.reduce<string[]>((accumulator, insertion) => {
         if (insertion.type === 'image' && insertion.url) {
@@ -1128,8 +1533,10 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
         date: readingDate,
         category: selectedReadingCategory || '',
         hypeCost: Number.parseInt(sanitizeReadingAmountInput(readingHypeCostInput), 10) || 0,
+        introAudio: uploadedIntroAudio,
         bodySections,
         insertions: uploadedInsertions,
+        outroAudio: uploadedOutroAudio,
         imageUrls,
         citations: readingCitations,
       });
@@ -1254,6 +1661,133 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
     );
   };
 
+  function renderVoiceNoteTextInput(
+    value: string,
+    onChangeText: (nextValue: string) => void,
+    placeholder: string,
+  ) {
+    return (
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor="rgba(255,255,255,0.45)"
+        style={styles.voiceNoteTextInput}
+        maxLength={READING_VOICE_NOTE_TEXT_MAX_LENGTH}
+        autoCapitalize="sentences"
+        autoCorrect
+      />
+    );
+  }
+
+  function renderVoiceNoteRecordingCard(
+    titleText: string,
+    statusText: string,
+    noteText: string,
+    onChangeNoteText: (nextValue: string) => void,
+    notePlaceholderText: string,
+  ) {
+    return (
+      <View style={styles.voiceNoteRecordingCard}>
+        <View style={styles.voiceNoteRecordingIndicator} />
+        <View style={styles.voiceNoteRecordingCopy}>
+          <Text style={styles.voiceNoteRecordingTitle}>{titleText}</Text>
+          {renderVoiceNoteTextInput(noteText, onChangeNoteText, notePlaceholderText)}
+          <Text style={styles.voiceNoteRecordingStatus}>{statusText}</Text>
+        </View>
+        <TouchableOpacity
+          accessibilityRole="button"
+          activeOpacity={0.85}
+          onPress={() => { void handleStopVoiceNoteRecording(); }}
+          style={styles.voiceNoteRecordingStopButton}
+        >
+          <MaterialIcons name="stop" size={18} color="#FFFFFF" />
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  const renderVoiceNoteSlot = ({
+    titleText,
+    noteText,
+    notePlaceholderText,
+    voiceNote,
+    onRemove,
+    onRecord,
+    isRecording,
+    onChangeNoteText,
+  }: {
+    titleText: string;
+    noteText: string;
+    notePlaceholderText: string;
+    voiceNote: ReadingVoiceNote | null;
+    onRemove: () => void;
+    onRecord: () => void;
+    isRecording: boolean;
+    onChangeNoteText: (nextValue: string) => void;
+  }) => {
+    const recordingSeconds = Math.min(
+      READING_MAX_VOICE_NOTE_DURATION_SECONDS,
+      Math.max(1, Math.ceil(recordingVoiceNoteDurationMs / 1000)),
+    );
+
+    return (
+      <View style={styles.voiceNoteSlotSection}>
+        {isRecording ? renderVoiceNoteRecordingCard(
+          titleText,
+          `Grabando ${recordingSeconds}/${READING_MAX_VOICE_NOTE_DURATION_SECONDS} s`,
+          noteText,
+          onChangeNoteText,
+          notePlaceholderText,
+        ) : voiceNote ? (
+          <>
+            <VoiceNotePlayer
+              uri={voiceNote.uri}
+              durationSeconds={voiceNote.durationSeconds}
+              title={titleText}
+              subtitleInputValue={noteText}
+              onChangeSubtitleInput={onChangeNoteText}
+              subtitleInputPlaceholder={notePlaceholderText}
+              subtitleInputMaxLength={READING_VOICE_NOTE_TEXT_MAX_LENGTH}
+              onRemove={onRemove}
+              variant="composer"
+            />
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              activeOpacity={0.85}
+              onPress={onRecord}
+              style={styles.voiceNoteSecondaryButton}
+            >
+              <MaterialIcons name="keyboard-voice" size={16} color="#FFFFFF" />
+              <Text style={styles.voiceNoteSecondaryButtonText}>Regrabar</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <View style={styles.voiceNotePrimaryButton}>
+            <View style={styles.voiceNotePrimaryButtonHeader}>
+              <MaterialIcons name="keyboard-voice" size={18} color="#FFFFFF" />
+              <View style={styles.voiceNotePrimaryButtonCopy}>
+                <Text style={styles.voiceNotePrimaryButtonTitle}>{titleText}</Text>
+                {renderVoiceNoteTextInput(noteText, onChangeNoteText, notePlaceholderText)}
+              </View>
+            </View>
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              activeOpacity={0.85}
+              onPress={onRecord}
+              style={styles.voiceNotePrimaryButtonAction}
+            >
+              <MaterialIcons name="keyboard-voice" size={16} color="#FFFFFF" />
+              <Text style={styles.voiceNotePrimaryButtonActionText}>Grabar</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
@@ -1281,15 +1815,15 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
               <Text style={styles.screenTitle}>{t('reading.screenTitle' as TranslationKey)}</Text>
               <TouchableOpacity
                 accessibilityRole="button"
-                activeOpacity={isCreateEnabled && !isCreatingReading ? 0.85 : 1}
-                disabled={!isCreateEnabled || isCreatingReading}
+                activeOpacity={isCreateActionEnabled && !isCreatingReading ? 0.85 : 1}
+                disabled={!isCreateActionEnabled || isCreatingReading}
                 onPress={handleCreateReading}
                 style={[
                   styles.createButton,
-                  isCreateEnabled ? styles.createButtonEnabled : styles.createButtonDisabled,
+                  isCreateActionEnabled ? styles.createButtonEnabled : styles.createButtonDisabled,
                 ]}
               >
-                <CreateButtonGradientBorder visible={isCreateEnabled} />
+                <CreateButtonGradientBorder visible={isCreateActionEnabled} />
                 {isCreatingReading ? (
                   <ActivityIndicator size="small" color="#FFFFFF" />
                 ) : (
@@ -1299,6 +1833,17 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
             </View>
 
             <View style={styles.textBlock}>
+              {renderVoiceNoteSlot({
+                titleText: 'Nota inicial',
+                noteText: voiceNoteDraftTexts.intro,
+                notePlaceholderText: 'Se reproducira antes del titulo.',
+                voiceNote: introVoiceNote,
+                onRemove: () => setIntroVoiceNote(null),
+                onRecord: () => { void handleStartVoiceNoteRecording('intro'); },
+                isRecording: recordingVoiceNoteTarget === 'intro' && isRecordingVoiceNote,
+                onChangeNoteText: (nextValue) => handleChangeVoiceNoteDraftText('intro', nextValue),
+              })}
+
               <View style={styles.fieldBlock}>
                 <TextInput
                   value={title}
@@ -1457,6 +2002,22 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
                         <Text style={styles.fieldCounter}>{`${trailingInsertion.text.length}/${INTERTITLE_MAX_LENGTH}`}</Text>
                       </View>
                     ) : null}
+
+                    {trailingInsertion?.type === 'voice-note' ? (
+                      <View style={styles.voiceNoteInlineSection}>
+                        <VoiceNotePlayer
+                          uri={trailingInsertion.uri}
+                          durationSeconds={trailingInsertion.durationSeconds}
+                          title="Nota de voz en el cuerpo"
+                          subtitleInputValue={voiceNoteDraftTexts.inline}
+                          onChangeSubtitleInput={(nextValue) => handleChangeVoiceNoteDraftText('inline', nextValue)}
+                          subtitleInputPlaceholder="Se reproducira entre bloques del cuerpo."
+                          subtitleInputMaxLength={READING_VOICE_NOTE_TEXT_MAX_LENGTH}
+                          onRemove={() => handleRemoveReadingInsertion(index)}
+                          variant="composer"
+                        />
+                      </View>
+                    ) : null}
                   </React.Fragment>
                 );
               })}
@@ -1485,8 +2046,48 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
                 >
                   <CiteActionGlyph />
                 </TouchableOpacity>
+
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  activeOpacity={!hasInlineVoiceNote && !isRecordingVoiceNote && !isVoiceNoteOperationPending ? 0.85 : 1}
+                  disabled={hasInlineVoiceNote || isRecordingVoiceNote || isVoiceNoteOperationPending}
+                  onPress={() => { void handleStartVoiceNoteRecording('inline'); }}
+                  style={[
+                    styles.voiceNoteActionButton,
+                    hasInlineVoiceNote || isRecordingVoiceNote || isVoiceNoteOperationPending
+                      ? styles.voiceNoteActionButtonDisabled
+                      : null,
+                  ]}
+                >
+                  <MaterialIcons name="graphic-eq" size={16} color="#FFFFFF" />
+                </TouchableOpacity>
               </View>
               <Text style={styles.bodyActionsCounter}>{`${totalBodyLength}/${BODY_MIN_LENGTH} ${t('reading.bodyMinSuffix' as TranslationKey)}`}</Text>
+            </View>
+
+            {recordingVoiceNoteTarget === 'inline' && isRecordingVoiceNote ? (
+              <View style={styles.voiceNoteInlineComposerSection}>
+                {renderVoiceNoteRecordingCard(
+                  'Nota de voz en el cuerpo',
+                  `Grabando ${Math.min(READING_MAX_VOICE_NOTE_DURATION_SECONDS, Math.max(1, Math.ceil(recordingVoiceNoteDurationMs / 1000)))}/${READING_MAX_VOICE_NOTE_DURATION_SECONDS} s`,
+                  voiceNoteDraftTexts.inline,
+                  (nextValue) => handleChangeVoiceNoteDraftText('inline', nextValue),
+                  'Se reproducira entre bloques del cuerpo.',
+                )}
+              </View>
+            ) : null}
+
+            <View style={styles.outroVoiceNoteSection}>
+              {renderVoiceNoteSlot({
+                titleText: 'Nota final',
+                noteText: voiceNoteDraftTexts.outro,
+                notePlaceholderText: 'Se reproducira debajo del cuerpo.',
+                voiceNote: outroVoiceNote,
+                onRemove: () => setOutroVoiceNote(null),
+                onRecord: () => { void handleStartVoiceNoteRecording('outro'); },
+                isRecording: recordingVoiceNoteTarget === 'outro' && isRecordingVoiceNote,
+                onChangeNoteText: (nextValue) => handleChangeVoiceNoteDraftText('outro', nextValue),
+              })}
             </View>
 
             <TouchableOpacity
@@ -2286,6 +2887,10 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: 14,
   },
+  voiceNoteInlineSection: {
+    marginTop: 4,
+    marginBottom: 14,
+  },
   intertitleHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2325,6 +2930,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  voiceNoteActionButton: {
+    minWidth: 34,
+    height: 24,
+    paddingHorizontal: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voiceNoteActionButtonDisabled: {
+    opacity: 0.38,
   },
   intertitleActionButton: {
     minWidth: 34,
@@ -2394,6 +3013,123 @@ const styles = StyleSheet.create({
     marginTop: 32,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  voiceNoteSlotSection: {
+    marginBottom: 14,
+  },
+  outroVoiceNoteSection: {
+    marginTop: 20,
+  },
+  voiceNoteInlineComposerSection: {
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  voiceNotePrimaryButton: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  voiceNotePrimaryButtonHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  voiceNotePrimaryButtonCopy: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  voiceNotePrimaryButtonTitle: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  voiceNoteTextInput: {
+    color: 'rgba(255,255,255,0.68)',
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 3,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+  },
+  voiceNotePrimaryButtonAction: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    minHeight: 34,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  voiceNotePrimaryButtonActionText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  voiceNoteSecondaryButton: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    minHeight: 34,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  voiceNoteSecondaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  voiceNoteRecordingCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 183, 77, 0.34)',
+    backgroundColor: 'rgba(255, 183, 77, 0.08)',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  voiceNoteRecordingIndicator: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#FF6F61',
+  },
+  voiceNoteRecordingCopy: {
+    flex: 1,
+    marginLeft: 12,
+    marginRight: 10,
+  },
+  voiceNoteRecordingTitle: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  voiceNoteRecordingStatus: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 6,
+  },
+  voiceNoteRecordingStopButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.28)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
   },
   selectedImagesSection: {
     marginTop: 20,

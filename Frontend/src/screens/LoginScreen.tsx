@@ -18,7 +18,7 @@ import MaskedView from '@react-native-masked-view/masked-view';
 import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
 import InAppBrowser from 'react-native-inappbrowser-reborn';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { completeSupabaseProfile, exchangeSupabaseSession } from '../services/userService';
+import { checkSignupEmailStatus, completeSupabaseProfile, exchangeSupabaseSession } from '../services/userService';
 import { useI18n } from '../i18n/I18nProvider';
 import type { Language } from '../i18n/translations';
 import PasswordResetModal, { PASSWORD_RESET_DRAFT_STORAGE_KEY } from '../components/PasswordResetModal';
@@ -33,6 +33,8 @@ type OAuthCallbackInfo = {
   accessTokenFromHash?: string;
   refreshTokenFromHash?: string;
 };
+
+type LoginErrorVariant = 'default' | 'forgotPasswordHint' | 'passwordIncorrect';
 
 const safeDecode = (value: unknown) => {
   const raw = String(value ?? '');
@@ -220,6 +222,7 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [errorVariant, setErrorVariant] = useState<LoginErrorVariant>('default');
   const [googleErrorMessage, setGoogleErrorMessage] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -231,6 +234,22 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
   const [resetVisible, setResetVisible] = useState(false);
 
   const localize = (messages: Partial<Record<Language, string>> & { es: string }) => messages[language] || messages.en || messages.es;
+  const invalidCredentialsForgotPasswordMessage = localize({
+    es: 'Credenciales inválidas. La cuenta aún no está registrada o no has confirmado el correo electrónico.',
+    en: 'Invalid credentials. The account is not registered yet or you have not confirmed the email address.',
+    fr: 'Identifiants invalides. Le compte n\'est pas encore enregistré ou vous n\'avez pas confirmé l\'adresse e-mail.',
+    pt: 'Credenciais inválidas. A conta ainda não está registrada ou você não confirmou o endereço de e-mail.',
+    de: 'Ungültige Anmeldedaten. Das Konto ist noch nicht registriert oder du hast die E-Mail-Adresse nicht bestätigt.',
+    it: 'Credenziali non valide. L\'account non è ancora registrato o non hai confermato l\'indirizzo e-mail.',
+  });
+  const passwordIncorrectMessage = localize({
+    es: 'La contraseña introducida es incorrecta.',
+    en: 'The password you entered is incorrect.',
+    fr: 'Le mot de passe saisi est incorrect.',
+    pt: 'A senha introduzida está incorreta.',
+    de: 'Das eingegebene Passwort ist falsch.',
+    it: 'La password inserita non è corretta.',
+  });
 
   const forgotPasswordSegments = useMemo(
     () => parseMarkedText(String(t('common.forgotPassword') || '')),
@@ -238,6 +257,26 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
   );
 
   const screenDisabled = isLoading || isGoogleLoading;
+
+  const clearLoginError = () => {
+    setErrorMessage('');
+    setErrorVariant('default');
+  };
+
+  const showDefaultError = (message: string) => {
+    setErrorMessage(message);
+    setErrorVariant('default');
+  };
+
+  const showForgotPasswordHintError = () => {
+    setErrorMessage(invalidCredentialsForgotPasswordMessage);
+    setErrorVariant('forgotPasswordHint');
+  };
+
+  const showPasswordIncorrectError = () => {
+    setErrorMessage(passwordIncorrectMessage);
+    setErrorVariant('passwordIncorrect');
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -312,13 +351,13 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
 
   const handleLogin = async () => {
     if (!email || !password) {
-      setErrorMessage(t('login.fillAllFields'));
+      showDefaultError(t('login.fillAllFields'));
       return;
     }
 
     const supabaseClient = supabase;
     if (!isSupabaseConfigured() || !supabaseClient) {
-        setErrorMessage(localize({
+        showDefaultError(localize({
           es: 'Falta configurar Supabase (SUPABASE_URL / SUPABASE_ANON_KEY) en el frontend',
           en: 'Supabase is not configured on the frontend (SUPABASE_URL / SUPABASE_ANON_KEY).',
           fr: 'Supabase n’est pas configuré dans le frontend (SUPABASE_URL / SUPABASE_ANON_KEY).',
@@ -328,7 +367,7 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
     }
 
     setIsLoading(true);
-    setErrorMessage(''); // Limpiar mensaje de error anterior
+    clearLoginError(); // Limpiar mensaje de error anterior
     setGoogleErrorMessage('');
 
     try {
@@ -446,9 +485,9 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
       const lower = String(message || '').toLowerCase();
       // Si backend devuelve un motivo (p.ej. cuenta bloqueada), lo mostramos.
       if (message && message.toLowerCase().includes('cuenta bloqueada')) {
-        setErrorMessage(message);
+        showDefaultError(message);
       } else if (lower.includes('no se pudo conectar al servidor') || lower.includes('network request failed') || lower.includes('failed to fetch')) {
-        setErrorMessage(message || localize({
+        showDefaultError(message || localize({
           es: 'No se pudo conectar al servidor.',
           en: 'Could not connect to the server.',
           fr: 'Impossible de se connecter au serveur.',
@@ -457,7 +496,7 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           it: 'Impossibile connettersi al server.',
         }));
       } else if (lower.includes('email not confirmed') || (lower.includes('confirm') && lower.includes('email'))) {
-        setErrorMessage(localize({
+        showDefaultError(localize({
           es: 'Confirma tu email antes de iniciar sesión.',
           en: 'Please confirm your email before signing in.',
           fr: 'Confirmez votre e-mail avant de vous connecter.',
@@ -466,20 +505,17 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
           it: 'Conferma la tua e-mail prima di accedere.',
         }));
       } else if (lower.includes('invalid login credentials')) {
-        setErrorMessage(
-          localize({
-            es: 'Credenciales inválidas. Si ya confirmaste el email, usa "¿Olvidaste tu contraseña?" para establecer una contraseña.',
-            en: 'Invalid credentials. If you already confirmed the email, use "Forgot your password?" to set a password.',
-            fr: 'Identifiants invalides. Si vous avez déjà confirmé votre e-mail, utilisez « Mot de passe oublié ? » pour définir un mot de passe.',
-            pt: 'Credenciais inválidas. Se você já confirmou o e-mail, use "Esqueceu sua senha?" para definir uma senha.',
-            de: 'Ungültige Anmeldedaten. Wenn du die E-Mail bereits bestätigt hast, verwende "Passwort vergessen?", um ein Passwort festzulegen.',
-            it: 'Credenziali non valide. Se hai già confermato l\'e-mail, usa "Hai dimenticato la password?" per impostarne una.',
-          })
-        );
+        const signupStatus = await checkSignupEmailStatus(email.trim()).catch(() => null);
+
+        if (signupStatus?.status === 'registered') {
+          showPasswordIncorrectError();
+        } else {
+          showForgotPasswordHintError();
+        }
       } else {
-        setErrorMessage(t('login.invalidCredentials'));
+        showDefaultError(t('login.invalidCredentials'));
         setTimeout(() => {
-          setErrorMessage('');
+          clearLoginError();
         }, 1400);
       }
     } finally {
@@ -505,7 +541,7 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
     setInfoMessage('');
     setIsGoogleLoading(true);
     setGoogleErrorMessage('');
-    setErrorMessage('');
+    clearLoginError();
 
     if (googleErrorTimeoutRef.current) {
       clearTimeout(googleErrorTimeoutRef.current);
@@ -834,7 +870,21 @@ const LoginScreen = ({ onLogin, onNavigateToRegister, noticeMessage, noticeToken
 
             {/* Mensaje de error */}
             {errorMessage ? (
-              <Text style={styles.errorText}>{errorMessage}</Text>
+              <Text
+                style={[
+                  styles.errorText,
+                  errorVariant === 'forgotPasswordHint' && styles.errorTextForgotPasswordHint,
+                ]}>
+                {errorVariant === 'forgotPasswordHint'
+                  ? parseMarkedText(errorMessage).map((seg, idx) => (
+                    <Text
+                      key={`login-error:${idx}`}
+                      style={seg.kind === 'highlight' ? styles.errorTextForgotPasswordHintHighlight : undefined}>
+                      {seg.text}
+                    </Text>
+                  ))
+                  : errorMessage}
+              </Text>
             ) : null}
 
             <View style={styles.divider}>
@@ -1029,6 +1079,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     textAlign: 'center',
+  },
+  errorTextForgotPasswordHint: {
+    fontSize: 12,
+    fontWeight: 'normal',
+  },
+  errorTextForgotPasswordHintHighlight: {
+    fontWeight: 'bold',
   },
   googleErrorText: {
     marginTop: 10,

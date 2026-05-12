@@ -190,6 +190,14 @@ router.get('/profile-rings', authenticateToken, async (req, res) => {
 router.put('/profile-rings', authenticateToken, async (req, res) => {
   const userEmail = req.user.email;
   const raw = (req.body && req.body.rings) ?? [];
+  const toFiniteNumberOrNull = (value) => {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
 
   const rings = Array.isArray(raw) ? raw : [];
   const createdRings = rings
@@ -209,8 +217,8 @@ router.put('/profile-rings', authenticateToken, async (req, res) => {
       locationLabel: String(r.locationLabel || ''),
       locationUrl: String(r.locationUrl || ''),
       locationPlaceId: r.locationPlaceId ? String(r.locationPlaceId) : null,
-      locationLat: r.locationLat === null || r.locationLat === undefined ? null : Number(r.locationLat),
-      locationLng: r.locationLng === null || r.locationLng === undefined ? null : Number(r.locationLng),
+      locationLat: toFiniteNumberOrNull(r.locationLat),
+      locationLng: toFiniteNumberOrNull(r.locationLng),
       isCreated: true,
     }))
     .filter((r) => r.id);

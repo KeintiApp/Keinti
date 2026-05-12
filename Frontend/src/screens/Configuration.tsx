@@ -22,7 +22,7 @@ interface ConfigurationProps {
   onBack: () => void;
   authToken: string;
   initialScreen?: Screen;
-  onLogout: () => void;
+  onLogout: (options?: { noticeMessage?: string }) => void;
   onAccountVerifiedChange?: (verified: boolean) => void;
 }
 
@@ -838,7 +838,6 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
     }, msLeft);
 
     return () => clearTimeout(timeoutId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountVerified, accountVerifiedExpiresAtMs]);
 
   const refreshDevicePermissions = async () => {
@@ -892,12 +891,10 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
 
   useEffect(() => {
     refreshDevicePermissions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
 
   useEffect(() => {
     refreshAccountAuth();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
 
   useEffect(() => {
@@ -908,7 +905,6 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
 
   useEffect(() => {
     refreshVerifyKeintiProgress();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, authToken]);
 
 
@@ -923,7 +919,6 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
     return () => {
       sub.remove();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
 
   const requestOrOpenGalleryPermission = async () => {
@@ -1061,7 +1056,7 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
 
   useEffect(() => {
     const fetchMyPersonalData = async () => {
-      if (screen !== 'personalData') {return;}
+      if (screen !== 'personalData' && screen !== 'changePassword') {return;}
       if (!authToken) {
         setMyEmail('');
         setMyBirthDate('');
@@ -1111,7 +1106,9 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
           timeZone: 'UTC',
         }).format(dateObj);
 
-        setMyBirthDate(formatted);
+        if (screen === 'personalData') {
+          setMyBirthDate(formatted);
+        }
       } catch {
         setMyEmail('');
         setMyBirthDate('');
@@ -1252,8 +1249,20 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
     return until.getTime() > Date.now();
   })();
 
+  const getNewPasswordError = () => {
+    if (!newPassword.length) {return '';}
+    if (newPassword.length > 20) {return t('validation.passwordMaxLength');}
+    if (newPassword.length < 10) {return t('validation.passwordMinLength');}
+    if (!/[a-z]/.test(newPassword)) {return t('validation.passwordNeedsLowercase');}
+    if (!/[A-Z]/.test(newPassword)) {return t('validation.passwordNeedsUppercase');}
+    if (!/\d/.test(newPassword)) {return t('validation.passwordNeedsNumber');}
+    if (!/[!@#$%^&*()_+\-=[\]{};':"\\|<>?,./`~]/.test(newPassword)) {return t('validation.passwordNeedsSpecial');}
+    return '';
+  };
+
   const canUseNewPasswordFields = isCurrentPasswordValid;
-  const meetsNewPasswordRules = newPassword.length >= 10 && /[#!@_$€%]/.test(newPassword);
+  const newPasswordError = canUseNewPasswordFields ? getNewPasswordError() : '';
+  const meetsNewPasswordRules = newPassword.length > 0 && !newPasswordError;
   const newPasswordsMatch = newPassword.length > 0 && newPassword === repeatNewPassword;
   const canSubmitPasswordChange = canUseNewPasswordFields && meetsNewPasswordRules && newPasswordsMatch && !isChangingPassword;
 
@@ -3291,6 +3300,9 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
                   />
                 </TouchableOpacity>
               </View>
+              {canUseNewPasswordFields && newPasswordError ? (
+                <Text style={styles.errorText}>{newPasswordError}</Text>
+              ) : null}
             </View>
 
             <View style={styles.inputBlock}>
@@ -3340,7 +3352,9 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
           <PasswordResetModal
             visible={passwordResetVisible}
             onClose={() => setPasswordResetVisible(false)}
+            onPasswordChanged={() => onLogout({ noticeMessage: t('login.resetPasswordChanged') })}
             initialEmail={myEmail}
+            lockInitialEmail
             disabled={isChangingPassword}
           />
 
@@ -3355,13 +3369,14 @@ const Configuration = ({ onBack, authToken, initialScreen = 'main', onLogout, on
               setIsChangingPassword(true);
               try {
                 await changeMyPassword(authToken, currentPassword, newPassword);
-                Alert.alert(t('common.confirm'), t('changePassword.success'));
                 setCurrentPassword('');
                 setNewPassword('');
                 setRepeatNewPassword('');
                 setIsCurrentPasswordValid(false);
                 setShowCurrentPasswordError(false);
-                setScreen('securityControl');
+                setCurrentPasswordAttemptsRemaining(null);
+                setCurrentPasswordLockUntil(null);
+                onLogout({ noticeMessage: t('changePassword.success') });
               } catch (e: any) {
                 Alert.alert(localize({ es: 'Error', en: 'Error', fr: 'Erreur', pt: 'Erro', de: 'Fehler', it: 'Errore' }), e?.message || localize({ es: 'No se pudo cambiar la contraseña', en: 'Could not change the password', fr: 'Impossible de changer le mot de passe', pt: 'Não foi possível alterar a senha' }));
               } finally {

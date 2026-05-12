@@ -18,6 +18,11 @@ function inferExtension(mimeType) {
   if (mt.includes('heif')) return 'heif';
   if (mt.includes('gif')) return 'gif';
   if (mt.includes('jpeg') || mt.includes('jpg')) return 'jpg';
+  if (mt.includes('mpeg') || mt.includes('mp3')) return 'mp3';
+  if (mt.includes('mp4') || mt.includes('m4a') || mt.includes('aac')) return 'm4a';
+  if (mt.includes('wav') || mt.includes('wave')) return 'wav';
+  if (mt.includes('ogg')) return 'ogg';
+  if (mt.includes('opus')) return 'opus';
   return 'bin';
 }
 

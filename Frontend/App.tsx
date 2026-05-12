@@ -23,6 +23,9 @@ interface SocialNetwork {
 }
 
 type FrontScreenInitialTab = 'home' | 'chat' | 'profile';
+type LogoutOptions = {
+  noticeMessage?: string;
+};
 
 type Screen = 'login' | 'register' | 'front' | 'configuration' | 'keys' | 'notifications' | 'reading';
 const PENDING_SIGNUP_PREFIX = 'keinti:pendingSignup:';
@@ -645,8 +648,12 @@ function App() {
     setCurrentScreen('login');
   };
 
-  const handleLogout = () => {
-    setLoginNotice(null);
+  const handleLogout = (options?: LogoutOptions) => {
+    if (options?.noticeMessage) {
+      setLoginNotice({ message: options.noticeMessage, token: Date.now() });
+    } else {
+      setLoginNotice(null);
+    }
     setUserEmail('');
     setUsername('');
     setProfilePhotoUri(undefined);

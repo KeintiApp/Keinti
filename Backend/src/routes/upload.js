@@ -17,14 +17,23 @@ const POST_TTL_MINUTES = getPostTtlMinutes();
 
 const storage = multer.memoryStorage();
 
+function isAudioUploadMimeType(mimeType) {
+  return String(mimeType || '').toLowerCase().startsWith('audio/');
+}
+
+function isSupportedUploadMimeType(mimeType) {
+  const normalizedMimeType = String(mimeType || '').toLowerCase();
+  return normalizedMimeType.startsWith('image/') || normalizedMimeType.startsWith('audio/');
+}
+
 const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
+    if (isSupportedUploadMimeType(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Solo se permiten imágenes'));
+      cb(new Error('Solo se permiten imágenes y audio'));
     }
   }
 });
@@ -95,15 +104,16 @@ async function validateOwnedGroup(groupId, ownerEmail) {
   return { ok: true, groupId: gid };
 }
 
-// Ruta para subir imagen
+// Ruta para subir archivos de lectura, imagen y audio.
 router.post('/', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'No se proporcionó ninguna imagen' });
+      return res.status(400).json({ error: 'No se proporcionó ningún archivo' });
     }
 
     const ownerEmail = req.user?.email || null;
     const mimeType = req.file.mimetype || 'application/octet-stream';
+    const isAudioUpload = isAudioUploadMimeType(mimeType);
 
     // Optional: link upload to a specific 24h post so it expires with it.
     let postId = null;
@@ -134,6 +144,10 @@ router.post('/', authenticateToken, upload.single('image'), async (req, res) => 
         return res.status(validation.status).json({ error: validation.error });
       }
       groupId = validation.groupId;
+    }
+
+    if (isAudioUpload && !isSupabaseConfigured()) {
+      return res.status(503).json({ error: 'La subida de audio requiere Supabase Storage configurado' });
     }
 
     const accessToken = generateAccessToken();

@@ -19,8 +19,42 @@ const normalizeEmail = (raw) => String(raw || '').trim().toLowerCase();
 function isStrongPassword(pass) {
   const value = String(pass || '');
   if (value.length < 10) return false;
-  const specialCharRegex = /[!@#$%^&*(),.?":{}|<>]/;
-  return specialCharRegex.test(value);
+  if (value.length > 20) return false;
+  const lowercaseRegex = /[a-z]/;
+  const uppercaseRegex = /[A-Z]/;
+  const numberRegex = /\d/;
+  const specialCharRegex = /[!@#$%^&*()_+\-=[\]{};':"\\|<>?,./`~]/;
+  return lowercaseRegex.test(value) && uppercaseRegex.test(value) && numberRegex.test(value) && specialCharRegex.test(value);
+}
+
+function getSupabasePasswordUpdateFailure(updateError) {
+  const code = String(updateError?.code || '').trim().toLowerCase();
+  const message = String(updateError?.message || '').trim().toLowerCase();
+
+  if (code === 'weak_password' || Number(updateError?.status) === 422) {
+    return {
+      status: 400,
+      body: { error: 'Contraseña inválida', code: 'INVALID_PASSWORD' },
+    };
+  }
+
+  if (code === 'user_not_found' || (message.includes('user') && message.includes('not found'))) {
+    return {
+      status: 500,
+      body: {
+        error: 'No se pudo localizar la cuenta principal para actualizar la contraseña.',
+        code: 'SUPABASE_USER_NOT_FOUND',
+      },
+    };
+  }
+
+  return {
+    status: 500,
+    body: {
+      error: 'No se pudo actualizar la contraseña principal.',
+      code: 'SUPABASE_PASSWORD_UPDATE_FAILED',
+    },
+  };
 }
 
 async function findSupabaseUserIdByEmail(email) {
@@ -44,6 +78,20 @@ async function findSupabaseUserIdByEmail(email) {
     if (users.length < perPage) break;
   }
   return null;
+}
+
+async function resolveCanonicalSupabaseUserId(email, currentSupabaseUserId = null) {
+  const resolvedSupabaseUserId = await findSupabaseUserIdByEmail(email);
+  const fallbackSupabaseUserId = currentSupabaseUserId ? String(currentSupabaseUserId) : null;
+  const canonicalSupabaseUserId = resolvedSupabaseUserId || fallbackSupabaseUserId;
+
+  if (canonicalSupabaseUserId && canonicalSupabaseUserId !== fallbackSupabaseUserId) {
+    await pool
+      .query('UPDATE users SET supabase_user_id = $2, updated_at = CURRENT_TIMESTAMP WHERE lower(email) = lower($1)', [email, canonicalSupabaseUserId])
+      .catch(() => {});
+  }
+
+  return canonicalSupabaseUserId;
 }
 
 // Configurar multer para subida de imágenes
@@ -1896,13 +1944,18 @@ router.post('/change-password', authenticateToken, async (req, res) => {
     }
 
     const row = result.rows[0];
+    const hasLocalPassword = !!String(row.password || '').trim();
     let currentOk = false;
+    let supabaseCurrentAuthClient = null;
+    let verifiedSupabaseUserId = row.supabase_user_id ? String(row.supabase_user_id) : null;
 
     if (isSupabaseAuthConfigured()) {
       const supabaseAnon = getSupabaseAnonClient();
       const { data, error } = await supabaseAnon.auth.signInWithPassword({ email, password: currentPassword });
       if (!error && data?.user?.id) {
         currentOk = true;
+        supabaseCurrentAuthClient = supabaseAnon;
+        verifiedSupabaseUserId = String(data.user.id);
         if (!row.supabase_user_id) {
           await pool
             .query('UPDATE users SET supabase_user_id = $2, updated_at = CURRENT_TIMESTAMP WHERE lower(email) = lower($1)', [email, String(data.user.id)])
@@ -1921,39 +1974,78 @@ router.post('/change-password', authenticateToken, async (req, res) => {
       return res.status(401).json({ error: 'Contraseña actual incorrecta' });
     }
 
-    // Prefer changing password in Supabase.
-    let supabaseUserId = row.supabase_user_id ? String(row.supabase_user_id) : null;
-    if (!supabaseUserId) {
-      supabaseUserId = await findSupabaseUserIdByEmail(email);
-      if (supabaseUserId) {
-        await pool
-          .query('UPDATE users SET supabase_user_id = $2, updated_at = CURRENT_TIMESTAMP WHERE lower(email) = lower($1)', [email, supabaseUserId])
-          .catch(() => {});
+    if (supabaseCurrentAuthClient && verifiedSupabaseUserId) {
+      const { error: updateSelfError } = await supabaseCurrentAuthClient.auth.updateUser({ password: newPassword });
+      if (updateSelfError) {
+        console.error('Supabase auth.updateUser error:', updateSelfError);
+        return res.status(500).json({
+          error: 'No se pudo actualizar la contraseña principal.',
+          code: 'SUPABASE_PASSWORD_UPDATE_FAILED',
+        });
       }
+
+      const clearLocalPasswordResult = await pool.query(
+        'UPDATE users SET password = NULL, account_locked = FALSE, password_check_failed_attempts = 0, password_check_lock_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE lower(email) = lower($1)',
+        [email]
+      );
+
+      if (!Number.isFinite(Number(clearLocalPasswordResult?.rowCount)) || Number(clearLocalPasswordResult.rowCount) < 1) {
+        throw new Error('Could not clear local password state after changing password');
+      }
+
+      return res.json({ success: true });
     }
 
-    if (supabaseUserId && isSupabaseAdminConfigured()) {
+    // Prefer changing password in Supabase.
+    let supabaseUserId = await resolveCanonicalSupabaseUserId(email, verifiedSupabaseUserId);
+
+    const requiresSupabasePasswordUpdate = !!supabaseUserId || !hasLocalPassword;
+
+    if (requiresSupabasePasswordUpdate && !supabaseUserId) {
+      return res.status(500).json({
+        error: 'No se pudo localizar la cuenta principal para actualizar la contraseña.',
+        code: 'SUPABASE_USER_NOT_FOUND',
+      });
+    }
+
+    if (requiresSupabasePasswordUpdate && !isSupabaseAdminConfigured()) {
+      return res.status(500).json({
+        error: 'El servidor no está configurado para actualizar la contraseña principal.',
+        code: 'SUPABASE_ADMIN_NOT_CONFIGURED',
+      });
+    }
+
+    if (requiresSupabasePasswordUpdate) {
       const admin = getSupabaseAdminClient();
       const { error: updateError } = await admin.auth.admin.updateUserById(String(supabaseUserId), { password: newPassword });
       if (!updateError) {
-        await pool.query(
+        const clearLocalPasswordResult = await pool.query(
           'UPDATE users SET password = NULL, account_locked = FALSE, password_check_failed_attempts = 0, password_check_lock_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE lower(email) = lower($1)',
           [email]
         );
+
+        if (!Number.isFinite(Number(clearLocalPasswordResult?.rowCount)) || Number(clearLocalPasswordResult.rowCount) < 1) {
+          throw new Error('Could not clear local password state after changing password');
+        }
 
         return res.json({ success: true });
       }
 
       console.error('Supabase updateUserById error:', updateError);
-      // fallback below
+      const failure = getSupabasePasswordUpdateFailure(updateError);
+      return res.status(failure.status).json(failure.body);
     }
 
     // Local fallback
     const newHash = await bcrypt.hash(newPassword, 10);
-    await pool.query(
+    const updateLocalPasswordResult = await pool.query(
       'UPDATE users SET password = $1, updated_at = CURRENT_TIMESTAMP WHERE lower(email) = $2',
       [newHash, email]
     );
+
+    if (!Number.isFinite(Number(updateLocalPasswordResult?.rowCount)) || Number(updateLocalPasswordResult.rowCount) < 1) {
+      throw new Error('Could not update local password during password change');
+    }
 
     return res.json({ success: true });
   } catch (error) {

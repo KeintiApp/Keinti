@@ -16,11 +16,27 @@ const {
 const POST_TTL_MINUTES = getPostTtlMinutes();
 const CHANNEL_EVENT_MESSAGE_PREFIX = '__KEVT__';
 const CHANNEL_READING_MESSAGE_PREFIX = '__KREAD__';
+const CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX = '__KRREC__';
+const CHANNEL_RING_RECOMMENDATION_THREAD_MESSAGE_PREFIX = '__KRRTH__';
 const HYPE_VIRAL_DEFAULT_LIMIT = 40;
 const HYPE_VIRAL_MAX_LIMIT = 100;
 const HYPE_VIRAL_FETCH_CHUNK_MIN = 40;
 const HYPE_VIRAL_FETCH_CHUNK_MULTIPLIER = 4;
 const HYPE_MOST_VIRAL_CATEGORY = 'hype.category.mostViral';
+
+function normalizeEmailKey(rawValue) {
+  return String(rawValue || '').trim().toLowerCase();
+}
+
+function normalizeOptionalString(value) {
+  const normalizedValue = String(value ?? '').trim();
+  return normalizedValue || null;
+}
+
+function normalizeRecommendationThreadUsername(value) {
+  const normalizedValue = String(value ?? '').trim().replace(/^@+/, '').trim();
+  return normalizedValue || null;
+}
 
 async function getActivePostInfo(postId) {
   const result = await pool.query(
@@ -77,6 +93,171 @@ function parseChannelReadingDonationPayload(rawMessage) {
   return {
     hypeCost: payload.hypeCost,
   };
+}
+
+function parseChannelRingRecommendationMessage(rawMessage) {
+  const text = String(rawMessage || '');
+  if (!text.startsWith(CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX)) {return null;}
+
+  try {
+    const parsed = JSON.parse(text.slice(CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX.length));
+    const sourcePublicationId = String(parsed?.sourcePublicationId || '').trim();
+    const sourceImageUrl = String(parsed?.sourceImageUrl || '').trim();
+    const ringId = String(parsed?.ring?.id || '').trim();
+    const creatorUsername = String(parsed?.creator?.username || '').trim();
+
+    if (!sourcePublicationId || !sourceImageUrl || !ringId || !creatorUsername) {
+      return null;
+    }
+
+    return {
+      sourcePublicationId,
+      ringId,
+      creatorUsername,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildChannelRingRecommendationSignature(payload) {
+  const sourcePublicationId = String(payload?.sourcePublicationId || '').trim();
+  const ringId = String(payload?.ringId ?? payload?.ring?.id ?? '').trim();
+  if (!sourcePublicationId || !ringId) {
+    return '';
+  }
+
+  return `${sourcePublicationId}:${ringId}`;
+}
+
+async function listChannelRingRecommendationSignatures(db, postId, publisherEmail) {
+  const result = await db.query(
+    `SELECT sender_email, message
+     FROM channel_messages
+     WHERE post_id = $1
+       AND message LIKE $2`,
+    [postId, `${CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX}%`]
+  );
+
+  const ownerEmailKey = normalizeEmailKey(publisherEmail);
+  const signatures = new Set();
+  result.rows.forEach((row) => {
+    if (ownerEmailKey && normalizeEmailKey(row?.sender_email) !== ownerEmailKey) {
+      return;
+    }
+
+    const payload = parseChannelRingRecommendationMessage(row?.message);
+    const signature = buildChannelRingRecommendationSignature(payload);
+    if (signature) {
+      signatures.add(signature);
+    }
+  });
+
+  return Array.from(signatures);
+}
+
+async function listSourcePublicationRingRecommendationCounts(db, sourcePublicationId) {
+  const normalizedSourcePublicationId = String(sourcePublicationId || '').trim();
+  if (!normalizedSourcePublicationId) {
+    return {};
+  }
+
+  const result = await db.query(
+    `SELECT cm.sender_email, cm.message
+     FROM channel_messages cm
+     INNER JOIN Post_users pu
+       ON pu.id = cm.post_id
+     WHERE cm.message LIKE $1
+       AND pu.deleted_at IS NULL
+       AND pu.created_at >= NOW() - ($2 * INTERVAL '1 minute')`,
+    [`${CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX}%`, POST_TTL_MINUTES]
+  );
+
+  const distinctSendersBySignature = new Map();
+  result.rows.forEach((row) => {
+    const payload = parseChannelRingRecommendationMessage(row?.message);
+    if (!payload || String(payload.sourcePublicationId || '').trim() !== normalizedSourcePublicationId) {
+      return;
+    }
+
+    const signature = buildChannelRingRecommendationSignature(payload);
+    const senderEmailKey = normalizeEmailKey(row?.sender_email);
+    if (!signature || !senderEmailKey) {
+      return;
+    }
+
+    let distinctSenders = distinctSendersBySignature.get(signature);
+    if (!distinctSenders) {
+      distinctSenders = new Set();
+      distinctSendersBySignature.set(signature, distinctSenders);
+    }
+    distinctSenders.add(senderEmailKey);
+  });
+
+  const counts = {};
+  distinctSendersBySignature.forEach((distinctSenders, signature) => {
+    if (signature && distinctSenders.size > 0) {
+      counts[signature] = distinctSenders.size;
+    }
+  });
+
+  return counts;
+}
+
+function encodeChannelRingRecommendationThreadMessage(payload) {
+  const normalizedEntryKind = payload?.entryKind === 'host-global'
+    ? 'host-global'
+    : payload?.entryKind === 'host-direct'
+      ? 'host-direct'
+      : 'viewer-root';
+
+  const safe = {
+    recommendationMessageId: String(payload?.recommendationMessageId || '').trim(),
+    entryKind: normalizedEntryKind,
+    text: String(payload?.text || '').trim(),
+    viewerEmail: normalizeOptionalString(payload?.viewerEmail),
+    viewerUsername: normalizeRecommendationThreadUsername(payload?.viewerUsername),
+  };
+
+  return `${CHANNEL_RING_RECOMMENDATION_THREAD_MESSAGE_PREFIX}${JSON.stringify(safe)}`;
+}
+
+function parseChannelRingRecommendationThreadMessage(rawMessage) {
+  const text = String(rawMessage || '');
+  if (!text.startsWith(CHANNEL_RING_RECOMMENDATION_THREAD_MESSAGE_PREFIX)) {return null;}
+
+  try {
+    const parsed = JSON.parse(text.slice(CHANNEL_RING_RECOMMENDATION_THREAD_MESSAGE_PREFIX.length));
+    const recommendationMessageId = String(parsed?.recommendationMessageId || '').trim();
+    const entryKind = parsed?.entryKind === 'host-global'
+      ? 'host-global'
+      : parsed?.entryKind === 'host-direct'
+        ? 'host-direct'
+        : parsed?.entryKind === 'viewer-root'
+          ? 'viewer-root'
+          : null;
+    const textContent = String(parsed?.text || '').trim();
+    const viewerEmail = normalizeOptionalString(parsed?.viewerEmail);
+    const viewerUsername = normalizeRecommendationThreadUsername(parsed?.viewerUsername);
+
+    if (!recommendationMessageId || !entryKind || !textContent) {
+      return null;
+    }
+
+    if (entryKind !== 'host-global' && !viewerEmail && !viewerUsername) {
+      return null;
+    }
+
+    return {
+      recommendationMessageId,
+      entryKind,
+      text: textContent,
+      viewerEmail,
+      viewerUsername,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function sanitizeHypeViralLimit(rawLimit) {
@@ -778,6 +959,8 @@ router.post('/messages', authenticateToken, async (req, res) => {
     const publisherEmail = activePost?.publisherEmail || null;
     const postCreatedAt = activePost?.createdAt ?? null;
     const parsedEventPayload = parseChannelEventMessage(message);
+    const parsedRecommendationPayload = parseChannelRingRecommendationMessage(message);
+    const parsedRecommendationThreadPayload = parseChannelRingRecommendationThreadMessage(message);
     const hasRewardedTasks = !!parsedEventPayload && (parsedEventPayload.taskRewardAmounts || []).some(amount => Number(amount) > 0);
     
     if (!publisherEmail) {
@@ -807,7 +990,175 @@ router.post('/messages', authenticateToken, async (req, res) => {
     try {
       await client.query('BEGIN');
 
-      if (senderEmail !== publisherEmail) {
+      let messageToStore = message;
+
+      if (parsedRecommendationPayload) {
+        if (senderEmail !== publisherEmail) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({
+            error: 'Solo el anfitrión puede recomendar aros en este canal',
+            code: 'RECOMMENDATION_HOST_ONLY',
+          });
+        }
+
+        const recommendationSignature = buildChannelRingRecommendationSignature(parsedRecommendationPayload);
+        if (!recommendationSignature) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            error: 'La recomendación indicada no es válida',
+            code: 'INVALID_RECOMMENDATION_MESSAGE',
+          });
+        }
+
+        const recommendationSignatures = await listChannelRingRecommendationSignatures(client, numericPostId, publisherEmail);
+        if (recommendationSignatures.includes(recommendationSignature)) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({
+            error: 'Este aro ya fue recomendado en este canal',
+            code: 'RECOMMENDATION_ALREADY_POSTED',
+          });
+        }
+      }
+
+      if (parsedRecommendationThreadPayload) {
+        const recommendationMessageId = Number(parsedRecommendationThreadPayload.recommendationMessageId);
+        if (!Number.isFinite(recommendationMessageId) || recommendationMessageId <= 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            error: 'La recomendación indicada no es válida',
+            code: 'INVALID_RECOMMENDATION_THREAD_ROOT',
+          });
+        }
+
+        const recommendationRowResult = await client.query(
+          `SELECT id, sender_email, message
+           FROM channel_messages
+           WHERE id = $1
+             AND post_id = $2
+           LIMIT 1`,
+          [recommendationMessageId, numericPostId]
+        );
+        const recommendationRow = recommendationRowResult.rows?.[0] || null;
+
+        if (
+          !recommendationRow ||
+          normalizeEmailKey(recommendationRow.sender_email) !== normalizeEmailKey(publisherEmail) ||
+          !parseChannelRingRecommendationMessage(recommendationRow.message)
+        ) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            error: 'La recomendación indicada no existe en este canal',
+            code: 'RECOMMENDATION_THREAD_ROOT_NOT_FOUND',
+          });
+        }
+
+        const recommendationThreadRowsResult = await client.query(
+          `SELECT id, sender_email, message
+           FROM channel_messages
+           WHERE post_id = $1
+             AND message LIKE $2
+           ORDER BY id ASC`,
+          [numericPostId, `${CHANNEL_RING_RECOMMENDATION_THREAD_MESSAGE_PREFIX}%`]
+        );
+
+        const threadRows = recommendationThreadRowsResult.rows
+          .map((row) => ({
+            row,
+            payload: parseChannelRingRecommendationThreadMessage(row?.message),
+          }))
+          .filter((item) => item.payload && item.payload.recommendationMessageId === String(recommendationMessageId));
+
+        if (senderEmail !== publisherEmail) {
+          if (parsedRecommendationThreadPayload.entryKind !== 'viewer-root') {
+            await client.query('ROLLBACK');
+            return res.status(403).json({
+              error: 'Solo el anfitrión puede enviar ese tipo de respuesta en la recomendación',
+              code: 'RECOMMENDATION_THREAD_KIND_FORBIDDEN',
+            });
+          }
+
+          const normalizedSenderEmail = normalizeEmailKey(senderEmail);
+          const existingViewerReply = threadRows.some((item) => (
+            item.payload?.entryKind === 'viewer-root' && (
+              normalizeEmailKey(item.payload?.viewerEmail || item.row?.sender_email) === normalizedSenderEmail
+            )
+          ));
+
+          if (existingViewerReply) {
+            await client.query('ROLLBACK');
+            return res.status(403).json({
+              error: 'Ya respondiste a esta recomendación',
+              code: 'RECOMMENDATION_ALREADY_REPLIED',
+            });
+          }
+
+          const viewerRow = await client.query(
+            'SELECT username FROM users WHERE email = $1',
+            [senderEmail]
+          );
+
+          const viewerUsername = normalizeRecommendationThreadUsername(
+            viewerRow.rows?.[0]?.username ?? parsedRecommendationThreadPayload.viewerUsername
+          );
+
+          messageToStore = encodeChannelRingRecommendationThreadMessage({
+            recommendationMessageId: String(recommendationMessageId),
+            entryKind: 'viewer-root',
+            text: parsedRecommendationThreadPayload.text,
+            viewerEmail: normalizedSenderEmail,
+            viewerUsername,
+          });
+        } else {
+          if (parsedRecommendationThreadPayload.entryKind === 'viewer-root') {
+            await client.query('ROLLBACK');
+            return res.status(403).json({
+              error: 'El anfitrión no puede usar ese tipo de respuesta en la recomendación',
+              code: 'RECOMMENDATION_THREAD_KIND_FORBIDDEN',
+            });
+          }
+
+          if (parsedRecommendationThreadPayload.entryKind === 'host-global') {
+            messageToStore = encodeChannelRingRecommendationThreadMessage({
+              recommendationMessageId: String(recommendationMessageId),
+              entryKind: 'host-global',
+              text: parsedRecommendationThreadPayload.text,
+            });
+          } else {
+            const targetViewerEmail = normalizeEmailKey(parsedRecommendationThreadPayload.viewerEmail);
+            const targetViewerUsername = normalizeRecommendationThreadUsername(parsedRecommendationThreadPayload.viewerUsername);
+            const targetViewerReply = threadRows.find((item) => {
+              if (item.payload?.entryKind !== 'viewer-root') {return false;}
+
+              const itemViewerEmail = normalizeEmailKey(item.payload?.viewerEmail || item.row?.sender_email);
+              const itemViewerUsername = normalizeRecommendationThreadUsername(item.payload?.viewerUsername);
+
+              if (targetViewerEmail && itemViewerEmail === targetViewerEmail) {
+                return true;
+              }
+
+              return !!targetViewerUsername && itemViewerUsername === targetViewerUsername;
+            });
+
+            if (!targetViewerReply) {
+              await client.query('ROLLBACK');
+              return res.status(404).json({
+                error: 'No existe una respuesta de ese usuario para esta recomendación',
+                code: 'RECOMMENDATION_THREAD_TARGET_NOT_FOUND',
+              });
+            }
+
+            messageToStore = encodeChannelRingRecommendationThreadMessage({
+              recommendationMessageId: String(recommendationMessageId),
+              entryKind: 'host-direct',
+              text: parsedRecommendationThreadPayload.text,
+              viewerEmail: normalizeEmailKey(targetViewerReply.payload?.viewerEmail || targetViewerReply.row?.sender_email),
+              viewerUsername: normalizeRecommendationThreadUsername(targetViewerReply.payload?.viewerUsername),
+            });
+          }
+        }
+      }
+
+      if (!parsedRecommendationThreadPayload && senderEmail !== publisherEmail) {
         const viewerRow = await client.query(
           'SELECT username FROM users WHERE email = $1',
           [senderEmail]
@@ -820,8 +1171,14 @@ router.post('/messages', authenticateToken, async (req, res) => {
         const atEmail = `@${String(senderEmail || '').trim()}`;
 
         const lastViewerMsg = await client.query(
-          'SELECT id FROM channel_messages WHERE post_id = $1 AND sender_email = $2 ORDER BY id DESC LIMIT 1',
-          [postId, senderEmail]
+          `SELECT id
+           FROM channel_messages
+           WHERE post_id = $1
+             AND sender_email = $2
+             AND message NOT LIKE $3
+           ORDER BY id DESC
+           LIMIT 1`,
+          [postId, senderEmail, `${CHANNEL_RING_RECOMMENDATION_THREAD_MESSAGE_PREFIX}%`]
         );
 
         if (lastViewerMsg.rows.length > 0) {
@@ -854,15 +1211,15 @@ router.post('/messages', authenticateToken, async (req, res) => {
 
       const result = await client.query(
         'INSERT INTO channel_messages (post_id, sender_email, message) VALUES ($1, $2, $3) RETURNING *',
-        [numericPostId, senderEmail, message]
+        [numericPostId, senderEmail, messageToStore]
       );
 
       let insertedMessage = result.rows[0];
-      let storedMessage = message;
+      let storedMessage = messageToStore;
       let hostWhiteKeysBalance = null;
       let channelEventTaskRewards = [];
 
-      if (insertedMessage && senderEmail === publisherEmail) {
+      if (insertedMessage && senderEmail === publisherEmail && !parsedRecommendationThreadPayload) {
         const computedExpiresAt = parsedEventPayload?.expiresAt || computeChannelEventExpiresAt({
           eventCreatedAt: insertedMessage.created_at,
           postCreatedAt,
@@ -947,6 +1304,54 @@ router.post('/messages', authenticateToken, async (req, res) => {
     console.error('Error al enviar mensaje:', error);
     const status = error?.statusCode || 500;
     res.status(status).json({ error: error?.message || 'Error interno del servidor', code: error?.code });
+  }
+});
+
+router.get('/messages/:postId/recommendation-signatures', authenticateToken, async (req, res) => {
+  const numericPostId = Number(req.params.postId);
+  if (!Number.isFinite(numericPostId)) {
+    return res.status(400).json({ error: 'postId inválido' });
+  }
+
+  try {
+    const activePost = await getActivePostInfo(numericPostId);
+    const publisherEmail = activePost?.publisherEmail || null;
+    if (!publisherEmail) {
+      return res.status(410).json({ error: 'Publicación no encontrada o expirada' });
+    }
+
+    try {
+      await ensureChannelAccessOrThrow({ userEmail: req.user.email, postId: numericPostId, publisherEmail });
+    } catch (e) {
+      const status = e?.statusCode || 403;
+      return res.status(status).json({ error: e?.message || 'No autorizado', code: e?.code });
+    }
+
+    const recommendationSignatures = await listChannelRingRecommendationSignatures(pool, numericPostId, publisherEmail);
+    return res.json({ recommendationSignatures });
+  } catch (error) {
+    console.error('Error listing channel ring recommendation signatures:', error);
+    return res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+router.get('/source-publications/:sourcePostId/recommendation-counts', authenticateToken, async (req, res) => {
+  const numericSourcePostId = Number(req.params.sourcePostId);
+  if (!Number.isFinite(numericSourcePostId)) {
+    return res.status(400).json({ error: 'sourcePostId inválido' });
+  }
+
+  try {
+    const activeSourcePost = await getActivePostInfo(numericSourcePostId);
+    if (!activeSourcePost?.publisherEmail) {
+      return res.status(410).json({ error: 'Publicación no encontrada o expirada' });
+    }
+
+    const recommendationCounts = await listSourcePublicationRingRecommendationCounts(pool, numericSourcePostId);
+    return res.json({ recommendationCounts });
+  } catch (error) {
+    console.error('Error listing source publication ring recommendation counts:', error);
+    return res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 

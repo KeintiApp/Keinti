@@ -113,17 +113,38 @@ export const uploadImage = async (
 
     const guessMimeType = (uri: string) => {
       const u = uri.toLowerCase();
+      const dataUriMatch = u.match(/^data:([^;,]+)[;,]/i);
+      if (dataUriMatch?.[1]) {
+        return dataUriMatch[1];
+      }
+
       if (u.endsWith('.png')) {return 'image/png';}
       if (u.endsWith('.webp')) {return 'image/webp';}
       if (u.endsWith('.heic')) {return 'image/heic';}
       if (u.endsWith('.heif')) {return 'image/heif';}
       if (u.endsWith('.jpg') || u.endsWith('.jpeg')) {return 'image/jpeg';}
+      if (u.endsWith('.m4a') || u.endsWith('.aac')) {return 'audio/mp4';}
+      if (u.endsWith('.mp3')) {return 'audio/mpeg';}
+      if (u.endsWith('.wav')) {return 'audio/wav';}
+      if (u.endsWith('.ogg')) {return 'audio/ogg';}
+      if (u.endsWith('.opus')) {return 'audio/opus';}
       return 'image/jpeg';
+    };
+
+    const guessExtension = (mimeType: string) => {
+      const normalizedMimeType = String(mimeType || '').trim().toLowerCase();
+      if (normalizedMimeType === 'image/jpeg') {return 'jpg';}
+      if (normalizedMimeType === 'audio/mp4') {return 'm4a';}
+      if (normalizedMimeType === 'audio/mpeg') {return 'mp3';}
+      if (normalizedMimeType === 'audio/wav') {return 'wav';}
+      if (normalizedMimeType === 'audio/ogg') {return 'ogg';}
+      if (normalizedMimeType === 'audio/opus') {return 'opus';}
+      return normalizedMimeType.split('/')[1] || 'jpg';
     };
 
     const normalizedUri = normalizeUploadUri(imageUri);
     const mimeType = guessMimeType(normalizedUri);
-    const fileName = `upload.${mimeType.split('/')[1] || 'jpg'}`;
+    const fileName = `upload.${guessExtension(mimeType)}`;
 
     // Some Android stacks are picky about file:// URI formatting.
     const finalUri = normalizedUri;
@@ -166,7 +187,7 @@ export const uploadImage = async (
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      throw new Error('Error al subir imagen');
+      throw new Error('Error al subir archivo');
     }
 
     const data = await response.json();
@@ -174,7 +195,7 @@ export const uploadImage = async (
   } catch (error) {
     // AbortController timeout
     if (error instanceof Error && (error.name === 'AbortError' || /aborted/i.test(error.message))) {
-      const wrapped = new Error('La subida de la imagen tardó demasiado y se canceló. Revisa tu conexión o inténtalo con una imagen más pequeña.');
+      const wrapped = new Error('La subida del archivo tardó demasiado y se canceló. Revisa tu conexión o inténtalo con un archivo más pequeño.');
       (wrapped as any).cause = error;
       console.error('Error uploading image:', wrapped);
       throw wrapped;
