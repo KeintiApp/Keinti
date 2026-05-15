@@ -1792,6 +1792,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        pointerEvents={isCreatingReading ? 'none' : 'auto'}
         style={styles.keyboardView}
       >
         <ScrollView
@@ -2398,6 +2399,12 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
               isApplyEnabled ? styles.citePanelApplyButtonTextEnabled : styles.citePanelApplyButtonTextDisabled,
             ]}>Aplicar</Text>
           </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {isCreatingReading ? (
+        <View pointerEvents="auto" style={styles.uploadBlockingOverlay}>
+          <ActivityIndicator size="large" color="#FFFFFF" />
         </View>
       ) : null}
 
@@ -3213,6 +3220,13 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     textAlign: 'center',
     fontWeight: '600',
+  },
+  uploadBlockingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
+    zIndex: 24,
   },
   citePanel: {
     position: 'absolute',

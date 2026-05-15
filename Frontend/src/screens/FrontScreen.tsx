@@ -651,6 +651,49 @@ type HypeViralPageState = {
 
 type HypeViralPagesState = Partial<Record<HypeCategoryOption, HypeViralPageState>>;
 
+type JoinedChannelUnreadCounts = {
+  replies: number;
+  images: number;
+  events: number;
+  readings: number;
+  recommendations: number;
+};
+
+const EMPTY_JOINED_CHANNEL_UNREAD_COUNTS: JoinedChannelUnreadCounts = {
+  replies: 0,
+  images: 0,
+  events: 0,
+  readings: 0,
+  recommendations: 0,
+};
+
+const createEmptyJoinedChannelUnreadCounts = (): JoinedChannelUnreadCounts => ({
+  replies: 0,
+  images: 0,
+  events: 0,
+  readings: 0,
+  recommendations: 0,
+});
+
+const getJoinedChannelUnreadCountsTotal = (counts?: Partial<JoinedChannelUnreadCounts> | null) => (
+  Number(counts?.replies ?? 0)
+  + Number(counts?.images ?? 0)
+  + Number(counts?.events ?? 0)
+  + Number(counts?.readings ?? 0)
+  + Number(counts?.recommendations ?? 0)
+);
+
+const areJoinedChannelUnreadCountsEqual = (
+  left?: Partial<JoinedChannelUnreadCounts> | null,
+  right?: Partial<JoinedChannelUnreadCounts> | null,
+) => (
+  Number(left?.replies ?? 0) === Number(right?.replies ?? 0)
+  && Number(left?.images ?? 0) === Number(right?.images ?? 0)
+  && Number(left?.events ?? 0) === Number(right?.events ?? 0)
+  && Number(left?.readings ?? 0) === Number(right?.readings ?? 0)
+  && Number(left?.recommendations ?? 0) === Number(right?.recommendations ?? 0)
+);
+
 const EMPTY_HYPE_VIRAL_PAGE_STATE: HypeViralPageState = {
   items: [],
   isLoadingInitial: false,
@@ -1587,6 +1630,55 @@ const BottomNavGradientIcon = ({
         <Rect x="0" y="0" width={size} height={size} fill={`url(#${gradientId})`} />
       </Svg>
     </MaskedView>
+  );
+};
+
+const GradientAttachmentActionIcon = ({
+  name,
+  size,
+  gradientId,
+  library = 'material',
+  iconColor = '#000000',
+  iconSize,
+}: {
+  name: string;
+  size: number;
+  gradientId: string;
+  library?: 'material' | 'community';
+  iconColor?: string;
+  iconSize?: number;
+}) => {
+  const IconComponent = library === 'community' ? MaterialCommunityIcons : MaterialIcons;
+  const renderedIconSize = typeof iconSize === 'number' ? iconSize : Math.round(size * 0.56);
+
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        overflow: 'hidden',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <BlurView
+        blurType="dark"
+        blurAmount={10}
+        reducedTransparencyFallbackColor="#FFB74D"
+        style={StyleSheet.absoluteFill}
+      />
+      <Svg width={size} height={size} viewBox="0 0 24 24" style={StyleSheet.absoluteFill}>
+        <Defs>
+          <LinearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor={READING_ACCENT_GRADIENT_COLORS[0]} stopOpacity="1" />
+            <Stop offset="1" stopColor={READING_ACCENT_GRADIENT_COLORS[1]} stopOpacity="1" />
+          </LinearGradient>
+        </Defs>
+        <Circle cx="12" cy="12" r="12" fill={`url(#${gradientId})`} />
+      </Svg>
+      <IconComponent name={name} size={renderedIconSize} color={iconColor} />
+    </View>
   );
 };
 
@@ -5412,7 +5504,7 @@ const FrontScreen = ({
   const [groupMessageOptions, setGroupMessageOptions] = useState<{ messageIndex: number; memberEmail: string; username: string } | null>(null);
   const [groupLimitedMemberEmails, setGroupLimitedMemberEmails] = useState<string[]>([]);
   const [myChannels, setMyChannels] = useState<any[]>([]);
-  const [joinedChannelUnreadReplyCounts, setJoinedChannelUnreadReplyCounts] = useState<Record<string, number>>({});
+  const [joinedChannelUnreadCountsByPostId, setJoinedChannelUnreadCountsByPostId] = useState<Record<string, JoinedChannelUnreadCounts>>({});
   const [joinedChannelLastSeenReplySortByPostId, setJoinedChannelLastSeenReplySortByPostId] = useState<Record<string, number>>({});
   const [channelInteractions, setChannelInteractions] = useState<any[]>([]);
   const [channelTab, setChannelTab] = useState<'Tu canal' | 'tusCanales'>('Tu canal');
@@ -5451,6 +5543,7 @@ const FrontScreen = ({
   const [channelMessagesTab, setChannelMessagesTab] = useState<ChannelMessagesTab>('General');
   const isPublished = !!myPublication;
   const userPublication = myPublication;
+  const [activeJoinedChannelUnreadPanelKey, setActiveJoinedChannelUnreadPanelKey] = useState<string | null>(null);
   const hasActiveOwnChannel = useMemo(() => {
     if (!myPublication) {return false;}
     const created = parseServerDate(myPublication.createdAt as any);
@@ -6218,6 +6311,51 @@ const FrontScreen = ({
     return `@${String(msg?.sender_email ?? '')}`;
   }, []);
 
+  const normalizeChannelHandle = useCallback((raw?: string | null) => {
+    const value = String(raw ?? '').trim().toLowerCase();
+    if (!value) {return '';}
+    return value.startsWith('@') ? value : `@${value}`;
+  }, []);
+
+  const getChannelTargetedReplyHandle = useCallback((msg: any) => {
+    const messageText = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
+    if (!messageText.startsWith('@')) {return '';}
+
+    const firstSpaceIndex = messageText.indexOf(' ');
+    if (firstSpaceIndex <= 0) {return '';}
+
+    return normalizeChannelHandle(messageText.substring(0, firstSpaceIndex));
+  }, [normalizeChannelHandle]);
+
+  const isJoinedChannelPublisherReplyForViewer = useCallback((
+    msg: any,
+    ownerEmailForThisChat?: string | null,
+    viewerEmailForThisChat?: string | null,
+    viewerUsernameForThisChat?: string | null,
+  ) => {
+    const ownerEmailValue = String(ownerEmailForThisChat ?? '').trim().toLowerCase();
+    const viewerEmailHandle = normalizeChannelHandle(viewerEmailForThisChat);
+    const viewerUsernameHandle = normalizeChannelHandle(viewerUsernameForThisChat);
+
+    if (!ownerEmailValue || (!viewerEmailHandle && !viewerUsernameHandle)) {
+      return false;
+    }
+
+    if (String(msg?.sender_email ?? '').trim().toLowerCase() !== ownerEmailValue) {
+      return false;
+    }
+
+    const messageText = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
+    if (!messageText || parseChannelRingRecommendationThreadMessage(messageText)) {
+      return false;
+    }
+
+    const targetHandle = getChannelTargetedReplyHandle(msg);
+    if (!targetHandle) {return false;}
+
+    return targetHandle === viewerEmailHandle || targetHandle === viewerUsernameHandle;
+  }, [getChannelTargetedReplyHandle, normalizeChannelHandle]);
+
   // Backend stores created_at as TIMESTAMP (no timezone). Parsing it on device can yield
   // different epoch values depending on user timezone.
   // Use message `id` (monotonic) as the primary ordering key so everyone sees the same order.
@@ -6228,111 +6366,67 @@ const FrontScreen = ({
     return Number.isFinite(t) ? t : 0;
   }, []);
 
-  const computeJoinedChannelUnreadReplyCountFromMessages = useCallback((
+  const computeJoinedChannelUnreadCountsFromMessages = useCallback((
     rawMessages: any[],
     ownerEmailForThisChat?: string | null,
     viewerEmailForThisChat?: string | null,
     lastSeenReplySortKey: number = 0,
-  ) => {
+    viewerUsernameForThisChat?: string | null,
+  ): JoinedChannelUnreadCounts => {
+    const counts = createEmptyJoinedChannelUnreadCounts();
     const ownerEmailValue = String(ownerEmailForThisChat ?? '').trim();
     const viewerEmailValue = String(viewerEmailForThisChat ?? '').trim();
     if (!ownerEmailValue || !viewerEmailValue || !Array.isArray(rawMessages) || rawMessages.length === 0) {
-      return 0;
+      return counts;
     }
 
-    type InlineReply = {
-      id?: any;
-      created_at?: any;
-      content: string;
-      author: 'publisher' | 'viewer';
-    };
-
-    const repliesByMessageKey: Record<string, InlineReply[]> = {};
-    const processedMessages: any[] = [];
-    const lastMessageKeyByUsername: Record<string, string> = {};
-    const activeThreadKeyByUsername: Record<string, string> = {};
-
-    const sortedMessages = [...rawMessages].sort((a: any, b: any) => {
-      const ta = getChannelMessageSortKey(a?.created_at, a?.id);
-      const tb = getChannelMessageSortKey(b?.created_at, b?.id);
-      if (ta !== tb) {return ta - tb;}
-      return String(a?.id ?? '').localeCompare(String(b?.id ?? ''));
-    });
-
-    sortedMessages.forEach((msg: any, rawIndex: number) => {
-      const isOwnerMessage = String(msg?.sender_email ?? '') === ownerEmailValue;
+    rawMessages.forEach((msg: any) => {
       const messageText = String(typeof msg === 'string' ? msg : (msg?.message ?? '')).trim();
+      const messageSortKey = getChannelMessageSortKey(msg?.created_at, msg?.id);
+      if (!messageText || messageSortKey <= lastSeenReplySortKey) {
+        return;
+      }
 
       if (parseChannelRingRecommendationThreadMessage(messageText)) {
         return;
       }
 
-      if (!isOwnerMessage) {
-        const senderHandle = normalizeChannelMessageUsername(msg);
-        const activeKey = senderHandle ? activeThreadKeyByUsername[senderHandle] : '';
-        if (activeKey) {
-          if (!repliesByMessageKey[activeKey]) {repliesByMessageKey[activeKey] = [];}
-          repliesByMessageKey[activeKey].push({
-            id: msg?.id,
-            created_at: msg?.created_at,
-            content: messageText,
-            author: 'viewer',
-          });
+      if (String(msg?.sender_email ?? '').trim().toLowerCase() !== ownerEmailValue.toLowerCase()) {
+        return;
+      }
+
+      if (!isJoinedChannelPublisherReplyForViewer(
+        msg,
+        ownerEmailValue,
+        viewerEmailValue,
+        viewerUsernameForThisChat,
+      )) {
+        if (parseChannelImageMessage(messageText)) {
+          counts.images += 1;
           return;
         }
-      }
 
-      if (isOwnerMessage && messageText.startsWith('@')) {
-        const firstSpaceIndex = messageText.indexOf(' ');
-        if (firstSpaceIndex > 0) {
-          const targetUsername = messageText.substring(0, firstSpaceIndex);
-          const content = messageText.substring(firstSpaceIndex + 1);
-          const targetMessageKey = activeThreadKeyByUsername[targetUsername] || lastMessageKeyByUsername[targetUsername];
-          if (targetMessageKey) {
-            if (!repliesByMessageKey[targetMessageKey]) {repliesByMessageKey[targetMessageKey] = [];}
-            repliesByMessageKey[targetMessageKey].push({
-              id: msg?.id,
-              created_at: msg?.created_at,
-              content,
-              author: 'publisher',
-            });
-            activeThreadKeyByUsername[targetUsername] = targetMessageKey;
-            return;
-          }
+        if (parseChannelEventMessage(messageText)) {
+          counts.events += 1;
+          return;
         }
-      }
 
-      const key = String(msg?.id ?? `idx-${rawIndex}`);
-      const decorated = (typeof msg === 'string') ? msg : { ...msg, __key: key };
-      processedMessages.push(decorated);
-
-      if (!isOwnerMessage) {
-        const senderHandle = normalizeChannelMessageUsername(msg);
-        if (senderHandle) {
-          lastMessageKeyByUsername[senderHandle] = key;
+        if (parseChannelReadingMessage(messageText)) {
+          counts.readings += 1;
+          return;
         }
+
+        if (isChannelRingRecommendationRootMessage(messageText)) {
+          counts.recommendations += 1;
+        }
+        return;
       }
+
+      counts.replies += 1;
     });
 
-    processedMessages.sort((a: any, b: any) => {
-      const ta = getChannelMessageSortKey(a?.created_at, a?.id);
-      const tb = getChannelMessageSortKey(b?.created_at, b?.id);
-      if (ta !== tb) {return ta - tb;}
-      const ka = String(a?.__key ?? a?.id ?? '');
-      const kb = String(b?.__key ?? b?.id ?? '');
-      return ka.localeCompare(kb);
-    });
-
-    return processedMessages.reduce((total: number, msg: any, index: number) => {
-      if (String(msg?.sender_email ?? '') !== viewerEmailValue) {return total;}
-      const key = String(msg?.__key ?? msg?.id ?? `idx-${index}`);
-      const replies = repliesByMessageKey[key] || [];
-      const unreadPublisherReplies = replies.filter(reply => (
-        reply.author === 'publisher' && getChannelMessageSortKey(reply?.created_at, reply?.id) > lastSeenReplySortKey
-      ));
-      return total + unreadPublisherReplies.length;
-    }, 0);
-  }, [getChannelMessageSortKey, normalizeChannelMessageUsername]);
+    return counts;
+  }, [getChannelMessageSortKey, isJoinedChannelPublisherReplyForViewer]);
 
   const currentChannelOwnerEmail = String(
     (selectedChannel ? (selectedChannel as any)?.publisher_email : userEmail) ?? ''
@@ -6615,24 +6709,44 @@ const FrontScreen = ({
       ''
     ).trim();
     const selectedChannelOwnerEmail = String((selectedChannel as any)?.publisher_email ?? '').trim();
+    const normalizedUserEmail = String(userEmail ?? '').trim();
+    const normalizedUsername = String(username ?? '').trim();
 
     if (!selectedPostId) {return;}
-    if (!userEmail || !selectedChannelOwnerEmail || String(userEmail) === selectedChannelOwnerEmail) {return;}
+    if (!normalizedUserEmail || !selectedChannelOwnerEmail || normalizedUserEmail === selectedChannelOwnerEmail) {return;}
 
     let maxPublisherReplySortKey = 0;
-    Object.values(channelChatRenderModel.repliesByMessageKey).forEach((replies: any) => {
-      (Array.isArray(replies) ? replies : []).forEach((reply: any) => {
-        if (reply?.author !== 'publisher') {return;}
-        maxPublisherReplySortKey = Math.max(
-          maxPublisherReplySortKey,
-          getChannelMessageSortKey(reply?.created_at, reply?.id),
+    chatMessages.forEach((message: any) => {
+      const messageText = String(typeof message === 'string' ? message : (message?.message ?? '')).trim();
+      const messageSortKey = getChannelMessageSortKey(message?.created_at, message?.id);
+      if (!messageText || messageSortKey <= 0 || parseChannelRingRecommendationThreadMessage(messageText)) {
+        return;
+      }
+
+      const isRelevantReply = isJoinedChannelPublisherReplyForViewer(
+        message,
+        selectedChannelOwnerEmail,
+        normalizedUserEmail,
+        normalizedUsername,
+      );
+      const isRelevantRootContent = String(message?.sender_email ?? '').trim().toLowerCase() === selectedChannelOwnerEmail.toLowerCase()
+        && (
+          !!parseChannelImageMessage(messageText)
+          || !!parseChannelEventMessage(messageText)
+          || !!parseChannelReadingMessage(messageText)
+          || isChannelRingRecommendationRootMessage(messageText)
         );
-      });
+
+      if (!isRelevantReply && !isRelevantRootContent) {
+        return;
+      }
+
+      maxPublisherReplySortKey = Math.max(maxPublisherReplySortKey, messageSortKey);
     });
 
     if (maxPublisherReplySortKey <= 0) {return;}
 
-    setJoinedChannelUnreadReplyCounts(prev => {
+    setJoinedChannelUnreadCountsByPostId(prev => {
       if (!prev[selectedPostId]) {return prev;}
       const next = { ...prev };
       delete next[selectedPostId];
@@ -6646,7 +6760,7 @@ const FrontScreen = ({
         [selectedPostId]: maxPublisherReplySortKey,
       };
     });
-  }, [selectedChannel, userEmail, channelChatRenderModel.repliesByMessageKey, getChannelMessageSortKey]);
+  }, [selectedChannel, userEmail, username, chatMessages, getChannelMessageSortKey, isJoinedChannelPublisherReplyForViewer]);
 
   useEffect(() => {
     const selectedChannelOwnerEmail = String((selectedChannel as any)?.publisher_email ?? '').trim();
@@ -8658,7 +8772,10 @@ const FrontScreen = ({
           style={{ paddingBottom: imageUri ? 10 : 0 }}
         >
           <View style={styles.channelEventMessageContent}>
-            <Text style={[styles.channelEventMessageName, { fontWeight: '400' }]}>{recommendationLabel}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <MaterialCommunityIcons name="lightbulb-outline" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+              <Text style={[styles.channelEventMessageName, { fontWeight: '400' }]}>{recommendationLabel}</Text>
+            </View>
 
             {ringTitle ? (
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
@@ -9040,8 +9157,11 @@ const FrontScreen = ({
       imageBlurRadius?: number;
       imageOpacity?: number;
       canOpenImage?: boolean;
+      canPlayEventAudio?: boolean;
+      canOpenSocialLinks?: boolean;
       canCompleteRewardedTasks?: boolean;
       onCompleteRewardedTask?: (messageId: number | string, taskIndex: number) => void;
+      showAttachmentSummary?: boolean;
     }
   ) => {
     const localeByLanguage: Record<Language, string> = {
@@ -9108,6 +9228,7 @@ const FrontScreen = ({
     const imageUri = normalizeChannelEventMediaUri(payload.imageUrl || '');
     const eventAudio = payload.eventAudio || null;
     const eventAudioUri = eventAudio?.url ? normalizeChannelEventMediaUri(eventAudio.url) : '';
+    const hasEventAudio = !!eventAudioUri;
     const eventAudioTitle = localize({
       es: 'Nota de evento',
       en: 'Event note',
@@ -9124,7 +9245,57 @@ const FrontScreen = ({
       de: 'Sie wird vor dem Eventnamen abgespielt.',
       it: 'Viene riprodotta prima del nome dell\'evento.',
     });
+    const eventAudioLockedLabel = localize({
+      es: 'Nota bloqueada',
+      en: 'Note locked',
+      fr: 'Note verrouillee',
+      pt: 'Nota bloqueada',
+      de: 'Notiz gesperrt',
+      it: 'Nota bloccata',
+    });
+    const eventLinksSummaryLabel = localize({
+      es: 'Enlaces',
+      en: 'Links',
+      fr: 'Liens',
+      pt: 'Links',
+      de: 'Links',
+      it: 'Link',
+    });
+    const eventNoteSummaryLabel = localize({
+      es: 'Nota',
+      en: 'Note',
+      fr: 'Note',
+      pt: 'Nota',
+      de: 'Notiz',
+      it: 'Nota',
+    });
+    const eventFooterLabel = localize({
+      es: 'Evento',
+      en: 'Event',
+      fr: 'Evenement',
+      pt: 'Evento',
+      de: 'Event',
+      it: 'Evento',
+    });
     const canOpenImage = options?.canOpenImage !== false;
+    const canPlayEventAudio = options?.canPlayEventAudio !== false;
+    const canOpenSocialLinks = options?.canOpenSocialLinks !== false;
+    const renderableEventSocials = Array.isArray(payload.socialNetworks)
+      ? payload.socialNetworks.reduce<Array<{ key: string; link: string; iconSource: any }>>((accumulator, item, index) => {
+        const networkKey = String(item?.network || '').trim();
+        const link = String(item?.link || '').trim();
+        const iconSource = SOCIAL_ICONS[networkKey as keyof typeof SOCIAL_ICONS];
+        if (!networkKey || !link || !iconSource) {return accumulator;}
+
+        accumulator.push({
+          key: `${networkKey}-${index}`,
+          link,
+          iconSource,
+        });
+        return accumulator;
+      }, [])
+      : [];
+    const shouldShowAttachmentSummary = options?.showAttachmentSummary === true;
 
     return (
       <View style={styles.channelEventMessageCard}>
@@ -9149,15 +9320,27 @@ const FrontScreen = ({
           </TouchableOpacity>
         )}
         <View style={styles.channelEventMessageContent}>
-          {eventAudioUri ? (
+          {hasEventAudio ? (
             <View style={styles.channelEventMessageVoiceNoteSection}>
-              <VoiceNotePlayer
-                uri={eventAudioUri}
-                durationSeconds={eventAudio?.durationSeconds}
-                title={eventAudioTitle}
-                subtitle={eventAudioSubtitle}
-                variant="reader"
-              />
+              <View style={styles.channelEventMessageVoiceNoteCard}>
+                <View pointerEvents={canPlayEventAudio ? 'auto' : 'none'} style={!canPlayEventAudio ? styles.channelEventMessageVoiceNoteDisabled : null}>
+                  <VoiceNotePlayer
+                    uri={eventAudioUri}
+                    durationSeconds={eventAudio?.durationSeconds}
+                    title={eventAudioTitle}
+                    subtitle={eventAudioSubtitle}
+                    variant="reader"
+                  />
+                </View>
+                {!canPlayEventAudio ? (
+                  <View style={styles.channelEventMessageVoiceNoteLockOverlay}>
+                    <View style={styles.channelEventMessageVoiceNoteLockPill}>
+                      <MaterialIcons name="lock" size={14} color="#FFFFFF" />
+                      <Text style={styles.channelEventMessageVoiceNoteLockText}>{eventAudioLockedLabel}</Text>
+                    </View>
+                  </View>
+                ) : null}
+              </View>
             </View>
           ) : null}
           <Text style={styles.channelEventMessageName}>{payload.name}</Text>
@@ -9171,24 +9354,49 @@ const FrontScreen = ({
             <Text style={styles.channelEventMessageDateTime}>{dateTimeLabel}</Text>
           )}
 
-          {Array.isArray(payload.socialNetworks) && payload.socialNetworks.length > 0 ? (
+          {(shouldShowAttachmentSummary || renderableEventSocials.length > 0) ? (
             <View style={styles.channelEventMessageSocialSection}>
-              <View style={styles.channelEventMessageSocialRow}>
-                {payload.socialNetworks.map((item, index) => {
-                  const iconSource = SOCIAL_ICONS[item.network as keyof typeof SOCIAL_ICONS];
-                  if (!iconSource) {return null;}
-                  return (
-                    <TouchableOpacity
-                      key={`${item.network}-${index}`}
-                      activeOpacity={0.85}
-                      onPress={() => openExternalLink(item.link)}
-                      style={styles.channelEventMessageSocialButton}
-                    >
-                      <Image source={iconSource} style={styles.channelEventMessageSocialIcon} />
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+              {shouldShowAttachmentSummary ? (
+                <View style={styles.channelEventMessageAttachmentSummary}>
+                  <View style={styles.channelEventMessageAttachmentSummaryRow}>
+                    <Text style={styles.channelEventMessageAttachmentSummaryLabel}>{eventLinksSummaryLabel}</Text>
+                    <Text style={styles.channelEventMessageAttachmentSummaryValue}>{renderableEventSocials.length}</Text>
+                  </View>
+                  <View style={styles.channelEventMessageAttachmentSummaryRow}>
+                    <View style={styles.channelEventMessageAttachmentSummaryMetric}>
+                      <MaterialIcons name="graphic-eq" size={16} color="rgba(255,255,255,0.92)" style={styles.channelEventMessageAttachmentSummaryNoteIcon} />
+                      <Text style={styles.channelEventMessageAttachmentSummaryNoteLabel}>{eventNoteSummaryLabel}</Text>
+                    </View>
+                    <Text style={styles.channelEventMessageAttachmentSummaryValue}>{hasEventAudio ? 1 : 0}</Text>
+                  </View>
+                </View>
+              ) : null}
+              {renderableEventSocials.length > 0 ? (
+                <View style={styles.channelEventMessageSocialCard}>
+                  <View pointerEvents={canOpenSocialLinks ? 'auto' : 'none'} style={!canOpenSocialLinks ? styles.channelEventMessageSocialDisabled : null}>
+                    <View style={styles.channelEventMessageSocialRow}>
+                      {renderableEventSocials.map(({ key, link, iconSource }, index) => (
+                        <TouchableOpacity
+                          key={key}
+                          activeOpacity={canOpenSocialLinks ? 0.85 : 1}
+                          disabled={!canOpenSocialLinks}
+                          onPress={() => openExternalLink(link)}
+                          style={styles.channelEventMessageSocialButton}
+                        >
+                          <Image source={iconSource} style={styles.channelEventMessageSocialIcon} />
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                  {!canOpenSocialLinks ? (
+                    <View style={styles.channelEventMessageVoiceNoteLockOverlay}>
+                      <View style={styles.channelEventMessageLockIconBadge}>
+                        <MaterialIcons name="lock" size={15} color="#FFFFFF" />
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
             </View>
           ) : null}
 
@@ -9201,7 +9409,7 @@ const FrontScreen = ({
           )}
 
           <View style={styles.channelEventMessageFooter}>
-            <Text style={styles.channelEventMessageFooterLabel}>Evento</Text>
+            <Text style={styles.channelEventMessageFooterLabel}>{eventFooterLabel}</Text>
             <Text style={styles.channelEventMessageFooterType}>{t(payload.typeKey)}</Text>
           </View>
 
@@ -9713,9 +9921,20 @@ const FrontScreen = ({
     setActiveRecommendationReplyContext(null);
     setExpandedMention(null);
     setChannelInteractions([]);
+    setActiveJoinedChannelOptionsKey(null);
+    setActiveJoinedChannelUnreadPanelKey(null);
     // IMPORTANT: set the ref synchronously so the first fetch can reliably clear the loader.
     channelChatLoadingPostIdRef.current = postId || null;
     setChannelChatLoadingPostId(postId || null);
+
+    if (postId) {
+      setJoinedChannelUnreadCountsByPostId(prev => {
+        if (!prev[postId]) {return prev;}
+        const next = { ...prev };
+        delete next[postId];
+        return next;
+      });
+    }
 
     if (postId) {
       void dismissChannelReplyNotification(authToken, Number(postId))
@@ -10100,18 +10319,18 @@ const FrontScreen = ({
     }
   }, [handleLoadMoreHypeViralReadings]);
 
-  const fetchJoinedChannelUnreadReplyCountForChannel = useCallback(async (
+  const fetchJoinedChannelUnreadCountsForChannel = useCallback(async (
     channel: any,
     lastSeenMapOverride?: Record<string, number>,
   ) => {
     if (!authToken || !userEmail) {
-      return { postId: '', count: 0 };
+      return { postId: '', counts: createEmptyJoinedChannelUnreadCounts() };
     }
 
     const postId = String(channel?.post_id ?? channel?.postId ?? channel?.id ?? '').trim();
     const ownerEmail = String(channel?.publisher_email ?? '').trim();
     if (!postId || !ownerEmail || String(ownerEmail) === String(userEmail)) {
-      return { postId, count: 0 };
+      return { postId, counts: createEmptyJoinedChannelUnreadCounts() };
     }
 
     const lastSeenReplySortKey = Number((lastSeenMapOverride ?? joinedChannelLastSeenReplySortByPostId)[postId] ?? 0) || 0;
@@ -10165,65 +10384,67 @@ const FrontScreen = ({
 
     return {
       postId,
-      count: computeJoinedChannelUnreadReplyCountFromMessages(
+      counts: computeJoinedChannelUnreadCountsFromMessages(
         collectedMessages,
         ownerEmail,
         userEmail,
         lastSeenReplySortKey,
+        username,
       ),
     };
   }, [
     authToken,
     userEmail,
+    username,
     joinedChannelLastSeenReplySortByPostId,
     getChannelMessageSortKey,
-    computeJoinedChannelUnreadReplyCountFromMessages,
+    computeJoinedChannelUnreadCountsFromMessages,
   ]);
 
-  const refreshJoinedChannelUnreadReplyCounts = useCallback(async (
+  const refreshJoinedChannelUnreadCounts = useCallback(async (
     channelsOverride?: any[],
     lastSeenMapOverride?: Record<string, number>,
   ) => {
     if (!authToken || !userEmail) {
-      setJoinedChannelUnreadReplyCounts({});
+      setJoinedChannelUnreadCountsByPostId({});
       return;
     }
 
     const channelsToCheck = Array.isArray(channelsOverride) ? channelsOverride : myChannels;
     if (!channelsToCheck.length) {
-      setJoinedChannelUnreadReplyCounts({});
+      setJoinedChannelUnreadCountsByPostId({});
       return;
     }
 
     const refreshSeq = ++joinedChannelUnreadRefreshSeqRef.current;
     const entries = await Promise.all(channelsToCheck.map(async (channel: any) => {
       try {
-        return await fetchJoinedChannelUnreadReplyCountForChannel(channel, lastSeenMapOverride);
+        return await fetchJoinedChannelUnreadCountsForChannel(channel, lastSeenMapOverride);
       } catch {
         const postId = String(channel?.post_id ?? channel?.postId ?? channel?.id ?? '').trim();
-        return { postId, count: 0 };
+        return { postId, counts: createEmptyJoinedChannelUnreadCounts() };
       }
     }));
 
     if (refreshSeq !== joinedChannelUnreadRefreshSeqRef.current) {return;}
 
-    const next: Record<string, number> = {};
+    const next: Record<string, JoinedChannelUnreadCounts> = {};
     entries.forEach((entry) => {
       if (!entry?.postId) {return;}
-      if ((entry.count || 0) > 0) {
-        next[entry.postId] = entry.count;
+      if (getJoinedChannelUnreadCountsTotal(entry.counts) > 0) {
+        next[entry.postId] = entry.counts;
       }
     });
 
-    setJoinedChannelUnreadReplyCounts(prev => {
+    setJoinedChannelUnreadCountsByPostId(prev => {
       const prevKeys = Object.keys(prev);
       const nextKeys = Object.keys(next);
-      if (prevKeys.length === nextKeys.length && prevKeys.every(key => prev[key] === next[key])) {
+      if (prevKeys.length === nextKeys.length && prevKeys.every(key => areJoinedChannelUnreadCountsEqual(prev[key], next[key]))) {
         return prev;
       }
       return next;
     });
-  }, [authToken, userEmail, myChannels, fetchJoinedChannelUnreadReplyCountForChannel]);
+  }, [authToken, userEmail, myChannels, fetchJoinedChannelUnreadCountsForChannel]);
 
   const fetchChannelInteractions = async (postId?: string) => {
     if (!authToken) {return;}
@@ -13456,14 +13677,14 @@ const FrontScreen = ({
 
     if (!shouldRefreshUnreadCounts) {
       if (!authToken || !userEmail || myChannels.length === 0) {
-        setJoinedChannelUnreadReplyCounts({});
+        setJoinedChannelUnreadCountsByPostId({});
       }
       return;
     }
 
-    refreshJoinedChannelUnreadReplyCounts();
+    refreshJoinedChannelUnreadCounts();
     const timer = setInterval(() => {
-      refreshJoinedChannelUnreadReplyCounts();
+      refreshJoinedChannelUnreadCounts();
     }, 6000);
 
     return () => {
@@ -13477,8 +13698,29 @@ const FrontScreen = ({
     userEmail,
     myChannels,
     joinedChannelLastSeenReplySortByPostId,
-    refreshJoinedChannelUnreadReplyCounts,
+    refreshJoinedChannelUnreadCounts,
   ]);
+
+  const sortedVisibleJoinedChannels = useMemo(() => {
+    return myChannels
+      .map((channel, index) => ({
+        channel,
+        index,
+        postId: String(channel?.post_id ?? channel?.postId ?? channel?.id ?? '').trim(),
+      }))
+      .filter(({ channel }) => getRemainingTime(channel.post_created_at) !== 'Tiempo agotado')
+      .sort((left, right) => {
+        const leftUnreadCount = getJoinedChannelUnreadCountsTotal(joinedChannelUnreadCountsByPostId[left.postId]);
+        const rightUnreadCount = getJoinedChannelUnreadCountsTotal(joinedChannelUnreadCountsByPostId[right.postId]);
+
+        if (leftUnreadCount !== rightUnreadCount) {
+          return rightUnreadCount - leftUnreadCount;
+        }
+
+        return left.index - right.index;
+      })
+      .map(({ channel }) => channel);
+  }, [myChannels, joinedChannelUnreadCountsByPostId]);
 
   useEffect(() => {
     // Keep host-side request status up to date when viewing "Canal"
@@ -18557,7 +18799,10 @@ const FrontScreen = ({
                                 imageBlurRadius: isHypeEventLocked ? HYPE_EVENT_IMAGE_BLUR_RADIUS : undefined,
                                 imageOpacity: isHypeEventLocked ? HYPE_EVENT_IMAGE_OPACITY : undefined,
                                 canOpenImage: !isHypeEventLocked,
+                                canPlayEventAudio: !isHypeEventLocked,
+                                canOpenSocialLinks: !isHypeEventLocked,
                                 canCompleteRewardedTasks: false,
+                                showAttachmentSummary: true,
                               })}
                             </View>
                           </View>
@@ -22574,7 +22819,7 @@ const FrontScreen = ({
                   ) : (
                     <ScrollView style={[styles.scrollContainer, { flex: 1, paddingTop: 0, marginTop: chatPanelsTopOffset }]} contentContainerStyle={{ paddingBottom: bottomNavHeight + 16 }}>
                       <View style={styles.chatContainer}>
-                        {myChannels.filter(c => getRemainingTime(c.post_created_at) !== 'Tiempo agotado').length === 0 ? (
+                        {sortedVisibleJoinedChannels.length === 0 ? (
                           <View style={styles.emptyStateContainer}>
                             <MaterialIcons name="forum" size={60} color="rgba(255, 255, 255, 0.3)" />
                             <Text style={styles.emptyStateText}>
@@ -22582,8 +22827,7 @@ const FrontScreen = ({
                             </Text>
                           </View>
                         ) : (
-                          myChannels
-                            .filter(c => getRemainingTime(c.post_created_at) !== 'Tiempo agotado')
+                          sortedVisibleJoinedChannels
                             .map((channel, index) => {
                               const joinedChannelPostId = String(channel.post_id ?? channel.postId ?? channel.id ?? '').trim();
                               const channelKey = String(
@@ -22592,7 +22836,8 @@ const FrontScreen = ({
                                 channel.id ??
                                 `${channel.publisher_email ?? 'unknown'}-${channel.post_created_at ?? index}`
                               );
-                              const unreadRepliesCount = Number(joinedChannelUnreadReplyCounts[joinedChannelPostId] ?? 0) || 0;
+                              const unreadCounts = joinedChannelUnreadCountsByPostId[joinedChannelPostId] ?? EMPTY_JOINED_CHANNEL_UNREAD_COUNTS;
+                              const unreadTotalCount = getJoinedChannelUnreadCountsTotal(unreadCounts);
 
                               const socials = Array.isArray(channel.social_networks) ? channel.social_networks : [];
                               const visibleSocials = socials
@@ -22614,31 +22859,78 @@ const FrontScreen = ({
 
                               const CHAT_ICON_SIZE = 18;
                               const CHAT_HALO_SIZE = 30;
+                              const JOINED_CHANNEL_CARD_BORDER_RADIUS = 10;
+                              const JOINED_CHANNEL_CARD_BORDER_WIDTH = 1.4;
+                              const JOINED_CHANNEL_CARD_INNER_RADIUS = Math.max(0, JOINED_CHANNEL_CARD_BORDER_RADIUS - JOINED_CHANNEL_CARD_BORDER_WIDTH);
                               // SVG gradient ids must be stable and avoid special chars (e.g. '@', ':', spaces).
                               const safeChatGradientSuffix = hashString(`joined-chat-icon:${channelKey}`);
+                              const JOINED_CHANNEL_CARD_GRADIENT_ID = `joined_channel_card_grad_${safeChatGradientSuffix}`;
                               const CHAT_GRADIENT_ID = `joined_chat_icon_grad_${safeChatGradientSuffix}`;
-                              const CHAT_RING_GRADIENT_ID = `joined_chat_icon_ring_grad_${safeChatGradientSuffix}`;
                               const UNREAD_BADGE_GRADIENT_ID = `joined_chat_unread_badge_grad_${safeChatGradientSuffix}`;
-                              const unreadBadgeDiameter = unreadRepliesCount > 99 ? 30 : 26;
+                              const UNREAD_PANEL_GRADIENT_ID = `joined_chat_unread_panel_grad_${safeChatGradientSuffix}`;
+                              const unreadBadgeDiameter = unreadTotalCount > 99 ? 30 : 26;
                               const unreadBadgeRadius = unreadBadgeDiameter / 2;
+                              const unreadPanelRows = [
+                                {
+                                  key: 'replies' as const,
+                                  label: localize({ es: 'Respuestas', en: 'Replies', fr: 'Reponses', pt: 'Respostas', de: 'Antworten', it: 'Risposte' }),
+                                  iconLibrary: 'material' as const,
+                                  iconName: 'reply',
+                                  count: unreadCounts.replies,
+                                },
+                                {
+                                  key: 'images' as const,
+                                  label: localize({ es: 'Imagenes', en: 'Images', fr: 'Images', pt: 'Imagens', de: 'Bilder', it: 'Immagini' }),
+                                  iconLibrary: 'material' as const,
+                                  iconName: 'image',
+                                  count: unreadCounts.images,
+                                },
+                                {
+                                  key: 'events' as const,
+                                  label: localize({ es: 'Eventos', en: 'Events', fr: 'Evenements', pt: 'Eventos', de: 'Events', it: 'Eventi' }),
+                                  iconLibrary: 'material' as const,
+                                  iconName: 'event',
+                                  count: unreadCounts.events,
+                                },
+                                {
+                                  key: 'readings' as const,
+                                  label: localize({ es: 'Lecturas', en: 'Readings', fr: 'Lectures', pt: 'Leituras', de: 'Lesungen', it: 'Letture' }),
+                                  iconLibrary: 'material' as const,
+                                  iconName: 'menu-book',
+                                  count: unreadCounts.readings,
+                                },
+                                {
+                                  key: 'recommendations' as const,
+                                  label: localize({ es: 'Recomendaciones', en: 'Recommendations', fr: 'Recommandations', pt: 'Recomendacoes', de: 'Empfehlungen', it: 'Raccomandazioni' }),
+                                  iconLibrary: 'community' as const,
+                                  iconName: 'lightbulb-outline',
+                                  count: unreadCounts.recommendations,
+                                },
+                              ];
 
                               return (
                                 <View
                                   key={channelKey}
                                   style={{
-                                    backgroundColor: '#1E1E1E',
-                                    borderRadius: 10,
-                                    paddingHorizontal: 15,
-                                    paddingTop: 15,
-                                    paddingBottom: 10,
+                                    borderRadius: JOINED_CHANNEL_CARD_BORDER_RADIUS,
                                     marginBottom: 15,
-                                    borderWidth: 1,
-                                    borderColor: '#ffbe73ff',
+                                    position: 'relative',
+                                    padding: JOINED_CHANNEL_CARD_BORDER_WIDTH,
                                   }}
                                 >
-                                  {unreadRepliesCount > 0 && (
-                                    <View
-                                      pointerEvents="none"
+                                  <MeasuredSvgGradientBorder
+                                    gradientId={JOINED_CHANNEL_CARD_GRADIENT_ID}
+                                    colors={['#FFB74D', '#ffe45c']}
+                                    borderRadius={JOINED_CHANNEL_CARD_BORDER_RADIUS}
+                                    strokeWidth={JOINED_CHANNEL_CARD_BORDER_WIDTH}
+                                  />
+                                  {unreadTotalCount > 0 && (
+                                    <TouchableOpacity
+                                      activeOpacity={0.85}
+                                      onPress={() => {
+                                        setActiveJoinedChannelOptionsKey(null);
+                                        setActiveJoinedChannelUnreadPanelKey(prev => (prev === channelKey ? null : channelKey));
+                                      }}
                                       style={{
                                         position: 'absolute',
                                         top: -10,
@@ -22651,6 +22943,15 @@ const FrontScreen = ({
                                         zIndex: 250,
                                         elevation: 18,
                                       }}
+                                      accessibilityRole="button"
+                                      accessibilityLabel={localize({
+                                        es: 'Mostrar resumen de contenido no leido',
+                                        en: 'Show unread content summary',
+                                        fr: 'Afficher le resume du contenu non lu',
+                                        pt: 'Mostrar resumo do conteudo nao lido',
+                                        de: 'Zusammenfassung ungelesener Inhalte anzeigen',
+                                        it: 'Mostra il riepilogo dei contenuti non letti',
+                                      })}
                                     >
                                       <Svg
                                         pointerEvents="none"
@@ -22680,12 +22981,83 @@ const FrontScreen = ({
                                           fill="rgba(0, 0, 0, 0.6)"
                                         />
                                       </Svg>
-                                      <Text style={{ color: '#FFFFFF', fontSize: unreadRepliesCount > 99 ? 9 : 12, fontWeight: '900' }}>
-                                        {unreadRepliesCount > 99 ? '99+' : unreadRepliesCount}
+                                      <Text style={{ color: '#FFFFFF', fontSize: unreadTotalCount > 99 ? 9 : 12, fontWeight: '900' }}>
+                                        {unreadTotalCount > 99 ? '99+' : unreadTotalCount}
                                       </Text>
-                                    </View>
+                                    </TouchableOpacity>
                                   )}
 
+                                  {unreadTotalCount > 0 && activeJoinedChannelUnreadPanelKey === channelKey ? (
+                                    <View
+                                      style={{
+                                        position: 'absolute',
+                                        top: 18,
+                                        right: 10,
+                                        width: 190,
+                                        zIndex: 245,
+                                        elevation: 19,
+                                      }}
+                                    >
+                                      <View style={{ position: 'relative', borderRadius: 14, padding: 1.2 }}>
+                                        <MeasuredSvgGradientBorder
+                                          gradientId={UNREAD_PANEL_GRADIENT_ID}
+                                          colors={['#FFB74D', '#ffe45c']}
+                                          borderRadius={14}
+                                          strokeWidth={1.2}
+                                        />
+                                        <View
+                                          style={{
+                                            borderRadius: 13,
+                                            backgroundColor: 'rgba(0,0,0,0.98)',
+                                            paddingHorizontal: 12,
+                                            paddingVertical: 10,
+                                          }}
+                                        >
+                                          {unreadPanelRows.map((row, rowIndex) => {
+                                            const iconColor = row.count > 0 ? '#FFB74D' : 'rgba(255,255,255,0.45)';
+                                            const textColor = row.count > 0 ? '#FFFFFF' : 'rgba(255,255,255,0.62)';
+                                            const isLastRow = rowIndex === unreadPanelRows.length - 1;
+
+                                            return (
+                                              <View
+                                                key={row.key}
+                                                style={{
+                                                  flexDirection: 'row',
+                                                  alignItems: 'center',
+                                                  justifyContent: 'space-between',
+                                                  marginBottom: isLastRow ? 0 : 8,
+                                                }}
+                                              >
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 10 }}>
+                                                  {row.iconLibrary === 'community' ? (
+                                                    <MaterialCommunityIcons name={row.iconName} size={17} color={iconColor} />
+                                                  ) : (
+                                                    <MaterialIcons name={row.iconName} size={17} color={iconColor} />
+                                                  )}
+                                                  <Text numberOfLines={1} style={{ color: textColor, fontSize: 12, marginLeft: 8, flexShrink: 1 }}>
+                                                    {row.label}
+                                                  </Text>
+                                                </View>
+                                                <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '800' }}>
+                                                  {row.count}
+                                                </Text>
+                                              </View>
+                                            );
+                                          })}
+                                        </View>
+                                      </View>
+                                    </View>
+                                  ) : null}
+
+                                  <View
+                                    style={{
+                                      backgroundColor: '#000000',
+                                      borderRadius: JOINED_CHANNEL_CARD_INNER_RADIUS,
+                                      paddingHorizontal: 15,
+                                      paddingTop: 15,
+                                      paddingBottom: 10,
+                                    }}
+                                  >
                                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                                     <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 1 }}>
                                       <Pressable
@@ -22700,46 +23072,15 @@ const FrontScreen = ({
                                             style={{
                                               width: CHAT_HALO_SIZE,
                                               height: CHAT_HALO_SIZE,
+                                              borderRadius: CHAT_HALO_SIZE / 2,
+                                              borderWidth: 1,
+                                              borderColor: '#171717',
+                                              backgroundColor: '#000000',
                                               alignItems: 'center',
                                               justifyContent: 'center',
+                                              opacity: pressed ? 0.86 : 1,
                                             }}
                                           >
-                                            <View
-                                              pointerEvents="none"
-                                              style={{
-                                                position: 'absolute',
-                                                width: CHAT_HALO_SIZE,
-                                                height: CHAT_HALO_SIZE,
-                                                borderRadius: CHAT_HALO_SIZE / 2,
-                                                backgroundColor: pressed ? 'rgba(255, 183, 77, 0.18)' : 'transparent',
-                                              }}
-                                            />
-
-                                            {pressed ? (
-                                              <Svg
-                                                pointerEvents="none"
-                                                width={CHAT_HALO_SIZE}
-                                                height={CHAT_HALO_SIZE}
-                                                style={{ position: 'absolute' }}
-                                              >
-                                                <Defs>
-                                                  <LinearGradient id={CHAT_RING_GRADIENT_ID} x1="0" y1="0" x2="1" y2="1">
-                                                    <Stop offset="0" stopColor="#FFB74D" stopOpacity="0.9" />
-                                                    <Stop offset="1" stopColor="#FFF176" stopOpacity="0.9" />
-                                                  </LinearGradient>
-                                                </Defs>
-                                                <Circle
-                                                  cx={CHAT_HALO_SIZE / 2}
-                                                  cy={CHAT_HALO_SIZE / 2}
-                                                  r={(CHAT_HALO_SIZE / 2) - 1}
-                                                  fill="none"
-                                                  stroke={`url(#${CHAT_RING_GRADIENT_ID})`}
-                                                  strokeWidth={1.5}
-                                                  opacity={0.75}
-                                                />
-                                              </Svg>
-                                            ) : null}
-
                                             <Svg width={CHAT_ICON_SIZE} height={CHAT_ICON_SIZE} viewBox="0 0 24 24" pointerEvents="none">
                                               <Defs>
                                                 <LinearGradient id={CHAT_GRADIENT_ID} x1="0" y1="0" x2="1" y2="0">
@@ -22747,10 +23088,13 @@ const FrontScreen = ({
                                                   <Stop offset="1" stopColor="#FFF176" stopOpacity="1" />
                                                 </LinearGradient>
                                               </Defs>
-                                              {/* Simple chat bubble icon (SVG) filled with the Keinti gradient */}
                                               <Path
                                                 d="M6 5h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H10l-4 4v-4H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"
-                                                fill={`url(#${CHAT_GRADIENT_ID})`}
+                                                fill="#000000"
+                                                stroke={`url(#${CHAT_GRADIENT_ID})`}
+                                                strokeWidth={1.8}
+                                                strokeLinejoin="round"
+                                                strokeLinecap="round"
                                               />
                                             </Svg>
                                           </View>
@@ -22784,6 +23128,7 @@ const FrontScreen = ({
                                             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                                             activeOpacity={0.8}
                                             onPress={() => {
+                                              setActiveJoinedChannelUnreadPanelKey(null);
                                               setActiveJoinedChannelOptionsKey(prev => prev === channelKey ? null : channelKey);
                                             }}
                                             style={{ paddingVertical: 2, paddingHorizontal: 2 }}
@@ -22907,6 +23252,7 @@ const FrontScreen = ({
                                         </Text>
                                       </View>
                                     </View>
+                                  </View>
                                   </View>
                                 </View>
                               );
@@ -23099,25 +23445,47 @@ const FrontScreen = ({
                                       alignItems: 'center',
                                     }}
                                   >
-                                    <TouchableOpacity activeOpacity={0.8} onPress={handlePickChannelImage}>
-                                      <MaterialIcons name="image" size={22} color="#FFB74D" />
+                                    <TouchableOpacity
+                                      activeOpacity={0.8}
+                                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                                      onPress={handlePickChannelImage}
+                                    >
+                                      <GradientAttachmentActionIcon
+                                        name="image"
+                                        size={32}
+                                        gradientId="channel_attachment_image_icon_gradient"
+                                        iconSize={19}
+                                      />
                                     </TouchableOpacity>
                                     <View style={{ width: 14 }} />
                                     <TouchableOpacity
                                       activeOpacity={0.8}
+                                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                                       onPress={() => {
                                         setShowChannelAttachmentPanel(false);
                                         setShowChannelEventPanel(true);
                                       }}
                                     >
-                                      <MaterialIcons name="event" size={22} color="#FFB74D" />
+                                      <GradientAttachmentActionIcon
+                                        name="event"
+                                        size={32}
+                                        gradientId="channel_attachment_event_icon_gradient"
+                                        iconSize={19}
+                                      />
                                     </TouchableOpacity>
                                     <View style={{ width: 14 }} />
                                     <TouchableOpacity
                                       activeOpacity={0.8}
+                                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                                       onPress={handleOpenChannelReading}
                                     >
-                                      <MaterialCommunityIcons name="book-open-page-variant" size={22} color="#FFB74D" />
+                                      <GradientAttachmentActionIcon
+                                        name="book-open-page-variant"
+                                        size={32}
+                                        gradientId="channel_attachment_reading_icon_gradient"
+                                        library="community"
+                                        iconSize={18}
+                                      />
                                     </TouchableOpacity>
                                   </View>
                                 )}
@@ -23154,7 +23522,12 @@ const FrontScreen = ({
                                       alignItems: 'center',
                                     }}
                                   >
-                                    <MaterialIcons name="attach-file" size={22} color="#FFB74D" />
+                                    <BottomNavGradientIcon
+                                      name="attach-file"
+                                      size={22}
+                                      library="material"
+                                      gradientId="channel_attachment_toggle_gradient"
+                                    />
                                   </TouchableOpacity>
                                 )}
 
@@ -23943,7 +24316,7 @@ const FrontScreen = ({
                 style={{ opacity: isViewingHomeProfileRingRecommendationDisabled ? 0.3 : 1 }}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <MaterialIcons name="recommend" size={22} color="#FFFFFF" />
+                  <MaterialCommunityIcons name="lightbulb-outline" size={22} color="#FFFFFF" />
                   <Text style={{ marginLeft: 6, color: '#FFFFFF', fontSize: 14, fontWeight: '800' }}>
                     {viewingHomeProfileRingRecommendationCount}
                   </Text>
@@ -31775,6 +32148,43 @@ const styles = StyleSheet.create({
   channelEventMessageVoiceNoteSection: {
     marginBottom: 12,
   },
+  channelEventMessageVoiceNoteCard: {
+    position: 'relative',
+  },
+  channelEventMessageVoiceNoteDisabled: {
+    opacity: 0.42,
+  },
+  channelEventMessageVoiceNoteLockOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelEventMessageVoiceNoteLockPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  channelEventMessageLockIconBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.68)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  channelEventMessageVoiceNoteLockText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+    marginLeft: 6,
+  },
   channelEventMessageName: {
     color: '#FFFFFF',
     fontSize: 17,
@@ -31803,10 +32213,48 @@ const styles = StyleSheet.create({
   channelEventMessageSocialSection: {
     marginTop: 12,
   },
+  channelEventMessageAttachmentSummary: {
+    marginBottom: 8,
+  },
+  channelEventMessageAttachmentSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  channelEventMessageAttachmentSummaryLabel: {
+    color: 'rgba(255,255,255,0.64)',
+    fontSize: 12,
+    fontWeight: '600',
+    marginRight: 6,
+  },
+  channelEventMessageAttachmentSummaryMetric: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  channelEventMessageAttachmentSummaryNoteIcon: {
+    marginRight: 6,
+  },
+  channelEventMessageAttachmentSummaryNoteLabel: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  channelEventMessageAttachmentSummaryValue: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  channelEventMessageSocialCard: {
+    position: 'relative',
+    alignSelf: 'flex-start',
+  },
   channelEventMessageSocialRow: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
+  },
+  channelEventMessageSocialDisabled: {
+    opacity: 0.42,
   },
   channelEventMessageSocialButton: {
     marginRight: 10,
