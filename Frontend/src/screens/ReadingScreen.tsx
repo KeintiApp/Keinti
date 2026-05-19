@@ -15,6 +15,15 @@ import audioRecorderPlayer, {
 import ImageCropPicker from 'react-native-image-crop-picker';
 import VoiceNotePlayer, { stopSharedVoiceNotePlayback } from '../components/VoiceNotePlayer';
 import { API_URL, getServerResourceUrl } from '../config/api';
+import {
+  CHANNEL_EVENT_SOCIAL_OPTIONS,
+  normalizeExternalUrl,
+  normalizeSocialNetworkKey,
+  SOCIAL_ICONS,
+  SOCIAL_PLATFORM_NAMES,
+  type ChannelEventSocialOption,
+  validateSocialLink,
+} from '../constants/socialLinks';
 import { searchUsersByUsername, type UsernameSuggestion, uploadImage } from '../services/userService';
 import { useI18n } from '../i18n/I18nProvider';
 import type { TranslationKey } from '../i18n/translations';
@@ -63,6 +72,11 @@ type ReadingInsertion =
       durationSeconds: number;
       mimeType?: string | null;
       noteText?: string | null;
+    }
+  | {
+      type: 'social-link';
+      network: string;
+      link: string;
     };
 
 type ReadingVoiceNote = {
@@ -90,6 +104,11 @@ type ChannelReadingMessageInsertion =
       durationSeconds: number;
       mimeType?: string | null;
       noteText?: string | null;
+    }
+  | {
+      type: 'social-link';
+      network: string;
+      link: string;
     };
 
 type ChannelReadingMessageVoiceNote = {
@@ -179,21 +198,6 @@ const READING_CATEGORY_OPTIONS = [
 type ReadingCategoryOption = typeof READING_CATEGORY_OPTIONS[number];
 
 const APPLY_BUTTON_GRADIENT_COLORS = ['#FFB74D', '#ffe45c'];
-const SOCIAL_ICONS = {
-  facebook: require('../../assets/images/facebook.png'),
-  instagram: require('../../assets/images/instagram.png'),
-  onlyfans: require('../../assets/images/onlyfans.png'),
-  pinterest: require('../../assets/images/pinterest.png'),
-  telegram: require('../../assets/images/telegram.png'),
-  tiktok: require('../../assets/images/tiktok.png'),
-  twitter: require('../../assets/images/x_twitter.png'),
-  youtube: require('../../assets/images/youtube.png'),
-  discord: require('../../assets/images/discord.png'),
-  threads: require('../../assets/images/threads.png'),
-  linkedin: require('../../assets/images/linkedin.png'),
-  kick: require('../../assets/images/kick.png'),
-  twitch: require('../../assets/images/twitch.png'),
-};
 const CITATION_USER_SOCIAL_ICON_SIZE = 18;
 const CITATION_USER_SOCIAL_ICON_GAP = 10;
 const CITATION_USER_SOCIAL_VIEWPORT_COUNT = 3;
@@ -273,6 +277,15 @@ const encodeChannelReadingMessage = (payload: ChannelReadingMessagePayload) => {
               noteText: normalizeVoiceNoteText(insertion?.noteText),
             });
           }
+          return accumulator;
+        }
+
+        if (insertion?.type === 'social-link') {
+          const network = normalizeSocialNetworkKey(insertion?.network);
+          const link = String(insertion?.link || '').trim();
+          if (network && link && validateSocialLink(network, link)) {
+            accumulator.push({ type: 'social-link', network, link });
+          }
         }
 
         return accumulator;
@@ -327,35 +340,31 @@ const encodeChannelReadingMessage = (payload: ChannelReadingMessagePayload) => {
   return `${CHANNEL_READING_MESSAGE_PREFIX}${JSON.stringify(safe)}`;
 };
 
-const normalizeCitationSocialIconKey = (raw: unknown) => {
-  const key = String(raw ?? '').trim().toLowerCase();
-  if (!key) {
-    return '';
-  }
-  if (key === 'x' || key === 'x_twitter' || key === 'xtwitter') {
-    return 'twitter';
-  }
-  if (key === 'only_fans') {
-    return 'onlyfans';
-  }
-  return key;
-};
+const normalizeCitationSocialIconKey = (raw: unknown) => normalizeSocialNetworkKey(raw);
 
-const normalizeExternalUrl = (rawUrl: string): string | null => {
-  const trimmed = String(rawUrl ?? '').trim();
-  if (!trimmed) {
+const getRenderableReadingSocialLink = (rawNetwork: unknown, rawLink: unknown) => {
+  const key = normalizeCitationSocialIconKey(rawNetwork);
+  const displayLink = String(rawLink ?? '').trim();
+  if (!key || !displayLink) {
     return null;
   }
 
-  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
-    return trimmed;
+  const normalizedLink = normalizeExternalUrl(displayLink);
+  if (!normalizedLink) {
+    return null;
   }
 
-  if (trimmed.startsWith('//')) {
-    return `https:${trimmed}`;
+  const iconSource = SOCIAL_ICONS[key as keyof typeof SOCIAL_ICONS];
+  if (!iconSource) {
+    return null;
   }
 
-  return `https://${trimmed}`;
+  return {
+    key,
+    iconSource,
+    link: normalizedLink,
+    displayLink,
+  };
 };
 
 const getRenderableCitationUserSocials = (socialNetworks?: Array<{ network: string; link?: string | null }>) => {
@@ -365,23 +374,17 @@ const getRenderableCitationUserSocials = (socialNetworks?: Array<{ network: stri
 
   const seen = new Set<string>();
   return socialNetworks.reduce<Array<{ key: string; iconSource: any; link: string }>>((accumulator, social) => {
-    const key = normalizeCitationSocialIconKey(social?.network);
-    if (!key || seen.has(key)) {
+    const renderableSocialLink = getRenderableReadingSocialLink(social?.network, social?.link);
+    if (!renderableSocialLink || seen.has(renderableSocialLink.key)) {
       return accumulator;
     }
 
-    const normalizedLink = normalizeExternalUrl(String(social?.link || ''));
-    if (!normalizedLink) {
-      return accumulator;
-    }
-
-    const iconSource = SOCIAL_ICONS[key as keyof typeof SOCIAL_ICONS];
-    if (!iconSource) {
-      return accumulator;
-    }
-
-    seen.add(key);
-    accumulator.push({ key, iconSource, link: normalizedLink });
+    seen.add(renderableSocialLink.key);
+    accumulator.push({
+      key: renderableSocialLink.key,
+      iconSource: renderableSocialLink.iconSource,
+      link: renderableSocialLink.link,
+    });
     return accumulator;
   }, []);
 };
@@ -625,6 +628,11 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
   const [programmaticSelectionSectionIndex, setProgrammaticSelectionSectionIndex] = useState<number | null>(null);
   const [readingCitations, setReadingCitations] = useState<ReadingCitation[]>([]);
   const [expandedCitation, setExpandedCitation] = useState<ReadingCitation | null>(null);
+  const [showReadingSocialLinkComposer, setShowReadingSocialLinkComposer] = useState(false);
+  const [showReadingSocialNetworkOptions, setShowReadingSocialNetworkOptions] = useState(false);
+  const [selectedReadingSocialNetwork, setSelectedReadingSocialNetwork] = useState<ChannelEventSocialOption | null>(null);
+  const [readingSocialLinkInput, setReadingSocialLinkInput] = useState('');
+  const [readingSocialLinkError, setReadingSocialLinkError] = useState('');
   const [isCreatingReading, setIsCreatingReading] = useState(false);
   const [recordingVoiceNoteTarget, setRecordingVoiceNoteTarget] = useState<VoiceNotePlacement | null>(null);
   const [isRecordingVoiceNote, setIsRecordingVoiceNote] = useState(false);
@@ -643,6 +651,9 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
   const isCreateEnabled = [title, subtitle, lead].every((value) => String(value).trim().length > 0)
     && totalBodyLength >= BODY_MIN_LENGTH;
   const isCreateActionEnabled = isCreateEnabled && !isRecordingVoiceNote && !isVoiceNoteOperationPending;
+  const readingSocialLinkCanApply = !!selectedReadingSocialNetwork
+    && !!readingSocialLinkInput.trim()
+    && !readingSocialLinkError;
   const filteredReadingCategoryOptions = useMemo(() => {
     const query = readingCategorySearchQuery.trim().toLowerCase();
     if (!query) {
@@ -795,11 +806,34 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
     setSelectedCitedUsers([]);
   };
 
+  const resetReadingSocialLinkDraft = () => {
+    setShowReadingSocialNetworkOptions(false);
+    setSelectedReadingSocialNetwork(null);
+    setReadingSocialLinkInput('');
+    setReadingSocialLinkError('');
+  };
+
+  const closeReadingSocialLinkComposer = () => {
+    setShowReadingSocialLinkComposer(false);
+    resetReadingSocialLinkDraft();
+  };
+
   const clearExpandedCitation = () => {
     setExpandedCitation(null);
   };
 
+  const handleRemoveExpandedCitation = () => {
+    const citationId = String(expandedCitation?.id || '').trim();
+    if (!citationId) {
+      return;
+    }
+
+    setReadingCitations((previous) => previous.filter((citation) => citation.id !== citationId));
+    setExpandedCitation(null);
+  };
+
   const handleToggleCiteSelectionMode = () => {
+    closeReadingSocialLinkComposer();
     setIsCiteSelectionMode(previous => {
       const nextValue = !previous;
 
@@ -1212,6 +1246,59 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
     insertReadingInsertion({ type: 'intertitle', text: '' });
   };
 
+  const handleToggleReadingSocialLinkComposer = () => {
+    Keyboard.dismiss();
+
+    if (showReadingSocialLinkComposer) {
+      closeReadingSocialLinkComposer();
+      return;
+    }
+
+    if (isCiteSelectionMode) {
+      setIsCiteSelectionMode(false);
+      clearCiteSelection();
+    }
+
+    setShowReadingSocialLinkComposer(true);
+    resetReadingSocialLinkDraft();
+  };
+
+  const handleSelectReadingSocialNetwork = (network: ChannelEventSocialOption) => {
+    setSelectedReadingSocialNetwork(prev => (prev === network ? null : network));
+    setReadingSocialLinkInput('');
+    setReadingSocialLinkError('');
+  };
+
+  const handleReadingSocialLinkChange = (text: string) => {
+    setReadingSocialLinkInput(text);
+
+    if (selectedReadingSocialNetwork && text.trim()) {
+      const isValid = validateSocialLink(selectedReadingSocialNetwork, text);
+      if (!isValid) {
+        setReadingSocialLinkError(
+          `${t('front.linkMustBeFrom' as TranslationKey)} ${SOCIAL_PLATFORM_NAMES[selectedReadingSocialNetwork] ?? selectedReadingSocialNetwork}`,
+        );
+      } else {
+        setReadingSocialLinkError('');
+      }
+    } else {
+      setReadingSocialLinkError('');
+    }
+  };
+
+  const handleApplyReadingSocialLink = () => {
+    if (!selectedReadingSocialNetwork || !readingSocialLinkInput.trim() || readingSocialLinkError) {
+      return;
+    }
+
+    insertReadingInsertion({
+      type: 'social-link',
+      network: selectedReadingSocialNetwork,
+      link: readingSocialLinkInput.trim(),
+    });
+    closeReadingSocialLinkComposer();
+  };
+
   const handleRemoveReadingInsertion = (indexToRemove: number) => {
     setReadingInsertions(previous => previous.filter((_, index) => index !== indexToRemove));
     setBodySections(previous => {
@@ -1503,6 +1590,14 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
             };
           }
 
+          if (insertion.type === 'social-link') {
+            return {
+              type: 'social-link' as const,
+              network: normalizeSocialNetworkKey(insertion.network),
+              link: String(insertion.link || '').trim(),
+            };
+          }
+
           let uploadedUrl = String(insertion.uri || '').trim();
           if (uploadedUrl && !uploadedUrl.startsWith('http')) {
             uploadedUrl = await uploadImage(uploadedUrl, normalizedToken, {
@@ -1735,7 +1830,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
       <View style={styles.voiceNoteSlotSection}>
         {isRecording ? renderVoiceNoteRecordingCard(
           titleText,
-          `Grabando ${recordingSeconds}/${READING_MAX_VOICE_NOTE_DURATION_SECONDS} s`,
+          `${t('reading.voiceNoteRecordingStatus' as TranslationKey)} ${recordingSeconds}/${READING_MAX_VOICE_NOTE_DURATION_SECONDS} s`,
           noteText,
           onChangeNoteText,
           notePlaceholderText,
@@ -1760,7 +1855,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
               style={styles.voiceNoteSecondaryButton}
             >
               <MaterialIcons name="keyboard-voice" size={16} color="#FFFFFF" />
-              <Text style={styles.voiceNoteSecondaryButtonText}>Regrabar</Text>
+              <Text style={styles.voiceNoteSecondaryButtonText}>{t('reading.voiceNoteRerecordAction' as TranslationKey)}</Text>
             </TouchableOpacity>
           </>
         ) : (
@@ -1780,7 +1875,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
               style={styles.voiceNotePrimaryButtonAction}
             >
               <MaterialIcons name="keyboard-voice" size={16} color="#FFFFFF" />
-              <Text style={styles.voiceNotePrimaryButtonActionText}>Grabar</Text>
+              <Text style={styles.voiceNotePrimaryButtonActionText}>{t('reading.voiceNoteRecordAction' as TranslationKey)}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -1835,9 +1930,9 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
 
             <View style={styles.textBlock}>
               {renderVoiceNoteSlot({
-                titleText: 'Nota inicial',
+                titleText: t('reading.voiceNoteIntroTitle' as TranslationKey),
                 noteText: voiceNoteDraftTexts.intro,
-                notePlaceholderText: 'Se reproducira antes del titulo.',
+                notePlaceholderText: t('reading.voiceNoteIntroDescription' as TranslationKey),
                 voiceNote: introVoiceNote,
                 onRemove: () => setIntroVoiceNote(null),
                 onRecord: () => { void handleStartVoiceNoteRecording('intro'); },
@@ -1878,7 +1973,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
                   value={lead}
                   onChangeText={setLead}
                   placeholder={t('reading.leadPlaceholder' as TranslationKey)}
-                  placeholderTextColor="#FFFFFF"
+                  placeholderTextColor="rgba(255,255,255,0.52)"
                   style={styles.leadInput}
                   maxLength={LEAD_MAX_LENGTH}
                   autoCapitalize="sentences"
@@ -1892,6 +1987,9 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
 
               {bodySections.map((bodySection, index) => {
                 const trailingInsertion = readingInsertions[index] ?? null;
+                const renderableSocialLink = trailingInsertion?.type === 'social-link'
+                  ? getRenderableReadingSocialLink(trailingInsertion.network, trailingInsertion.link)
+                  : null;
                 const shouldRenderSection = bodySection.length > 0 || index === bodySections.length - 1;
                 const sectionCitations = citationsBySection[index] || [];
                 const isEditingBodySection = sectionCitations.length === 0 || editingBodySectionIndex === index;
@@ -2009,14 +2107,50 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
                         <VoiceNotePlayer
                           uri={trailingInsertion.uri}
                           durationSeconds={trailingInsertion.durationSeconds}
-                          title="Nota de voz en el cuerpo"
+                          title={t('reading.voiceNoteInlineTitle' as TranslationKey)}
                           subtitleInputValue={voiceNoteDraftTexts.inline}
                           onChangeSubtitleInput={(nextValue) => handleChangeVoiceNoteDraftText('inline', nextValue)}
-                          subtitleInputPlaceholder="Se reproducira entre bloques del cuerpo."
+                          subtitleInputPlaceholder={t('reading.voiceNoteInlineDescription' as TranslationKey)}
                           subtitleInputMaxLength={READING_VOICE_NOTE_TEXT_MAX_LENGTH}
                           onRemove={() => handleRemoveReadingInsertion(index)}
                           variant="composer"
                         />
+                      </View>
+                    ) : null}
+
+                    {trailingInsertion?.type === 'social-link' && renderableSocialLink ? (
+                      <View style={styles.readingSocialLinkSection}>
+                        <View style={styles.readingSocialLinkCard}>
+                          <TouchableOpacity
+                            accessibilityRole="button"
+                            activeOpacity={0.85}
+                            onPress={() => handleRemoveReadingInsertion(index)}
+                            style={styles.readingSocialLinkRemoveButton}
+                          >
+                            <MaterialIcons name="close" size={15} color="#FFFFFF" />
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            accessibilityRole="button"
+                            activeOpacity={0.82}
+                            onPress={() => { void handleOpenCitationSocialLink(renderableSocialLink.displayLink); }}
+                            style={styles.readingSocialLinkPressable}
+                          >
+                            <View style={styles.readingSocialLinkIconShell}>
+                              <Image
+                                source={renderableSocialLink.iconSource}
+                                style={styles.readingSocialLinkIcon}
+                                resizeMode="contain"
+                              />
+                            </View>
+
+                            <View style={styles.readingSocialLinkValueBox}>
+                              <Text style={styles.readingSocialLinkValueText} numberOfLines={1}>
+                                {renderableSocialLink.displayLink}
+                              </Text>
+                            </View>
+                          </TouchableOpacity>
+                        </View>
                       </View>
                     ) : null}
                   </React.Fragment>
@@ -2050,6 +2184,18 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
 
                 <TouchableOpacity
                   accessibilityRole="button"
+                  activeOpacity={0.85}
+                  onPress={handleToggleReadingSocialLinkComposer}
+                  style={[
+                    styles.voiceNoteActionButton,
+                    showReadingSocialLinkComposer ? styles.citeActionButtonActive : null,
+                  ]}
+                >
+                  <MaterialIcons name="link" size={16} color="#FFFFFF" />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  accessibilityRole="button"
                   activeOpacity={!hasInlineVoiceNote && !isRecordingVoiceNote && !isVoiceNoteOperationPending ? 0.85 : 1}
                   disabled={hasInlineVoiceNote || isRecordingVoiceNote || isVoiceNoteOperationPending}
                   onPress={() => { void handleStartVoiceNoteRecording('inline'); }}
@@ -2066,23 +2212,134 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
               <Text style={styles.bodyActionsCounter}>{`${totalBodyLength}/${BODY_MIN_LENGTH} ${t('reading.bodyMinSuffix' as TranslationKey)}`}</Text>
             </View>
 
+            {showReadingSocialLinkComposer ? (
+              <View style={styles.readingSocialComposerSection}>
+                <View style={styles.readingSocialComposerHeader}>
+                  <Text style={styles.readingSocialComposerLabel}>{t('event.link' as TranslationKey)}</Text>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    activeOpacity={0.8}
+                    onPress={closeReadingSocialLinkComposer}
+                    style={styles.readingSocialComposerCloseButton}
+                  >
+                    <MaterialIcons name="close" size={16} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  activeOpacity={0.85}
+                  onPress={() => setShowReadingSocialNetworkOptions(prev => !prev)}
+                  style={styles.readingSocialTrigger}
+                >
+                  <View style={styles.readingSocialInlineLabelRow}>
+                    <View style={styles.readingSocialTriggerLabelRow}>
+                      {selectedReadingSocialNetwork ? (
+                        <Image
+                          source={SOCIAL_ICONS[selectedReadingSocialNetwork] as any}
+                          style={styles.readingSocialSelectedIcon}
+                        />
+                      ) : null}
+                      <Text style={styles.readingSocialPrimaryText}>{t('event.selectSocialNetwork' as TranslationKey)}</Text>
+                    </View>
+                    <MaterialIcons
+                      name={showReadingSocialNetworkOptions ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                      size={18}
+                      color="#FFFFFF"
+                    />
+                  </View>
+                </TouchableOpacity>
+
+                {showReadingSocialNetworkOptions ? (
+                  <View style={styles.readingSocialOptionsPanel}>
+                    <View style={styles.readingSocialGrid}>
+                      {CHANNEL_EVENT_SOCIAL_OPTIONS.map((key) => (
+                        <TouchableOpacity
+                          key={key}
+                          accessibilityRole="button"
+                          activeOpacity={0.85}
+                          onPress={() => handleSelectReadingSocialNetwork(key)}
+                          style={[
+                            styles.readingSocialOption,
+                            selectedReadingSocialNetwork === key ? styles.readingSocialOptionSelected : null,
+                          ]}
+                        >
+                          <Image source={SOCIAL_ICONS[key] as any} style={styles.readingSocialOptionIcon} />
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+
+                <View
+                  style={[
+                    styles.readingSocialLinkInputShell,
+                    !selectedReadingSocialNetwork ? styles.readingSocialLinkInputShellDisabled : null,
+                    readingSocialLinkError ? styles.readingSocialLinkInputShellError : null,
+                  ]}
+                >
+                  <TextInput
+                    value={readingSocialLinkInput}
+                    onChangeText={handleReadingSocialLinkChange}
+                    placeholder={selectedReadingSocialNetwork ? t('event.addLink' as TranslationKey) : t('event.selectSocialNetwork' as TranslationKey)}
+                    placeholderTextColor="rgba(255,255,255,0.3)"
+                    style={styles.readingSocialLinkInput}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="url"
+                    editable={!!selectedReadingSocialNetwork}
+                    selectTextOnFocus={!!selectedReadingSocialNetwork}
+                  />
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    activeOpacity={readingSocialLinkCanApply ? 0.8 : 1}
+                    disabled={!readingSocialLinkCanApply}
+                    onPress={handleApplyReadingSocialLink}
+                    style={styles.readingSocialLinkApplyAction}
+                  >
+                    <MaterialIcons
+                      name={
+                        !selectedReadingSocialNetwork || !readingSocialLinkInput.trim()
+                          ? 'check-circle-outline'
+                          : readingSocialLinkError
+                            ? 'error-outline'
+                            : 'check-circle'
+                      }
+                      size={21}
+                      color={
+                        !selectedReadingSocialNetwork || !readingSocialLinkInput.trim()
+                          ? 'rgba(255,255,255,0.26)'
+                          : readingSocialLinkError
+                            ? '#D84315'
+                            : '#FFB74D'
+                      }
+                    />
+                  </TouchableOpacity>
+                </View>
+
+                {selectedReadingSocialNetwork && readingSocialLinkError ? (
+                  <Text style={styles.readingSocialLinkErrorText}>{readingSocialLinkError}</Text>
+                ) : null}
+              </View>
+            ) : null}
+
             {recordingVoiceNoteTarget === 'inline' && isRecordingVoiceNote ? (
               <View style={styles.voiceNoteInlineComposerSection}>
                 {renderVoiceNoteRecordingCard(
-                  'Nota de voz en el cuerpo',
-                  `Grabando ${Math.min(READING_MAX_VOICE_NOTE_DURATION_SECONDS, Math.max(1, Math.ceil(recordingVoiceNoteDurationMs / 1000)))}/${READING_MAX_VOICE_NOTE_DURATION_SECONDS} s`,
+                  t('reading.voiceNoteInlineTitle' as TranslationKey),
+                  `${t('reading.voiceNoteRecordingStatus' as TranslationKey)} ${Math.min(READING_MAX_VOICE_NOTE_DURATION_SECONDS, Math.max(1, Math.ceil(recordingVoiceNoteDurationMs / 1000)))}/${READING_MAX_VOICE_NOTE_DURATION_SECONDS} s`,
                   voiceNoteDraftTexts.inline,
                   (nextValue) => handleChangeVoiceNoteDraftText('inline', nextValue),
-                  'Se reproducira entre bloques del cuerpo.',
+                  t('reading.voiceNoteInlineDescription' as TranslationKey),
                 )}
               </View>
             ) : null}
 
             <View style={styles.outroVoiceNoteSection}>
               {renderVoiceNoteSlot({
-                titleText: 'Nota final',
+                titleText: t('reading.voiceNoteOutroTitle' as TranslationKey),
                 noteText: voiceNoteDraftTexts.outro,
-                notePlaceholderText: 'Se reproducira debajo del cuerpo.',
+                notePlaceholderText: t('reading.voiceNoteOutroDescription' as TranslationKey),
                 voiceNote: outroVoiceNote,
                 onRemove: () => setOutroVoiceNote(null),
                 onRecord: () => { void handleStartVoiceNoteRecording('outro'); },
@@ -2133,6 +2390,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
                 showReadingCategoryOptions ? styles.readingCategorySectionExpanded : null,
               ]}
             >
+              <Text style={styles.readingDateLabel}>{t('reading.chooseCategoryLabel' as TranslationKey)}</Text>
               <TouchableOpacity
                 accessibilityRole="button"
                 activeOpacity={0.85}
@@ -2186,10 +2444,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
             <View style={styles.readingHypeCostSection}>
               <View style={styles.readingHypeCostInfoAnchor}>
                 <View style={styles.readingHypeCostLabelRow}>
-                  <View style={styles.readingHypeCostLabelLeftRow}>
-                    <MaterialIcons name="whatshot" size={18} color="#FFFFFF" />
-                    <Text style={styles.readingHypeCostSectionTitle}>{t('reading.hypeCostLabel' as TranslationKey)}</Text>
-                  </View>
+                  <Text style={styles.readingHypeCostLabel}>{t('reading.hypeCostLabel' as TranslationKey)}</Text>
                   <TouchableOpacity
                     accessibilityRole="button"
                     activeOpacity={0.75}
@@ -2213,7 +2468,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
                   value={readingHypeCostInput}
                   onChangeText={handleReadingHypeCostInputChange}
                   placeholder={t('reading.hypeCostAmountLabel' as TranslationKey)}
-                  placeholderTextColor="rgba(255,255,255,0.38)"
+                  placeholderTextColor="#FFFFFF"
                   style={styles.readingHypeCostFieldInput}
                   keyboardType="numeric"
                   autoCapitalize="none"
@@ -2258,7 +2513,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
           },
         ]}>
           <View style={styles.citePanelHeaderRow}>
-            <Text style={styles.citePanelLabel}>Cita seleccionada</Text>
+            <Text style={styles.citePanelLabel}>{t('reading.selectedCitationLabel' as TranslationKey)}</Text>
 
             <View style={styles.citePanelAppearancePicker}>
               <TouchableOpacity
@@ -2298,14 +2553,14 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
 
           <View style={styles.citePanelInputBlock}>
             <View style={styles.citePanelInputHeaderRow}>
-              <Text style={styles.citePanelInputLabel}>@usuario</Text>
+              <Text style={styles.citePanelInputLabel}>{t('reading.citedUsersInputLabel' as TranslationKey)}</Text>
               <MaterialIcons name="search" size={18} color="rgba(255, 255, 255, 0.56)" />
             </View>
 
             <TextInput
               value={citedUsername}
               onChangeText={handleChangeCitedUsername}
-              placeholder="@usuario"
+              placeholder={t('reading.citedUsersInputLabel' as TranslationKey)}
               placeholderTextColor="rgba(255, 255, 255, 0.42)"
               style={styles.citePanelInput}
               autoCapitalize="none"
@@ -2397,7 +2652,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
             <Text style={[
               styles.citePanelApplyButtonText,
               isApplyEnabled ? styles.citePanelApplyButtonTextEnabled : styles.citePanelApplyButtonTextDisabled,
-            ]}>Aplicar</Text>
+            ]}>{t('common.apply' as TranslationKey)}</Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -2427,7 +2682,16 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
               ]}
             >
               <View style={styles.citationUsersSheetHandle} />
-              <Text style={styles.citationUsersSheetTitle}>Usuarios citados</Text>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel={t('common.delete' as TranslationKey)}
+                activeOpacity={0.85}
+                onPress={handleRemoveExpandedCitation}
+                style={styles.citationUsersSheetRemoveButton}
+              >
+                <MaterialIcons name="close" size={18} color="#FFFFFF" />
+              </TouchableOpacity>
+              <Text style={styles.citationUsersSheetTitle}>{t('reading.citedUsersTitle' as TranslationKey)}</Text>
               <Text style={styles.citationUsersSheetExcerpt}>{expandedCitation?.text || ''}</Text>
 
               <ScrollView
@@ -2609,10 +2873,11 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
   },
   leadInput: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '400',
+    color: 'rgba(255,255,255,0.74)',
+    fontSize: 14,
+    fontWeight: '700',
     fontStyle: 'italic',
+    lineHeight: 20,
     minHeight: 56,
     paddingTop: 0,
     paddingBottom: 0,
@@ -2635,7 +2900,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#000000',
-    borderRadius: 12,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: '#393939',
     paddingRight: 12,
@@ -2651,7 +2916,7 @@ const styles = StyleSheet.create({
     padding: 8,
   },
   readingCategorySection: {
-    marginTop: 2,
+    marginTop: 10,
     marginBottom: 8,
     position: 'relative',
     zIndex: 1,
@@ -2661,13 +2926,19 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   readingCategoryTrigger: {
-    borderRadius: 14,
+    minHeight: 52,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#393939',
+    backgroundColor: '#000000',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    justifyContent: 'center',
   },
   readingCategoryInlineLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
   },
   readingCategoryTriggerText: {
     color: '#FFFFFF',
@@ -2677,7 +2948,7 @@ const styles = StyleSheet.create({
   readingCategoryOptionsPanel: {
     marginTop: 8,
     backgroundColor: '#101010',
-    borderRadius: 16,
+    borderRadius: 20,
     overflow: 'hidden',
     elevation: 8,
   },
@@ -2721,18 +2992,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 4,
+    marginBottom: 8,
     zIndex: 6,
   },
-  readingHypeCostLabelLeftRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  readingHypeCostSectionTitle: {
+  readingHypeCostLabel: {
     color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '800',
+    fontSize: 14,
+    fontWeight: '600',
   },
   readingHypeCostInfoButton: {
     width: 22,
@@ -2764,6 +3030,8 @@ const styles = StyleSheet.create({
   readingHypeCostField: {
     minHeight: 48,
     borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#393939',
     backgroundColor: '#000000',
     paddingHorizontal: 16,
     paddingVertical: 13,
@@ -2978,6 +3246,143 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 183, 77, 0.82)',
     backgroundColor: 'rgba(255, 183, 77, 0.18)',
   },
+  readingSocialComposerSection: {
+    marginTop: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  readingSocialComposerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  readingSocialComposerLabel: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  readingSocialComposerCloseButton: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  readingSocialTrigger: {
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+  },
+  readingSocialInlineLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  readingSocialTriggerLabelRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  readingSocialSelectedIcon: {
+    width: 18,
+    height: 18,
+    resizeMode: 'contain',
+  },
+  readingSocialPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  readingSocialOptionsPanel: {
+    marginTop: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  readingSocialGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  readingSocialOption: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  readingSocialOptionSelected: {
+    borderColor: 'rgba(255,183,77,0.82)',
+    backgroundColor: 'rgba(255,183,77,0.14)',
+  },
+  readingSocialOptionIcon: {
+    width: 20,
+    height: 20,
+    resizeMode: 'contain',
+  },
+  readingSocialLinkInputShell: {
+    marginTop: 10,
+    minHeight: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: 14,
+    paddingRight: 10,
+  },
+  readingSocialLinkInputShellDisabled: {
+    opacity: 0.56,
+  },
+  readingSocialLinkInputShellError: {
+    borderColor: 'rgba(216,67,21,0.75)',
+    backgroundColor: 'rgba(216,67,21,0.08)',
+  },
+  readingSocialLinkInput: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+    paddingHorizontal: 0,
+    paddingVertical: 12,
+  },
+  readingSocialLinkApplyAction: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  readingSocialLinkErrorText: {
+    marginTop: 6,
+    color: '#FFB4A8',
+    fontSize: 11,
+    fontWeight: '600',
+    lineHeight: 15,
+  },
   intertitleActionGlyph: {
     width: 18,
     height: 10,
@@ -3030,6 +3435,67 @@ const styles = StyleSheet.create({
   voiceNoteInlineComposerSection: {
     marginTop: 12,
     marginBottom: 6,
+  },
+  readingSocialLinkSection: {
+    marginTop: 18,
+  },
+  readingSocialLinkCard: {
+    position: 'relative',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  readingSocialLinkRemoveButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.46)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    zIndex: 1,
+  },
+  readingSocialLinkPressable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingRight: 28,
+  },
+  readingSocialLinkIconShell: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  readingSocialLinkIcon: {
+    width: 18,
+    height: 18,
+  },
+  readingSocialLinkValueBox: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(0,0,0,0.28)',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  readingSocialLinkValueText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
   },
   voiceNotePrimaryButton: {
     borderRadius: 18,
@@ -3450,6 +3916,20 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
     maxHeight: '60%',
+  },
+  citationUsersSheetRemoveButton: {
+    position: 'absolute',
+    top: 16,
+    right: 18,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    zIndex: 1,
   },
   citationUsersSheetHandle: {
     alignSelf: 'center',

@@ -16,25 +16,20 @@ Abrir pgAdmin o usar línea de comandos:
 CREATE DATABASE KeintiApp;
 ```
 
-### 3. Configurar IP Local para Android
+### 3. Configurar acceso al backend en Android
 
-#### Encontrar tu IP local:
+En **desarrollo por USB**, el frontend usa `http://127.0.0.1:3000` y depende de `adb reverse`.
+No hace falta cambiar ninguna IP local en la app.
+
+Al arrancar `start-backend.ps1`, el script aplica automáticamente `adb reverse tcp:3000 tcp:3000` a todos los dispositivos Android conectados en estado `device`.
+
+Si conectas un segundo móvil despues de haber arrancado el backend, vuelve a ejecutar:
 ```powershell
-ipconfig
+cd "C:\Users\Antonio David\Documents\KeintiApp"
+.\start-backend.ps1 -SkipServerStart
 ```
-Busca la línea "IPv4 Address" en tu adaptador de red activo (ejemplo: 192.168.1.10)
 
-#### Actualizar configuración del Frontend:
-En **desarrollo** (cuando ejecutas `npx react-native start`), la app intenta detectar automáticamente el host/IP del Metro Bundler y usarlo también para el backend.
-
-Si estás usando un **APK/Release** (sin Metro), entonces sí necesitas fijar la IP del PC en [Frontend/src/config/api.ts](Frontend/src/config/api.ts) cambiando `DEFAULT_API_HOST`:
-```typescript
-const DEFAULT_API_HOST = 'TU_IP_LOCAL';
-```
-Ejemplo:
-```typescript
-const DEFAULT_API_HOST = '192.168.1.10';
-```
+En **builds Release / Google Play**, la app ya no usa `127.0.0.1`: debes configurar un backend público HTTPS en [Frontend/src/config/api.ts](Frontend/src/config/api.ts) cambiando `PROD_API_URL`.
 
 ### 4. Configurar Backend (si es necesario)
 Editar `Backend/.env` y verificar/modificar:
@@ -75,6 +70,8 @@ cd "C:\Users\Antonio David\Documents\KeintiApp"
 .\start-backend.ps1
 ```
 
+Nota: este script deja configurado `adb reverse` para el puerto `3000` en todos los Android conectados por USB.
+
 ### Terminal 2 - Metro Bundler:
 ```powershell
 cd "C:\Users\Antonio David\Documents\KeintiApp\Frontend"
@@ -92,7 +89,7 @@ npx react-native run-android
 1. **Habilitar modo desarrollador** en tu dispositivo Android
 2. **Conectar por USB** y autorizar depuración USB
 3. **Verificar conexión**: `adb devices`
-4. **Asegurar que el dispositivo esté en la misma red WiFi** que tu PC
+4. **Si usas dos o más dispositivos por USB**, recuerda que `adb reverse` debe aplicarse por cada serial. `start-backend.ps1` ya lo hace automáticamente para el puerto `3000`.
 
 ## 🗺️ Google Maps / Places (sin exponer claves)
 
@@ -120,17 +117,20 @@ GOOGLE_PLACES_API_KEY=TU_CLAVE
 - Verificar que el puerto 3000 esté disponible
 
 ### Frontend no conecta con Backend:
-- Verificar que la IP del PC **no haya cambiado** (Windows puede pasar de 192.168.0.97 a 192.168.0.98, etc.)
-- Probar desde el móvil (navegador): `http://IP_DEL_PC:3000/` debe devolver JSON
-- Verificar que el firewall permita conexiones al puerto 3000 (Node.js) en red **Privada**
-- Verificar que el router no tenga “AP/client isolation” activado (bloquea dispositivos entre sí)
+- Verificar que `start-backend.ps1` se haya ejecutado con los móviles ya conectados
+- Si conectaste otro dispositivo despues, ejecutar `.\start-backend.ps1 -SkipServerStart` para reaplicar `adb reverse` sin reiniciar Node
+- Comprobar por serial con `adb -s SERIAL reverse --list` que exista `tcp:3000 tcp:3000`
+- Si quieres verificar desde el dispositivo: `adb -s SERIAL shell "curl -I http://127.0.0.1:3000"`
 
 #### Alternativa (recomendada si el Wi‑Fi bloquea conexiones): ADB reverse
-Si tienes **Depuración USB** activada, puedes hacer que el móvil acceda al backend como si fuera `localhost`:
+Si tienes **Depuración USB** activada, puedes hacer que cada móvil acceda al backend como si fuera `localhost`:
 ```powershell
-adb reverse tcp:3000 tcp:3000
+adb -s SERIAL_1 reverse tcp:3000 tcp:3000
+adb -s SERIAL_2 reverse tcp:3000 tcp:3000
 ```
-En ese caso, el backend queda accesible como `http://127.0.0.1:3000` desde el dispositivo.
+Sin `-s`, cuando hay varios dispositivos conectados, el comando no deja configurado el tunnel en todos.
+
+En ese caso, el backend queda accesible como `http://127.0.0.1:3000` desde cada dispositivo.
 
 ### Clean de Android:
 ```powershell

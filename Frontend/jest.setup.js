@@ -19,6 +19,13 @@ try {
   const RN = require('react-native');
   if (!RN.SafeAreaView) {RN.SafeAreaView = RN.View;}
   if (!RN.KeyboardAvoidingView) {RN.KeyboardAvoidingView = RN.View;}
+  if (!RN.PermissionsAndroid) {
+    RN.PermissionsAndroid = {
+      PERMISSIONS: { POST_NOTIFICATIONS: 'android.permission.POST_NOTIFICATIONS' },
+      RESULTS: { GRANTED: 'granted', DENIED: 'denied' },
+      request: jest.fn(() => Promise.resolve('granted')),
+    };
+  }
 
   // In some Jest environments, the RN preset provides a partial Linking mock
   // without addEventListener/getInitialURL. Patch the instance directly.
@@ -93,6 +100,62 @@ jest.mock('react-native-google-mobile-ads', () => {
     },
     RewardedAd: {
       createForAdRequest: jest.fn(() => makeFakeAd()),
+    },
+  };
+});
+
+jest.mock('@react-native-firebase/messaging', () => {
+  const messagingInstance = {
+    getToken: jest.fn(() => Promise.resolve('test-fcm-token')),
+    onMessage: jest.fn(() => jest.fn()),
+    onNotificationOpenedApp: jest.fn(() => jest.fn()),
+    getInitialNotification: jest.fn(() => Promise.resolve(null)),
+    registerDeviceForRemoteMessages: jest.fn(() => Promise.resolve()),
+    onTokenRefresh: jest.fn(() => jest.fn()),
+  };
+
+  const messaging = () => messagingInstance;
+
+  messaging.AuthorizationStatus = {
+    NOT_DETERMINED: -1,
+    DENIED: 0,
+    AUTHORIZED: 1,
+    PROVISIONAL: 2,
+  };
+
+  return {
+    __esModule: true,
+    default: messaging,
+    getMessaging: jest.fn(() => messagingInstance),
+    getToken: jest.fn(() => Promise.resolve('test-fcm-token')),
+    onMessage: jest.fn(() => jest.fn()),
+    onNotificationOpenedApp: jest.fn(() => jest.fn()),
+    getInitialNotification: jest.fn(() => Promise.resolve(null)),
+    registerDeviceForRemoteMessages: jest.fn(() => Promise.resolve()),
+    onTokenRefresh: jest.fn(() => jest.fn()),
+  };
+});
+
+jest.mock('@react-native-firebase/app', () => ({
+  __esModule: true,
+  getApp: jest.fn(() => ({ name: '[DEFAULT]' })),
+}));
+
+jest.mock('@notifee/react-native', () => {
+  const notifee = {
+    createChannel: jest.fn(() => Promise.resolve('keinti.realtime')),
+    displayNotification: jest.fn(() => Promise.resolve()),
+    onForegroundEvent: jest.fn(() => jest.fn()),
+  };
+
+  return {
+    __esModule: true,
+    default: notifee,
+    AndroidImportance: {
+      HIGH: 4,
+    },
+    EventType: {
+      PRESS: 'PRESS',
     },
   };
 });

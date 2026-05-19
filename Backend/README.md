@@ -134,3 +134,18 @@ npm install @google-cloud/vision
 
 ### Comportamiento de fallback
 Si Vision falla por credenciales, cuota, timeout o indisponibilidad, el backend no rompe el flujo: deja el selfie en `pending` para revisión manual por admin.
+
+## Notificaciones push FCM para canales unidos
+El backend ya puede registrar tokens de dispositivo Android y enviar notificaciones push reales cuando el anfitrión publica contenido nuevo en un canal unido.
+
+Variables soportadas en `Backend/.env`:
+
+- `FIREBASE_SERVICE_ACCOUNT_JSON`
+- o bien `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`
+- opcional: `FCM_ANDROID_CHANNEL_ID` (por defecto `keinti.realtime`)
+
+Notas:
+
+- `FIREBASE_PRIVATE_KEY` debe conservar los saltos de línea como `\n` si se guarda en una sola línea.
+- También se soporta `GOOGLE_APPLICATION_CREDENTIALS` si prefieres apuntar a un JSON de service account en disco.
+- La app Android usa `Frontend/android/app/google-services.json` y registra el token contra `/api/users/me/device-push-tokens`.

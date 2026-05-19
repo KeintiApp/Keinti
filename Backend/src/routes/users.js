@@ -6,6 +6,10 @@ const multer = require('multer');
 const crypto = require('crypto');
 const { buildObjectPath, uploadBuffer, deleteObject, isSupabaseConfigured: isSupabaseStorageConfigured } = require('../services/supabaseStorageService');
 const {
+  DEVICE_PUSH_PLATFORM_ANDROID,
+  FCM_PROVIDER,
+} = require('../services/pushNotificationService');
+const {
   getSupabaseAdminClient,
   getSupabaseAnonClient,
   isSupabaseConfigured: isSupabaseAdminConfigured,
@@ -15,6 +19,7 @@ const {
 const router = express.Router();
 
 const normalizeEmail = (raw) => String(raw || '').trim().toLowerCase();
+const normalizePushToken = (raw) => String(raw || '').trim();
 
 function isStrongPassword(pass) {
   const value = String(pass || '');
@@ -1741,6 +1746,88 @@ router.put('/me/device-permissions', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error al actualizar permisos del dispositivo:', error);
     return res.status(500).json({ error: 'Error al actualizar permisos del dispositivo' });
+  }
+});
+
+router.post('/me/device-push-tokens', authenticateToken, async (req, res) => {
+  try {
+    const email = normalizeEmail(req.user?.email);
+    const token = normalizePushToken(req.body?.token);
+    const platform = String(req.body?.platform || DEVICE_PUSH_PLATFORM_ANDROID).trim().toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    if (!token || token.length < 20) {
+      return res.status(400).json({ error: 'token inválido' });
+    }
+
+    if (platform !== DEVICE_PUSH_PLATFORM_ANDROID) {
+      return res.status(400).json({ error: 'Solo se admite Android por ahora' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO device_push_tokens (
+         token,
+         user_email,
+         platform,
+         provider,
+         updated_at,
+         last_seen_at
+       )
+       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT (token) DO UPDATE
+         SET user_email = EXCLUDED.user_email,
+             platform = EXCLUDED.platform,
+             provider = EXCLUDED.provider,
+             updated_at = CURRENT_TIMESTAMP,
+             last_seen_at = CURRENT_TIMESTAMP
+       RETURNING token, platform, provider, updated_at, last_seen_at`,
+      [token, email, platform, FCM_PROVIDER]
+    );
+
+    return res.json({
+      ok: true,
+      token: result.rows?.[0]?.token || token,
+      platform: result.rows?.[0]?.platform || platform,
+      provider: result.rows?.[0]?.provider || FCM_PROVIDER,
+      updatedAt: result.rows?.[0]?.updated_at || null,
+      lastSeenAt: result.rows?.[0]?.last_seen_at || null,
+    });
+  } catch (error) {
+    console.error('Error al registrar el token push del dispositivo:', error);
+    return res.status(500).json({ error: 'Error al registrar el token push del dispositivo' });
+  }
+});
+
+router.delete('/me/device-push-tokens', authenticateToken, async (req, res) => {
+  try {
+    const email = normalizeEmail(req.user?.email);
+    const token = normalizePushToken(req.body?.token || req.query?.token);
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email de usuario inválido' });
+    }
+
+    if (!token) {
+      return res.status(400).json({ error: 'token requerido' });
+    }
+
+    const result = await pool.query(
+      `DELETE FROM device_push_tokens
+       WHERE token = $1
+         AND lower(user_email) = $2`,
+      [token, email]
+    );
+
+    return res.json({
+      ok: true,
+      removed: (result.rowCount || 0) > 0,
+    });
+  } catch (error) {
+    console.error('Error al eliminar el token push del dispositivo:', error);
+    return res.status(500).json({ error: 'Error al eliminar el token push del dispositivo' });
   }
 });
 

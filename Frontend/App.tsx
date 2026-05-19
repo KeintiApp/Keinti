@@ -1,5 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Image, Linking, StyleSheet, View } from 'react-native';
+import { getApp } from '@react-native-firebase/app';
+import {
+  getInitialNotification,
+  getMessaging,
+  onMessage,
+  onNotificationOpenedApp,
+  onTokenRefresh,
+} from '@react-native-firebase/messaging';
+import notifee, { EventType } from '@notifee/react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { SystemBars } from 'react-native-edge-to-edge';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -14,6 +23,13 @@ import { I18nProvider } from './src/i18n/I18nProvider';
 import { type Language, isSupportedLanguage } from './src/i18n/translations';
 import { fetchUnreadNotificationsCount } from './src/services/notificationService';
 import { clearKeintiAuthSession, loadKeintiAuthSession, saveKeintiAuthSession } from './src/services/authSessionStorage';
+import {
+  displayForegroundPushNotification,
+  ensureDevicePushTokenRegistered,
+  extractJoinedChannelPushRedirect,
+  registerDevicePushToken,
+  unregisterDevicePushToken,
+} from './src/services/pushNotificationService';
 import { completeSupabaseProfile, exchangeSupabaseSession, getAccountAuthStatus, getMyPersonalData, getUserByUsername, updatePreferredLanguage } from './src/services/userService';
 import { isSupabaseConfigured, supabase } from './src/config/supabase';
 
@@ -29,6 +45,8 @@ type LogoutOptions = {
 
 type Screen = 'login' | 'register' | 'front' | 'configuration' | 'keys' | 'notifications' | 'reading';
 const PENDING_SIGNUP_PREFIX = 'keinti:pendingSignup:';
+
+const getFirebaseMessagingInstance = () => getMessaging(getApp());
 
 function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('login');
@@ -55,6 +73,7 @@ function App() {
   const [configurationInitialScreen, setConfigurationInitialScreen] = useState<'main' | 'accountAuth'>('main');
   const [readingChannelPostId, setReadingChannelPostId] = useState<number | null>(null);
   const languageRef = useRef<Language>(language);
+  const registeredPushTokenRef = useRef<string | null>(null);
 
   const pendingKeyForEmail = (e: string) => `keinti:pendingSignup:${String(e || '').trim().toLowerCase()}`;
 
@@ -77,6 +96,25 @@ function App() {
     }
   }, [authToken]);
 
+  const queueJoinedChannelPushRedirect = useCallback((payload: {
+    postId: number;
+    publisherUsername: string;
+  } | null) => {
+    if (!payload?.postId) {
+      return;
+    }
+
+    setPendingJoinedChannelRedirect({
+      postId: payload.postId,
+      publisherUsername: String(payload.publisherUsername || '').trim(),
+    });
+    setFrontScreenInitialTab('chat');
+
+    if (String(authToken || '').trim()) {
+      setCurrentScreen('front');
+    }
+  }, [authToken]);
+
   useEffect(() => {
     const token = String(authToken || '').trim();
     if (!token) {
@@ -90,6 +128,81 @@ function App() {
 
     refreshNotificationUnreadCount();
   }, [authToken, currentScreen, refreshNotificationUnreadCount]);
+
+  useEffect(() => {
+    const firebaseMessaging = getFirebaseMessagingInstance();
+
+    const unsubscribeForegroundMessage = onMessage(firebaseMessaging, (remoteMessage) => {
+      void displayForegroundPushNotification(remoteMessage).catch(() => {});
+    });
+
+    const unsubscribeOpenedNotification = onNotificationOpenedApp(firebaseMessaging, (remoteMessage) => {
+      queueJoinedChannelPushRedirect(extractJoinedChannelPushRedirect(remoteMessage?.data));
+    });
+
+    const unsubscribeForegroundPress = notifee.onForegroundEvent(({ type, detail }) => {
+      if (type !== EventType.PRESS) {
+        return;
+      }
+
+      queueJoinedChannelPushRedirect(extractJoinedChannelPushRedirect(detail.notification?.data));
+    });
+
+    getInitialNotification(firebaseMessaging)
+      .then((remoteMessage) => {
+        queueJoinedChannelPushRedirect(extractJoinedChannelPushRedirect(remoteMessage?.data));
+      })
+      .catch(() => {});
+
+    return () => {
+      unsubscribeForegroundMessage();
+      unsubscribeOpenedNotification();
+      unsubscribeForegroundPress();
+    };
+  }, [queueJoinedChannelPushRedirect]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const token = String(authToken || '').trim();
+    const firebaseMessaging = getFirebaseMessagingInstance();
+
+    if (!token) {
+      registeredPushTokenRef.current = null;
+      return;
+    }
+
+    ensureDevicePushTokenRegistered(token)
+      .then((pushToken) => {
+        if (!cancelled && pushToken) {
+          registeredPushTokenRef.current = pushToken;
+        }
+      })
+      .catch((error) => {
+        console.warn('Unable to register device push token:', error);
+      });
+
+    const unsubscribeTokenRefresh = onTokenRefresh(firebaseMessaging, (nextToken) => {
+      const normalizedPushToken = String(nextToken || '').trim();
+      if (!normalizedPushToken) {
+        return;
+      }
+
+      registerDevicePushToken(token, normalizedPushToken)
+        .then(() => {
+          if (!cancelled) {
+            registeredPushTokenRef.current = normalizedPushToken;
+          }
+        })
+        .catch((error) => {
+          console.warn('Unable to refresh device push token:', error);
+        });
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribeTokenRefresh();
+    };
+  }, [authToken]);
 
   // Global deep-link handler for Supabase PKCE callbacks.
   // Needed for email confirmation links (Confirm your email) because the app may open on Login.
@@ -649,6 +762,15 @@ function App() {
   };
 
   const handleLogout = (options?: LogoutOptions) => {
+    const currentAuthToken = String(authToken || '').trim();
+    const currentPushToken = String(registeredPushTokenRef.current || '').trim();
+
+    if (currentAuthToken && currentPushToken) {
+      unregisterDevicePushToken(currentAuthToken, currentPushToken).catch(() => {});
+    }
+
+    registeredPushTokenRef.current = null;
+
     if (options?.noticeMessage) {
       setLoginNotice({ message: options.noticeMessage, token: Date.now() });
     } else {

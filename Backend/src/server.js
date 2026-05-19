@@ -30,7 +30,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.get('/', (req, res) => {
   res.json({ 
     message: 'Keinti Backend API',
-    version: '1.5.4',
+    version: '1.5.5',
     status: 'running'
   });
 });

@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { getPostTtlMinutes } = require('../config/postTtl');
+const { sendJoinedChannelInteractionPush } = require('../services/pushNotificationService');
 const {
   parseChannelEventMessage,
   computeChannelEventExpiresAt,
@@ -14,15 +15,35 @@ const {
 } = require('../services/channelEventRewardsService');
 
 const POST_TTL_MINUTES = getPostTtlMinutes();
+const CHANNEL_IMAGE_MESSAGE_PREFIX = '__KIMG__';
 const CHANNEL_EVENT_MESSAGE_PREFIX = '__KEVT__';
 const CHANNEL_READING_MESSAGE_PREFIX = '__KREAD__';
 const CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX = '__KRREC__';
 const CHANNEL_RING_RECOMMENDATION_THREAD_MESSAGE_PREFIX = '__KRRTH__';
+const CHANNEL_REPLY_TARGET_TOKEN_SQL = "split_part(regexp_replace(trim(cm.message), '^@+', ''), ' ', 1)";
 const HYPE_VIRAL_DEFAULT_LIMIT = 40;
 const HYPE_VIRAL_MAX_LIMIT = 100;
 const HYPE_VIRAL_FETCH_CHUNK_MIN = 40;
 const HYPE_VIRAL_FETCH_CHUNK_MULTIPLIER = 4;
 const HYPE_MOST_VIRAL_CATEGORY = 'hype.category.mostViral';
+
+function buildChannelReplyViewerMatchSql(viewerAlias) {
+  return `(
+    lower(coalesce(${viewerAlias}.username, '')) = lower(${CHANNEL_REPLY_TARGET_TOKEN_SQL})
+    OR lower(ltrim(coalesce(${viewerAlias}.username, ''), '@')) = lower(${CHANNEL_REPLY_TARGET_TOKEN_SQL})
+    OR lower(${viewerAlias}.email) = lower(${CHANNEL_REPLY_TARGET_TOKEN_SQL})
+  )`;
+}
+
+function buildJoinedChannelRelevantMessageSql(viewerAlias) {
+  return `(
+    (trim(cm.message) LIKE '@% %' AND ${buildChannelReplyViewerMatchSql(viewerAlias)})
+    OR cm.message LIKE '${CHANNEL_IMAGE_MESSAGE_PREFIX}%'
+    OR cm.message LIKE '${CHANNEL_EVENT_MESSAGE_PREFIX}%'
+    OR cm.message LIKE '${CHANNEL_READING_MESSAGE_PREFIX}%'
+    OR cm.message LIKE '${CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX}%'
+  )`;
+}
 
 function normalizeEmailKey(rawValue) {
   return String(rawValue || '').trim().toLowerCase();
@@ -95,6 +116,24 @@ function parseChannelReadingDonationPayload(rawMessage) {
   };
 }
 
+function parseChannelImageMessage(rawMessage) {
+  const text = String(rawMessage || '');
+  if (!text.startsWith(CHANNEL_IMAGE_MESSAGE_PREFIX)) {return null;}
+
+  try {
+    const parsed = JSON.parse(text.slice(CHANNEL_IMAGE_MESSAGE_PREFIX.length));
+    const url = String(parsed?.url || '').trim();
+    if (!url) {return null;}
+
+    return {
+      url,
+      caption: String(parsed?.caption || ''),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function parseChannelRingRecommendationMessage(rawMessage) {
   const text = String(rawMessage || '');
   if (!text.startsWith(CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX)) {return null;}
@@ -118,6 +157,10 @@ function parseChannelRingRecommendationMessage(rawMessage) {
   } catch {
     return null;
   }
+}
+
+function isChannelRingRecommendationRootMessage(rawMessage) {
+  return !!parseChannelRingRecommendationMessage(rawMessage);
 }
 
 function buildChannelRingRecommendationSignature(payload) {
@@ -530,6 +573,158 @@ async function resolveChannelReplyNotificationRecipient(client, { postId, publis
   };
 }
 
+function getJoinedChannelInteractionKind(message, replyNotificationRecipient) {
+  const rawMessage = String(message || '').trim();
+  if (!rawMessage || parseChannelRingRecommendationThreadMessage(rawMessage)) {
+    return null;
+  }
+
+  if (replyNotificationRecipient?.email) {
+    return 'reply';
+  }
+
+  if (parseChannelImageMessage(rawMessage)) {
+    return 'image';
+  }
+
+  if (parseChannelEventMessage(rawMessage)) {
+    return 'event';
+  }
+
+  if (parseChannelReadingMessage(rawMessage)) {
+    return 'reading';
+  }
+
+  if (isChannelRingRecommendationRootMessage(rawMessage)) {
+    return 'recommendation';
+  }
+
+  return null;
+}
+
+async function listJoinedChannelInteractionRecipients(client, { postId, publisherEmail }) {
+  const result = await client.query(
+    `SELECT u.email, u.username
+     FROM users u
+     JOIN channel_subscriptions cs
+       ON cs.viewer_email = u.email
+      AND cs.post_id = $1
+      AND cs.publisher_email = $2
+     WHERE lower(u.email) <> lower($2)
+     ORDER BY cs.created_at ASC`,
+    [postId, publisherEmail]
+  );
+
+  return (result.rows || []).map((row) => ({
+    email: normalizeEmailKey(row?.email),
+    username: String(row?.username || '').trim(),
+  })).filter((row) => row.email);
+}
+
+async function prepareJoinedChannelPushTargets(client, {
+  postId,
+  publisherEmail,
+  publisherUsername,
+  channelMessageId,
+  createdAt,
+  interactionKind,
+  recipients,
+}) {
+  const numericPostId = Number(postId);
+  const numericChannelMessageId = Number(channelMessageId);
+  const normalizedPublisherEmail = normalizeEmailKey(publisherEmail);
+  const normalizedInteractionKind = String(interactionKind || '').trim();
+  const normalizedCreatedAt = createdAt || null;
+
+  if (!Number.isFinite(numericPostId) || !Number.isFinite(numericChannelMessageId)) {
+    return [];
+  }
+
+  if (!normalizedPublisherEmail || !normalizedInteractionKind) {
+    return [];
+  }
+
+  const pushTargets = [];
+
+  for (const recipient of Array.isArray(recipients) ? recipients : []) {
+    const recipientEmail = normalizeEmailKey(recipient?.email);
+    if (!recipientEmail || recipientEmail === normalizedPublisherEmail) {
+      continue;
+    }
+
+    const stateResult = await client.query(
+      `INSERT INTO channel_interaction_states (
+         viewer_email,
+         publisher_email,
+         post_id,
+         last_read_channel_message_id,
+         unread_push_open,
+         last_interaction_at,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, $2, $3, 0, FALSE, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT (viewer_email, post_id) DO UPDATE
+         SET publisher_email = EXCLUDED.publisher_email,
+             last_interaction_at = COALESCE(EXCLUDED.last_interaction_at, channel_interaction_states.last_interaction_at),
+             updated_at = CURRENT_TIMESTAMP
+       RETURNING last_read_channel_message_id, unread_push_open`,
+      [recipientEmail, normalizedPublisherEmail, numericPostId, normalizedCreatedAt]
+    );
+
+    const stateRow = stateResult.rows?.[0] || {};
+    const lastReadChannelMessageId = Number(stateRow?.last_read_channel_message_id || 0);
+    const unreadPushOpen = stateRow?.unread_push_open === true;
+
+    if (numericChannelMessageId <= lastReadChannelMessageId) {
+      continue;
+    }
+
+    if (!unreadPushOpen) {
+      await client.query(
+        `UPDATE channel_interaction_states
+         SET unread_push_open = TRUE,
+             last_notified_channel_message_id = $3,
+             last_interaction_at = COALESCE($4, last_interaction_at),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE viewer_email = $1
+           AND post_id = $2`,
+        [recipientEmail, numericPostId, numericChannelMessageId, normalizedCreatedAt]
+      );
+
+      pushTargets.push({
+        recipientEmail,
+        publisherEmail: normalizedPublisherEmail,
+        publisherUsername,
+        postId: numericPostId,
+        interactionKind: normalizedInteractionKind,
+      });
+      continue;
+    }
+
+    await client.query(
+      `UPDATE channel_interaction_states
+       SET last_interaction_at = COALESCE($3, last_interaction_at),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE viewer_email = $1
+         AND post_id = $2`,
+      [recipientEmail, numericPostId, normalizedCreatedAt]
+    );
+  }
+
+  return pushTargets;
+}
+
+function buildJoinedChannelUnreadCounts(row) {
+  return {
+    replies: Math.max(0, Math.floor(Number(row?.unread_replies) || 0)),
+    images: Math.max(0, Math.floor(Number(row?.unread_images) || 0)),
+    events: Math.max(0, Math.floor(Number(row?.unread_events) || 0)),
+    readings: Math.max(0, Math.floor(Number(row?.unread_readings) || 0)),
+    recommendations: Math.max(0, Math.floor(Number(row?.unread_recommendations) || 0)),
+  };
+}
+
 async function ensureChannelAccessOrThrow({ userEmail, postId, publisherEmail }) {
   if (!publisherEmail) {
     const err = new Error('Publicación no encontrada o expirada');
@@ -777,6 +972,13 @@ router.delete('/leave/:postId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'No estabas suscrito a este canal' });
     }
 
+    await pool.query(
+      `DELETE FROM channel_interaction_states
+       WHERE viewer_email = $1
+         AND post_id = $2`,
+      [viewerEmail, numericPostId]
+    ).catch(() => {});
+
     return res.json({ ok: true });
   } catch (error) {
     console.error('Error al salir del canal:', error);
@@ -811,6 +1013,11 @@ router.get('/my-channels', authenticateToken, async (req, res) => {
         aa.keinti_verified AS keinti_verified,
         lap.presentation,
         lap.post_created_at,
+        COALESCE(unread_counts.replies, 0) AS unread_replies,
+        COALESCE(unread_counts.images, 0) AS unread_images,
+        COALESCE(unread_counts.events, 0) AS unread_events,
+        COALESCE(unread_counts.readings, 0) AS unread_readings,
+        COALESCE(unread_counts.recommendations, 0) AS unread_recommendations,
         (
           SELECT COUNT(DISTINCT sub.viewer_email)::int
           FROM channel_subscriptions sub
@@ -821,7 +1028,26 @@ router.get('/my-channels', authenticateToken, async (req, res) => {
         ON cs.post_id = lap.post_id
        AND cs.viewer_email = $1
       JOIN users u ON lap.publisher_email = u.email
+      JOIN users viewer_user ON viewer_user.email = cs.viewer_email
       LEFT JOIN account_auth aa ON aa.user_email = u.email
+      LEFT JOIN channel_interaction_states cis
+        ON cis.viewer_email = cs.viewer_email
+       AND cis.post_id = lap.post_id
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*) FILTER (
+            WHERE trim(cm.message) LIKE '@% %'
+              AND ${buildChannelReplyViewerMatchSql('viewer_user')}
+          )::int AS replies,
+          COUNT(*) FILTER (WHERE cm.message LIKE '${CHANNEL_IMAGE_MESSAGE_PREFIX}%')::int AS images,
+          COUNT(*) FILTER (WHERE cm.message LIKE '${CHANNEL_EVENT_MESSAGE_PREFIX}%')::int AS events,
+          COUNT(*) FILTER (WHERE cm.message LIKE '${CHANNEL_READING_MESSAGE_PREFIX}%')::int AS readings,
+          COUNT(*) FILTER (WHERE cm.message LIKE '${CHANNEL_RING_RECOMMENDATION_MESSAGE_PREFIX}%')::int AS recommendations
+        FROM channel_messages cm
+        WHERE cm.post_id = lap.post_id
+          AND lower(cm.sender_email) = lower(lap.publisher_email)
+          AND cm.id > COALESCE(cis.last_read_channel_message_id, 0)
+      ) unread_counts ON TRUE
       WHERE NOT EXISTS (
           SELECT 1
           FROM group_join_requests r
@@ -835,15 +1061,112 @@ router.get('/my-channels', authenticateToken, async (req, res) => {
     `, [viewerEmail, POST_TTL_MINUTES]);
 
     // Parsear presentation si es string (aunque pg lo devuelve como objeto si es jsonb)
-    const channels = result.rows.map(row => ({
-      ...row,
-      category: row.presentation.category || 'Sin categoría'
-    }));
+    const channels = result.rows.map(row => {
+      const unreadCounts = buildJoinedChannelUnreadCounts(row);
+      const unreadTotal = unreadCounts.replies
+        + unreadCounts.images
+        + unreadCounts.events
+        + unreadCounts.readings
+        + unreadCounts.recommendations;
+
+      return {
+        ...row,
+        category: row.presentation.category || 'Sin categoría',
+        unread_counts: unreadCounts,
+        unread_total: unreadTotal,
+      };
+    });
 
     res.json(channels);
   } catch (error) {
     console.error('Error al obtener canales:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+router.post('/joined-interactions/:postId/read', authenticateToken, async (req, res) => {
+  const viewerEmail = normalizeEmailKey(req.user?.email);
+  const numericPostId = Number(req.params.postId);
+
+  if (!Number.isFinite(numericPostId)) {
+    return res.status(400).json({ error: 'postId inválido' });
+  }
+
+  try {
+    const activePost = await getActivePostInfo(numericPostId);
+    const publisherEmail = normalizeEmailKey(activePost?.publisherEmail);
+
+    if (!publisherEmail) {
+      return res.status(410).json({ error: 'Publicación no encontrada o expirada' });
+    }
+
+    await ensureChannelAccessOrThrow({ userEmail: viewerEmail, postId: numericPostId, publisherEmail });
+
+    if (viewerEmail === publisherEmail) {
+      return res.json({ ok: true, lastReadChannelMessageId: 0 });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const lastRelevantMessageResult = await client.query(
+        `SELECT COALESCE(MAX(cm.id), 0)::int AS last_relevant_message_id
+         FROM channel_messages cm
+         JOIN users viewer ON viewer.email = $2
+         WHERE cm.post_id = $1
+           AND lower(cm.sender_email) = lower($3)
+           AND ${buildJoinedChannelRelevantMessageSql('viewer')}`,
+        [numericPostId, viewerEmail, publisherEmail]
+      );
+
+      const lastRelevantMessageId = Math.max(
+        0,
+        Math.floor(Number(lastRelevantMessageResult.rows?.[0]?.last_relevant_message_id) || 0)
+      );
+
+      const upsertResult = await client.query(
+        `INSERT INTO channel_interaction_states (
+           viewer_email,
+           publisher_email,
+           post_id,
+           last_read_channel_message_id,
+           unread_push_open,
+           created_at,
+           updated_at
+         )
+         VALUES ($1, $2, $3, $4, FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT (viewer_email, post_id) DO UPDATE
+           SET publisher_email = EXCLUDED.publisher_email,
+               last_read_channel_message_id = GREATEST(
+                 channel_interaction_states.last_read_channel_message_id,
+                 EXCLUDED.last_read_channel_message_id
+               ),
+               unread_push_open = FALSE,
+               updated_at = CURRENT_TIMESTAMP
+         RETURNING last_read_channel_message_id`,
+        [viewerEmail, publisherEmail, numericPostId, lastRelevantMessageId]
+      );
+
+      await client.query('COMMIT');
+
+      return res.json({
+        ok: true,
+        lastReadChannelMessageId: Math.max(
+          0,
+          Math.floor(Number(upsertResult.rows?.[0]?.last_read_channel_message_id) || 0)
+        ),
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error al marcar el canal unido como leído:', error);
+    const status = error?.statusCode || 500;
+    return res.status(status).json({ error: error?.message || 'Error interno del servidor', code: error?.code });
   }
 });
 
@@ -1218,6 +1541,7 @@ router.post('/messages', authenticateToken, async (req, res) => {
       let storedMessage = messageToStore;
       let hostWhiteKeysBalance = null;
       let channelEventTaskRewards = [];
+      let pushTargets = [];
 
       if (insertedMessage && senderEmail === publisherEmail && !parsedRecommendationThreadPayload) {
         const computedExpiresAt = parsedEventPayload?.expiresAt || computeChannelEventExpiresAt({
@@ -1277,6 +1601,36 @@ router.post('/messages', authenticateToken, async (req, res) => {
             ]
           );
         }
+
+        const interactionKind = getJoinedChannelInteractionKind(storedMessage, replyNotificationRecipient);
+        if (interactionKind) {
+          const interactionRecipients = interactionKind === 'reply'
+            ? [replyNotificationRecipient]
+            : await listJoinedChannelInteractionRecipients(client, {
+              postId: numericPostId,
+              publisherEmail,
+            });
+
+          if (interactionRecipients.length > 0) {
+            const publisherUserResult = await client.query(
+              `SELECT username
+               FROM users
+               WHERE lower(email) = lower($1)
+               LIMIT 1`,
+              [publisherEmail]
+            );
+
+            pushTargets = await prepareJoinedChannelPushTargets(client, {
+              postId: numericPostId,
+              publisherEmail,
+              publisherUsername: String(publisherUserResult.rows?.[0]?.username || '').trim(),
+              channelMessageId: insertedMessage.id,
+              createdAt: insertedMessage.created_at || null,
+              interactionKind,
+              recipients: interactionRecipients,
+            });
+          }
+        }
       }
 
       const responseEventExpiresAt = parsedEventPayload
@@ -1288,6 +1642,38 @@ router.post('/messages', authenticateToken, async (req, res) => {
         : null;
 
       await client.query('COMMIT');
+
+      if (pushTargets.length > 0) {
+        Promise.allSettled(pushTargets.map((target) => sendJoinedChannelInteractionPush(target)))
+          .then((results) => {
+            const rejectedCount = results.filter((entry) => entry.status === 'rejected').length;
+            if (rejectedCount > 0) {
+              console.error(`Joined channel push delivery failed for ${rejectedCount} recipient(s)`);
+            }
+
+            results.forEach((entry, index) => {
+              if (entry.status !== 'fulfilled') {
+                return;
+              }
+
+              if (entry.value?.ok) {
+                return;
+              }
+
+              const target = pushTargets[index];
+              console.warn('Joined channel push skipped:', {
+                recipientEmail: target?.recipientEmail || null,
+                postId: target?.postId || null,
+                interactionKind: target?.interactionKind || null,
+                reason: entry.value?.reason || 'unknown',
+              });
+            });
+          })
+          .catch((pushError) => {
+            console.error('Unexpected joined channel push delivery error:', pushError);
+          });
+      }
+
       res.status(201).json({
         ...insertedMessage,
         channel_event_task_rewards: channelEventTaskRewards,

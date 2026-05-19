@@ -350,6 +350,98 @@ async function initDatabase() {
     ).catch(() => {});
 
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS device_push_tokens (
+        token TEXT PRIMARY KEY,
+        user_email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+        platform VARCHAR(20) NOT NULL,
+        provider VARCHAR(20) NOT NULL DEFAULT 'fcm',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `).catch(() => {});
+
+    await pool.query(
+      `ALTER TABLE device_push_tokens
+       ADD COLUMN IF NOT EXISTS provider VARCHAR(20) NOT NULL DEFAULT 'fcm';`
+    ).catch(() => {});
+
+    await pool.query(
+      `ALTER TABLE device_push_tokens
+       ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;`
+    ).catch(() => {});
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS channel_interaction_states (
+        viewer_email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+        publisher_email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+        post_id INTEGER NOT NULL REFERENCES Post_users(id) ON DELETE CASCADE,
+        last_read_channel_message_id INTEGER NOT NULL DEFAULT 0,
+        unread_push_open BOOLEAN NOT NULL DEFAULT FALSE,
+        last_notified_channel_message_id INTEGER NULL REFERENCES channel_messages(id) ON DELETE SET NULL,
+        last_interaction_at TIMESTAMP NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (viewer_email, post_id)
+      );
+    `).catch(() => {});
+
+    await pool.query(
+      `ALTER TABLE channel_interaction_states
+       ADD COLUMN IF NOT EXISTS publisher_email VARCHAR(255) NULL REFERENCES users(email) ON DELETE CASCADE;`
+    ).catch(() => {});
+
+    await pool.query(
+      `ALTER TABLE channel_interaction_states
+       ADD COLUMN IF NOT EXISTS last_read_channel_message_id INTEGER NOT NULL DEFAULT 0;`
+    ).catch(() => {});
+
+    await pool.query(
+      `ALTER TABLE channel_interaction_states
+       ADD COLUMN IF NOT EXISTS unread_push_open BOOLEAN NOT NULL DEFAULT FALSE;`
+    ).catch(() => {});
+
+    await pool.query(
+      `ALTER TABLE channel_interaction_states
+       ADD COLUMN IF NOT EXISTS last_notified_channel_message_id INTEGER NULL REFERENCES channel_messages(id) ON DELETE SET NULL;`
+    ).catch(() => {});
+
+    await pool.query(
+      `ALTER TABLE channel_interaction_states
+       ADD COLUMN IF NOT EXISTS last_interaction_at TIMESTAMP NULL;`
+    ).catch(() => {});
+
+    await pool.query(
+      `ALTER TABLE channel_interaction_states
+       ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;`
+    ).catch(() => {});
+
+    await pool.query(
+      `ALTER TABLE channel_interaction_states
+       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;`
+    ).catch(() => {});
+
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_device_push_tokens_user_platform
+       ON device_push_tokens (user_email, platform, updated_at DESC);`
+    ).catch(() => {});
+
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_channel_interaction_states_viewer_updated
+       ON channel_interaction_states (viewer_email, updated_at DESC);`
+    ).catch(() => {});
+
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_channel_interaction_states_post_id
+       ON channel_interaction_states (post_id);`
+    ).catch(() => {});
+
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_channel_interaction_states_publisher_email
+       ON channel_interaction_states (publisher_email);`
+    ).catch(() => {});
+
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS channel_event_task_rewards (
         id SERIAL PRIMARY KEY,
         channel_message_id INTEGER NOT NULL REFERENCES channel_messages(id) ON DELETE CASCADE,

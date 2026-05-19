@@ -55,7 +55,7 @@ import audioRecorderPlayer, {
 } from '../services/audioRecorderPlayer';
 import { deleteDraftUploadedImageByUrl, getAccountAuthStatus, getMyDevicePermissions, getMyUiHints, setMyDevicePermissions, setMyUiHints, updateProfilePhoto, updateSocialNetworks, uploadImage } from '../services/userService';
 import { trackAdPaidEvent } from '../services/adRevenueService';
-import { dismissChannelReplyNotification } from '../services/notificationService';
+import { dismissChannelReplyNotification, markJoinedChannelInteractionsAsRead } from '../services/notificationService';
 import {
   loadHomeIntimidadesDailyGoalProgress,
   recordChannelImageShareGoalCompletion,
@@ -72,6 +72,14 @@ import { POST_TTL_MS } from '../config/postTtl';
 import { useI18n } from '../i18n/I18nProvider';
 import { getLocalizedNationalityName } from '../i18n/nationalities';
 import type { Language, TranslationKey } from '../i18n/translations';
+import {
+  CHANNEL_EVENT_SOCIAL_OPTIONS,
+  normalizeExternalUrl,
+  normalizeSocialNetworkKey,
+  SOCIAL_ICONS,
+  SOCIAL_PLATFORM_NAMES,
+  validateSocialLink,
+} from '../constants/socialLinks';
 import { PROFILE_REACTION_EMOJIS } from '../data/profileReactionEmojis';
 import { ensureAdsConsentForAccount, getStoredAdsRuntimeConfig } from '../services/adsConsent';
 import Reanimated, {
@@ -175,20 +183,6 @@ const CHANNEL_EVENT_TYPE_OPTIONS = [
 const HYPE_MOST_VIRAL_CATEGORY = 'hype.category.mostViral' as const;
 const HYPE_CATEGORY_OPTIONS = [HYPE_MOST_VIRAL_CATEGORY, ...CHANNEL_EVENT_TYPE_OPTIONS] as const;
 const HYPE_VIRAL_PAGE_SIZE = 10;
-const CHANNEL_EVENT_SOCIAL_OPTIONS = [
-  'youtube',
-  'twitter',
-  'tiktok',
-  'threads',
-  'telegram',
-  'pinterest',
-  'onlyfans',
-  'linkedin',
-  'kick',
-  'instagram',
-  'facebook',
-  'discord',
-] as const;
 const formatChannelEventDate = (date: Date) => {
   const day = `${date.getDate()}`.padStart(2, '0');
   const month = `${date.getMonth() + 1}`.padStart(2, '0');
@@ -416,21 +410,6 @@ const toChannelEventIsoDate = (date: Date) => {
   const day = `${date.getDate()}`.padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
-const SOCIAL_PLATFORM_NAMES: Record<string, string> = {
-  facebook: 'Facebook',
-  instagram: 'Instagram',
-  onlyfans: 'OnlyFans',
-  pinterest: 'Pinterest',
-  telegram: 'Telegram',
-  tiktok: 'TikTok',
-  twitter: 'X/Twitter',
-  youtube: 'YouTube',
-  discord: 'Discord',
-  threads: 'Threads',
-  linkedin: 'LinkedIn',
-  kick: 'Kick',
-  twitch: 'Twitch',
-};
 // RN Image blurRadius is a platform-specific numeric value; this approximates ~80% blur.
 const CHANNEL_IMAGE_LOCK_BLUR_RADIUS = 22;
 const HYPE_EVENT_IMAGE_BLUR_RADIUS = 11;
@@ -570,6 +549,11 @@ type ChannelReadingMessageInsertion =
       durationSeconds: number;
       mimeType?: string | null;
       noteText?: string | null;
+    }
+  | {
+      type: 'social-link';
+      network: string;
+      link: string;
     };
 
 type ChannelReadingMessageVoiceNote = {
@@ -693,6 +677,16 @@ const areJoinedChannelUnreadCountsEqual = (
   && Number(left?.readings ?? 0) === Number(right?.readings ?? 0)
   && Number(left?.recommendations ?? 0) === Number(right?.recommendations ?? 0)
 );
+
+const normalizeJoinedChannelUnreadCounts = (
+  counts?: Partial<JoinedChannelUnreadCounts> | null,
+): JoinedChannelUnreadCounts => ({
+  replies: Math.max(0, Math.floor(Number(counts?.replies) || 0)),
+  images: Math.max(0, Math.floor(Number(counts?.images) || 0)),
+  events: Math.max(0, Math.floor(Number(counts?.events) || 0)),
+  readings: Math.max(0, Math.floor(Number(counts?.readings) || 0)),
+  recommendations: Math.max(0, Math.floor(Number(counts?.recommendations) || 0)),
+});
 
 const EMPTY_HYPE_VIRAL_PAGE_STATE: HypeViralPageState = {
   items: [],
@@ -1217,6 +1211,19 @@ const parseChannelReadingMessage = (raw: string): ChannelReadingMessagePayload |
                 durationSeconds: voiceNote.durationSeconds,
                 mimeType: voiceNote.mimeType,
                 noteText: voiceNote.noteText,
+              });
+            }
+            return;
+          }
+
+          if (item?.type === 'social-link') {
+            const network = normalizeSocialNetworkKey(item?.network);
+            const link = String(item?.link || '').trim();
+            if (network && link && validateSocialLink(network, link)) {
+              normalizedInsertions.push({
+                type: 'social-link',
+                network,
+                link,
               });
             }
           }
@@ -2003,22 +2010,6 @@ const FireworkChatIcon = ({ size, onPress, style }: { size: number, onPress: () 
 };
 
 const ICON_KEITIN = require('../../assets/images/iconkeitin.png');
-const SOCIAL_ICONS = {
-  facebook: require('../../assets/images/facebook.png'),
-  instagram: require('../../assets/images/instagram.png'),
-  onlyfans: require('../../assets/images/onlyfans.png'),
-  pinterest: require('../../assets/images/pinterest.png'),
-  telegram: require('../../assets/images/telegram.png'),
-  tiktok: require('../../assets/images/tiktok.png'),
-  twitter: require('../../assets/images/x_twitter.png'),
-  youtube: require('../../assets/images/youtube.png'),
-  discord: require('../../assets/images/discord.png'),
-  threads: require('../../assets/images/threads.png'),
-  linkedin: require('../../assets/images/linkedin.png'),
-  kick: require('../../assets/images/kick.png'),
-  twitch: require('../../assets/images/twitch.png'),
-};
-
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const HOME_CARD_WIDTH = Math.max(1, SCREEN_WIDTH - 4);
 const PROFILE_SCREEN_SIDE_PADDING = 2;
@@ -2695,6 +2686,7 @@ const ChannelEventField = ({
   trailingContent,
   value,
   onChangeText,
+  placeholderTextColor = 'rgba(255,255,255,0.38)',
   maxLength,
   keyboardType,
   autoCapitalize = 'sentences',
@@ -2709,6 +2701,7 @@ const ChannelEventField = ({
   trailingContent?: React.ReactNode;
   value?: string;
   onChangeText?: (text: string) => void;
+  placeholderTextColor?: string;
   maxLength?: number;
   keyboardType?: any;
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
@@ -2736,7 +2729,7 @@ const ChannelEventField = ({
             value={value}
             onChangeText={onChangeText}
             placeholder={label}
-            placeholderTextColor="rgba(255,255,255,0.38)"
+            placeholderTextColor={placeholderTextColor}
             style={[
               styles.channelEventFieldInput,
               multiline && styles.channelEventFieldInputMultiline,
@@ -3754,7 +3747,7 @@ const HomeActivePublicationCard = React.memo(({
                             if (totalVotes <= 0) {return null;}
                             return (
                               <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, marginBottom: 5, marginLeft: 5 }}>
-                                {totalVotes} votos
+                                {`${totalVotes} ${t('front.votes' as TranslationKey)}`}
                               </Text>
                             );
                           })()}
@@ -5919,6 +5912,16 @@ const FrontScreen = ({
     setChannelEventSocialLink('');
     setChannelEventSocialLinkError('');
   }, [channelEventSocialLink, channelEventSocialLinkError, selectedChannelEventSocialNetwork]);
+
+  const handleRemoveChannelEventSocialLink = useCallback((network: (typeof CHANNEL_EVENT_SOCIAL_OPTIONS)[number]) => {
+    setChannelEventLinkedSocialNetworks(prev => prev.filter(item => item.network !== network));
+
+    if (selectedChannelEventSocialNetwork === network) {
+      setSelectedChannelEventSocialNetwork(null);
+      setChannelEventSocialLink('');
+      setChannelEventSocialLinkError('');
+    }
+  }, [selectedChannelEventSocialNetwork]);
 
   const channelEventCanApplySocialLink = !!selectedChannelEventSocialNetwork
     && !!channelEventSocialLink.trim()
@@ -8259,20 +8262,6 @@ const FrontScreen = ({
     await fetchMentionProfileIfNeeded(normalized);
   };
 
-  const normalizeExternalUrl = (rawUrl: string): string | null => {
-    const trimmed = String(rawUrl ?? '').trim();
-    if (!trimmed) {return null;}
-
-    // Keep URLs with a scheme (https:, http:, mailto:, tel:, etc.)
-    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {return trimmed;}
-
-    // Handle protocol-relative URLs
-    if (trimmed.startsWith('//')) {return `https:${trimmed}`;}
-
-    // Common: users store links without scheme, e.g. "t.me/user" or "www.example.com"
-    return `https://${trimmed}`;
-  };
-
   const resolveGoogleMapsShortUrlIfNeeded = async (url: string): Promise<string> => {
     const candidate = String(url || '').trim();
     if (!/^https?:/i.test(candidate)) {return candidate;}
@@ -8345,18 +8334,31 @@ const FrontScreen = ({
     }
   };
 
-  const normalizeReadingCitationSocialIconKey = (raw: unknown) => {
-    const key = String(raw ?? '').trim().toLowerCase();
-    if (!key) {
-      return '';
+  const normalizeReadingCitationSocialIconKey = (raw: unknown) => normalizeSocialNetworkKey(raw);
+
+  const getRenderableExpandedReadingSocialLink = (rawNetwork: unknown, rawLink: unknown) => {
+    const key = normalizeReadingCitationSocialIconKey(rawNetwork);
+    const displayLink = String(rawLink ?? '').trim();
+    if (!key || !displayLink) {
+      return null;
     }
-    if (key === 'x' || key === 'x_twitter' || key === 'xtwitter') {
-      return 'twitter';
+
+    const normalizedLink = normalizeExternalUrl(displayLink);
+    if (!normalizedLink) {
+      return null;
     }
-    if (key === 'only_fans') {
-      return 'onlyfans';
+
+    const iconSource = SOCIAL_ICONS[key as keyof typeof SOCIAL_ICONS];
+    if (!iconSource) {
+      return null;
     }
-    return key;
+
+    return {
+      key,
+      iconSource,
+      link: normalizedLink,
+      displayLink,
+    };
   };
 
   const getRenderableReadingCitationUserSocials = (socialNetworks?: Array<{ network?: string; id?: string; link?: string | null }>) => {
@@ -9006,8 +9008,8 @@ const FrontScreen = ({
             <VoiceNotePlayer
               uri={resolveReadingMediaUri(introAudio.url)}
               durationSeconds={introAudio.durationSeconds}
-              title="Nota inicial"
-              subtitle={introAudio.noteText || 'Se reproduce antes del contenido principal.'}
+              title={t('reading.voiceNoteIntroTitle' as TranslationKey)}
+              subtitle={introAudio.noteText || t('reading.voiceNoteIntroDescription' as TranslationKey)}
               variant="reader"
             />
           </View>
@@ -9015,6 +9017,9 @@ const FrontScreen = ({
 
         {bodySections.map((sectionText, index) => {
           const trailingInsertion = insertions[index] ?? null;
+          const renderableSocialLink = trailingInsertion?.type === 'social-link'
+            ? getRenderableExpandedReadingSocialLink(trailingInsertion.network, trailingInsertion.link)
+            : null;
           const hasSectionContent = String(sectionText || '').length > 0;
           const sectionCitations = citationsBySection[index] || [];
 
@@ -9049,10 +9054,35 @@ const FrontScreen = ({
                   <VoiceNotePlayer
                     uri={resolveReadingMediaUri(trailingInsertion.url)}
                     durationSeconds={trailingInsertion.durationSeconds}
-                    title="Nota de voz"
-                    subtitle={trailingInsertion.noteText || 'Audio insertado en el cuerpo de la lectura.'}
+                    title={t('reading.voiceNoteInlineTitle' as TranslationKey)}
+                    subtitle={trailingInsertion.noteText || t('reading.voiceNoteInlineDescription' as TranslationKey)}
                     variant="reader"
                   />
+                </View>
+              ) : null}
+
+              {trailingInsertion?.type === 'social-link' && renderableSocialLink ? (
+                <View style={styles.expandedChannelReadingSocialLinkSection}>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    activeOpacity={0.88}
+                    onPress={() => openExternalLink(renderableSocialLink.link)}
+                    style={styles.expandedChannelReadingSocialLinkCard}
+                  >
+                    <View style={styles.expandedChannelReadingSocialLinkIconShell}>
+                      <Image
+                        source={renderableSocialLink.iconSource}
+                        style={styles.expandedChannelReadingSocialLinkIcon}
+                        resizeMode="contain"
+                      />
+                    </View>
+
+                    <View style={styles.expandedChannelReadingSocialLinkValueBox}>
+                      <Text style={styles.expandedChannelReadingSocialLinkValueText} numberOfLines={1}>
+                        {renderableSocialLink.displayLink}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
                 </View>
               ) : null}
             </React.Fragment>
@@ -9064,8 +9094,8 @@ const FrontScreen = ({
             <VoiceNotePlayer
               uri={resolveReadingMediaUri(outroAudio.url)}
               durationSeconds={outroAudio.durationSeconds}
-              title="Nota final"
-              subtitle={outroAudio.noteText || 'Se reproduce despues del cuerpo de la lectura.'}
+              title={t('reading.voiceNoteOutroTitle' as TranslationKey)}
+              subtitle={outroAudio.noteText || t('reading.voiceNoteOutroDescription' as TranslationKey)}
               variant="reader"
             />
           </View>
@@ -9936,14 +9966,19 @@ const FrontScreen = ({
       });
     }
 
-    if (postId) {
-      void dismissChannelReplyNotification(authToken, Number(postId))
-        .then(() => {
-          onNotificationsChanged?.();
-        })
-        .catch((error) => {
-          console.error('Error dismissing joined channel reply notification:', error);
-        });
+    if (postId && authToken) {
+      void Promise.allSettled([
+        markJoinedChannelInteractionsAsRead(authToken, Number(postId)),
+        dismissChannelReplyNotification(authToken, Number(postId)),
+      ]).then((results) => {
+        const rejectedCount = results.filter(result => result.status === 'rejected').length;
+        if (rejectedCount > 0) {
+          console.error(`Error clearing joined channel notifications for ${rejectedCount} request(s)`);
+        }
+
+        onNotificationsChanged?.();
+        void fetchMyChannels();
+      });
     }
 
     // Android render workaround: force a repaint across the first two frames
@@ -9967,7 +10002,36 @@ const FrontScreen = ({
     setPendingJoinedChannelNotificationRedirect(null);
   }, [activeBottomTab, chatView, channelTab, myChannels, pendingJoinedChannelNotificationRedirect]);
 
-  const fetchMyChannels = async () => {
+  const applyJoinedChannelUnreadCountsFromChannels = useCallback((channels: any[]) => {
+    const nextCountsByPostId: Record<string, JoinedChannelUnreadCounts> = {};
+
+    (Array.isArray(channels) ? channels : []).forEach((channel: any) => {
+      const postId = String(channel?.post_id ?? channel?.postId ?? channel?.id ?? '').trim();
+      if (!postId) {return;}
+
+      const nextCounts = normalizeJoinedChannelUnreadCounts(channel?.unread_counts);
+      if (getJoinedChannelUnreadCountsTotal(nextCounts) <= 0) {return;}
+
+      nextCountsByPostId[postId] = nextCounts;
+    });
+
+    setJoinedChannelUnreadCountsByPostId(previousValue => {
+      const previousKeys = Object.keys(previousValue);
+      const nextKeys = Object.keys(nextCountsByPostId);
+      const isEqual = previousKeys.length === nextKeys.length
+        && nextKeys.every((postId) => areJoinedChannelUnreadCountsEqual(previousValue[postId], nextCountsByPostId[postId]));
+
+      return isEqual ? previousValue : nextCountsByPostId;
+    });
+  }, []);
+
+  const fetchMyChannels = useCallback(async () => {
+    if (!authToken) {
+      setMyChannels([]);
+      setJoinedChannelUnreadCountsByPostId({});
+      return;
+    }
+
     try {
       const response = await fetch(`${API_URL}/api/channels/my-channels`, {
         headers: {
@@ -9976,12 +10040,14 @@ const FrontScreen = ({
       });
       if (response.ok) {
         const data = await response.json();
-        setMyChannels(data);
+        const nextChannels = Array.isArray(data) ? data : [];
+        setMyChannels(nextChannels);
+        applyJoinedChannelUnreadCountsFromChannels(nextChannels);
       }
     } catch (error) {
       console.error('Error fetching channels:', error);
     }
-  };
+  }, [authToken, applyJoinedChannelUnreadCountsFromChannels]);
 
   useEffect(() => {
     hypeViralEventPagesRef.current = hypeViralEventPages;
@@ -10401,50 +10467,14 @@ const FrontScreen = ({
     computeJoinedChannelUnreadCountsFromMessages,
   ]);
 
-  const refreshJoinedChannelUnreadCounts = useCallback(async (
-    channelsOverride?: any[],
-    lastSeenMapOverride?: Record<string, number>,
-  ) => {
+  const refreshJoinedChannelUnreadCounts = useCallback(async () => {
     if (!authToken || !userEmail) {
       setJoinedChannelUnreadCountsByPostId({});
       return;
     }
 
-    const channelsToCheck = Array.isArray(channelsOverride) ? channelsOverride : myChannels;
-    if (!channelsToCheck.length) {
-      setJoinedChannelUnreadCountsByPostId({});
-      return;
-    }
-
-    const refreshSeq = ++joinedChannelUnreadRefreshSeqRef.current;
-    const entries = await Promise.all(channelsToCheck.map(async (channel: any) => {
-      try {
-        return await fetchJoinedChannelUnreadCountsForChannel(channel, lastSeenMapOverride);
-      } catch {
-        const postId = String(channel?.post_id ?? channel?.postId ?? channel?.id ?? '').trim();
-        return { postId, counts: createEmptyJoinedChannelUnreadCounts() };
-      }
-    }));
-
-    if (refreshSeq !== joinedChannelUnreadRefreshSeqRef.current) {return;}
-
-    const next: Record<string, JoinedChannelUnreadCounts> = {};
-    entries.forEach((entry) => {
-      if (!entry?.postId) {return;}
-      if (getJoinedChannelUnreadCountsTotal(entry.counts) > 0) {
-        next[entry.postId] = entry.counts;
-      }
-    });
-
-    setJoinedChannelUnreadCountsByPostId(prev => {
-      const prevKeys = Object.keys(prev);
-      const nextKeys = Object.keys(next);
-      if (prevKeys.length === nextKeys.length && prevKeys.every(key => areJoinedChannelUnreadCountsEqual(prev[key], next[key]))) {
-        return prev;
-      }
-      return next;
-    });
-  }, [authToken, userEmail, myChannels, fetchJoinedChannelUnreadCountsForChannel]);
+    await fetchMyChannels();
+  }, [authToken, fetchMyChannels, userEmail]);
 
   const fetchChannelInteractions = async (postId?: string) => {
     if (!authToken) {return;}
@@ -11926,22 +11956,7 @@ const FrontScreen = ({
     if (network && text.trim()) {
       const ok = validateSocialLink(network, text);
       if (!ok) {
-        const platformNames: Record<string, string> = {
-          facebook: 'Facebook',
-          instagram: 'Instagram',
-          onlyfans: 'OnlyFans',
-          pinterest: 'Pinterest',
-          telegram: 'Telegram',
-          tiktok: 'TikTok',
-          twitter: 'X/Twitter',
-          youtube: 'YouTube',
-          discord: 'Discord',
-          threads: 'Threads',
-          linkedin: 'LinkedIn',
-          kick: 'Kick',
-          twitch: 'Twitch',
-        };
-        setProfileRingLinkErrorDraft(`${t('front.linkMustBeFrom' as TranslationKey)} ${platformNames[network] ?? network}`);
+        setProfileRingLinkErrorDraft(`${t('front.linkMustBeFrom' as TranslationKey)} ${SOCIAL_PLATFORM_NAMES[network] ?? network}`);
       } else {
         setProfileRingLinkErrorDraft('');
       }
@@ -13607,9 +13622,9 @@ const FrontScreen = ({
 
   useEffect(() => {
     if (authToken) {
-      fetchMyChannels();
+      void fetchMyChannels();
     }
-  }, [authToken]);
+  }, [authToken, fetchMyChannels]);
 
   useEffect(() => {
     let cancelled = false;
@@ -15941,34 +15956,6 @@ const FrontScreen = ({
       .filter((u: string) => !!u);
   };
 
-  const validateSocialLink = (platform: string, link: string): boolean => {
-    if (!link.trim()) {return true;} // Allow empty
-
-    const validators: Record<string, RegExp> = {
-      facebook: /^https?:\/\/(www\.)?(facebook|fb)\.com\/.+/i,
-      instagram: /^https?:\/\/(www\.)?instagram\.com\/.+/i,
-      onlyfans: /^https?:\/\/(www\.)?onlyfans\.com\/.+/i,
-      pinterest: /^https?:\/\/(www\.)?(pinterest\.(com|es)|pin\.it)\/.+/i,
-      telegram: /^(https?:\/\/)?(t\.me|telegram\.me)\/.+/i,
-      // Accept common TikTok URL shapes:
-      // - https://www.tiktok.com/@user
-      // - https://www.tiktok.com/@user/video/123
-      // - https://tiktok.com/t/...
-      // - https://vm.tiktok.com/...
-      // - https://vt.tiktok.com/...
-      tiktok: /^(https?:\/\/)?((www|m|vm|vt)\.)?tiktok\.com\/.+/i,
-      twitter: /^https?:\/\/(www\.)?(twitter|x)\.com\/.+/i,
-      youtube: /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\/.+/i,
-      discord: /^https?:\/\/(www\.)?(discord\.(com|gg)|discordapp\.com)\/.+/i,
-      threads: /^https?:\/\/(www\.)?threads\.(net|com)\/@.+/i,
-      linkedin: /^https?:\/\/(?:[\w-]+\.)*linkedin\.com\/.+/i,
-      kick: /^https?:\/\/(www\.)?kick\.com\/.+/i,
-      twitch: /^https?:\/\/((www|m)\.)?twitch\.tv\/.+/i,
-    };
-
-    return validators[platform]?.test(link.trim()) ?? false;
-  };
-
   const toggleSocialPanel = () => {
     const toValue = showSocialPanel ? -SOCIAL_PANEL_HEIGHT : 0;
     Animated.timing(socialPanelAnimation, {
@@ -15993,22 +15980,7 @@ const FrontScreen = ({
     if (selectedSocialNetwork && text.trim()) {
       const isValid = validateSocialLink(selectedSocialNetwork, text);
       if (!isValid) {
-        const platformNames: Record<string, string> = {
-          facebook: 'Facebook',
-          instagram: 'Instagram',
-          onlyfans: 'OnlyFans',
-          pinterest: 'Pinterest',
-          telegram: 'Telegram',
-          tiktok: 'TikTok',
-          twitter: 'X/Twitter',
-          youtube: 'YouTube',
-          discord: 'Discord',
-          threads: 'Threads',
-          linkedin: 'LinkedIn',
-          kick: 'Kick',
-          twitch: 'Twitch',
-        };
-        setLinkError(`${t('front.linkMustBeFrom' as TranslationKey)} ${platformNames[selectedSocialNetwork]}`);
+        setLinkError(`${t('front.linkMustBeFrom' as TranslationKey)} ${SOCIAL_PLATFORM_NAMES[selectedSocialNetwork] ?? selectedSocialNetwork}`);
       } else {
         setLinkError('');
       }
@@ -19658,7 +19630,7 @@ const FrontScreen = ({
                                               <>
                                                 {isActive && totalVotes > 0 ? (
                                                   <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, marginBottom: 5, marginLeft: 5 }}>
-                                                    {totalVotes} votos
+                                                    {`${totalVotes} ${t('front.votes' as TranslationKey)}`}
                                                   </Text>
                                                 ) : null}
 
@@ -25479,6 +25451,7 @@ const FrontScreen = ({
                   iconName="calendar-month"
                   value={channelEventDateText}
                   onChangeText={handleChannelEventDateTextChange}
+                  placeholderTextColor="#FFFFFF"
                   maxLength={10}
                   keyboardType="numeric"
                   autoCapitalize="none"
@@ -25641,17 +25614,29 @@ const FrontScreen = ({
               {channelEventLinkedSocialNetworks.length > 0 ? (
                 <View style={styles.channelEventAppliedSocialsRow}>
                   {channelEventLinkedSocialNetworks.map(item => (
-                    <TouchableOpacity
+                    <View
                       key={item.network}
-                      activeOpacity={0.8}
-                      onPress={() => openExternalLink(item.link)}
-                      style={styles.channelEventAppliedSocialButton}
+                      style={styles.channelEventAppliedSocialItem}
                     >
-                      <Image
-                        source={SOCIAL_ICONS[item.network] as any}
-                        style={styles.channelEventAppliedSocialIcon}
-                      />
-                    </TouchableOpacity>
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        onPress={() => openExternalLink(item.link)}
+                        style={styles.channelEventAppliedSocialButton}
+                      >
+                        <Image
+                          source={SOCIAL_ICONS[item.network] as any}
+                          style={styles.channelEventAppliedSocialIcon}
+                        />
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.unlinkBadge}
+                        onPress={() => handleRemoveChannelEventSocialLink(item.network)}
+                        hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
+                      >
+                        <MaterialIcons name="close" size={10} color="#FFFFFF" />
+                      </TouchableOpacity>
+                    </View>
                   ))}
                 </View>
               ) : null}
@@ -27776,7 +27761,7 @@ const FrontScreen = ({
           <TouchableWithoutFeedback>
             <View style={styles.expandedChannelReadingCitationSheet}>
               <View style={styles.expandedChannelReadingCitationHandle} />
-              <Text style={styles.expandedChannelReadingCitationSheetTitle}>Usuarios citados</Text>
+              <Text style={styles.expandedChannelReadingCitationSheetTitle}>{t('reading.citedUsersTitle')}</Text>
               <Text style={styles.expandedChannelReadingCitationSheetExcerpt}>{expandedChannelReadingCitation?.text || ''}</Text>
 
               <ScrollView
@@ -31429,11 +31414,16 @@ const styles = StyleSheet.create({
     marginTop: -2,
     marginBottom: 12,
   },
-  channelEventAppliedSocialButton: {
+  channelEventAppliedSocialItem: {
     width: 36,
     height: 36,
     marginRight: 10,
     marginBottom: 8,
+    position: 'relative',
+  },
+  channelEventAppliedSocialButton: {
+    width: '100%',
+    height: '100%',
     borderRadius: 10,
     backgroundColor: '#000000',
     alignItems: 'center',
@@ -31790,11 +31780,12 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   channelReadingMessageLead: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 8,
+    color: 'rgba(255,255,255,0.74)',
+    fontSize: 14,
+    fontWeight: '700',
     fontStyle: 'italic',
+    lineHeight: 20,
+    marginTop: 8,
     flexShrink: 1,
   },
   channelReadingMessageFooter: {
@@ -31929,6 +31920,49 @@ const styles = StyleSheet.create({
   },
   expandedChannelReadingVoiceNoteSection: {
     marginTop: 18,
+  },
+  expandedChannelReadingSocialLinkSection: {
+    marginTop: 18,
+  },
+  expandedChannelReadingSocialLinkCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  expandedChannelReadingSocialLinkIconShell: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  expandedChannelReadingSocialLinkIcon: {
+    width: 18,
+    height: 18,
+  },
+  expandedChannelReadingSocialLinkValueBox: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(0,0,0,0.28)',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  expandedChannelReadingSocialLinkValueText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
   },
   expandedChannelReadingPublishedDate: {
     color: 'rgba(255,255,255,0.82)',

@@ -88,6 +88,31 @@ export const dismissChannelReplyNotification = async (authToken: string | undefi
   }
 };
 
+export const markJoinedChannelInteractionsAsRead = async (
+  authToken: string | undefined,
+  postId: number,
+) => {
+  const token = String(authToken || '').trim();
+  const numericPostId = Number(postId);
+  if (!token) {
+    throw new Error('Missing auth token');
+  }
+
+  if (!Number.isFinite(numericPostId) || numericPostId <= 0) {
+    throw new Error('Invalid postId');
+  }
+
+  const response = await fetch(`${API_URL}/api/channels/joined-interactions/${numericPostId}/read`, {
+    method: 'POST',
+    headers: buildAuthHeaders(token),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new Error(String(errorBody?.error || 'Unable to mark joined channel interactions as read'));
+  }
+};
+
 export const respondToGroupJoinRequest = async (
   authToken: string | undefined,
   notificationId: number,
