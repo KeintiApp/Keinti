@@ -12,6 +12,7 @@ const {
   createSignedReadUrl,
   isSupabaseConfigured,
 } = require('../services/supabaseStorageService');
+const { validateUploadedFile } = require('../services/uploadValidationService');
 
 const POST_TTL_MINUTES = getPostTtlMinutes();
 
@@ -43,6 +44,21 @@ function generateAccessToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function areAccessTokensEqual(providedToken, storedToken) {
+  const provided = String(providedToken || '').trim();
+  const stored = String(storedToken || '').trim();
+
+  if (!provided || !stored || provided.length !== stored.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(stored));
+}
+
+function allowsLegacyImageIdAccess() {
+  return String(process.env.ALLOW_LEGACY_IMAGE_ID_ACCESS || '').trim().toLowerCase() === 'true';
+}
+
 function setImageResponseHeaders(res, mimeType) {
   res.setHeader('Content-Type', mimeType);
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -56,6 +72,31 @@ function setRedirectHeaders(res) {
   // The signed URL is currently generated with ~15min expiration.
   res.setHeader('Cache-Control', 'public, max-age=900');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+}
+
+function isMissingStorageObjectError(error) {
+  const status = Number(error?.status || error?.cause?.status || 0);
+  const statusCode = String(error?.statusCode || error?.cause?.statusCode || '').trim();
+  const message = String(error?.message || error?.cause?.message || '').toLowerCase();
+
+  return status === 404 || statusCode === '404' || message.includes('object not found');
+}
+
+async function tryCreateUploadedImageSignedUrl({ bucket, path, expiresInSeconds, logContext }) {
+  try {
+    return await createSignedReadUrl({ bucket, path, expiresInSeconds });
+  } catch (error) {
+    if (isMissingStorageObjectError(error)) {
+      console.warn('[Upload] Objeto faltante en Supabase Storage para imagen subida:', {
+        ...logContext,
+        bucket,
+        path,
+      });
+      return null;
+    }
+
+    throw error;
+  }
 }
 
 async function validateOwnedActivePost(postId, ownerEmail) {
@@ -111,8 +152,13 @@ router.post('/', authenticateToken, upload.single('image'), async (req, res) => 
       return res.status(400).json({ error: 'No se proporcionó ningún archivo' });
     }
 
+    const validatedFile = validateUploadedFile(req.file, { allowAudio: true });
+    if (!validatedFile.ok) {
+      return res.status(validatedFile.status).json({ error: validatedFile.error });
+    }
+
     const ownerEmail = req.user?.email || null;
-    const mimeType = req.file.mimetype || 'application/octet-stream';
+    const mimeType = validatedFile.mimeType;
     const isAudioUpload = isAudioUploadMimeType(mimeType);
 
     // Optional: link upload to a specific 24h post so it expires with it.
@@ -200,7 +246,7 @@ router.post('/', authenticateToken, upload.single('image'), async (req, res) => 
 // Servir imagen desde BD
 router.get('/image/:id', async (req, res) => {
   try {
-    // Opcional: desactivar endpoint legacy por id en producción
+    // Opcional: desactivar completamente el endpoint legacy por id.
     if (String(process.env.DISABLE_LEGACY_IMAGE_ID_ENDPOINT || '').toLowerCase() === 'true') {
       return res.status(404).send('No encontrado');
     }
@@ -224,24 +270,13 @@ router.get('/image/:id', async (req, res) => {
     const providedToken = String(req.query?.token || '').trim();
     const storedToken = row.access_token ? String(row.access_token).trim() : '';
 
-    // Si el registro tiene access_token, podemos exigirlo con un flag.
-    const requireToken = String(process.env.REQUIRE_IMAGE_TOKEN || '').toLowerCase() === 'true';
     if (storedToken) {
-      const matches = providedToken && storedToken && crypto.timingSafeEqual(
-        Buffer.from(providedToken),
-        Buffer.from(storedToken)
-      );
-
-      if (!matches) {
-        if (requireToken) {
-          return res.status(403).send('No autorizado');
-        }
-        // Compatibilidad: permitir legacy sin token mientras migras URLs existentes.
-        res.setHeader('X-Keinti-Image-Access', 'legacy-without-token');
+      if (!areAccessTokensEqual(providedToken, storedToken)) {
+        return res.status(403).send('No autorizado');
       }
     } else {
-      // Imagen antigua sin token: si activas REQUIRE_IMAGE_TOKEN, ya no se sirve.
-      if (requireToken) {
+      // Imagen antigua sin token: por defecto se bloquea para evitar enumeración por id.
+      if (!allowsLegacyImageIdAccess()) {
         return res.status(403).send('No autorizado');
       }
       res.setHeader('X-Keinti-Image-Access', 'legacy-no-token-stored');
@@ -249,14 +284,19 @@ router.get('/image/:id', async (req, res) => {
 
     // Prefer Supabase Storage if present.
     if (row.storage_path && isSupabaseConfigured()) {
-      const signed = await createSignedReadUrl({
+      const signed = await tryCreateUploadedImageSignedUrl({
         bucket: row.storage_bucket,
         path: row.storage_path,
         expiresInSeconds: 15 * 60,
+        logContext: { route: 'image-by-id', imageId: id },
       });
       if (signed) {
         setRedirectHeaders(res);
         return res.redirect(302, signed);
+      }
+
+      if (!row.image_data) {
+        return res.status(404).send('Imagen no encontrada');
       }
     }
 
@@ -289,14 +329,19 @@ router.get('/image-token/:token', async (req, res) => {
     const row = result.rows[0];
 
     if (row.storage_path && isSupabaseConfigured()) {
-      const signed = await createSignedReadUrl({
+      const signed = await tryCreateUploadedImageSignedUrl({
         bucket: row.storage_bucket,
         path: row.storage_path,
         expiresInSeconds: 15 * 60,
+        logContext: { route: 'image-by-token', token },
       });
       if (signed) {
         setRedirectHeaders(res);
         return res.redirect(302, signed);
+      }
+
+      if (!row.image_data) {
+        return res.status(404).send('Imagen no encontrada');
       }
     }
 

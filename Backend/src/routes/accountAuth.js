@@ -7,6 +7,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { getPostTtlMinutes } = require('../config/postTtl');
 const { buildObjectPath, uploadBuffer, deleteObject, isSupabaseConfigured } = require('../services/supabaseStorageService');
 const { analyzeAccountSelfie, RULESET_VERSION } = require('../services/accountSelfieVisionService');
+const { validateUploadedFile } = require('../services/uploadValidationService');
 
 const router = express.Router();
 
@@ -361,6 +362,11 @@ router.post('/selfie', authenticateToken, upload.single('selfie'), async (req, r
       return res.status(400).json({ error: 'No se proporcionó ninguna imagen' });
     }
 
+    const validatedFile = validateUploadedFile(req.file);
+    if (!validatedFile.ok) {
+      return res.status(validatedFile.status).json({ error: validatedFile.error });
+    }
+
     const email = req.user?.email;
 
     // Si el admin bloqueó el reintento de selfie, no permitir nuevas subidas.
@@ -377,7 +383,7 @@ router.post('/selfie', authenticateToken, upload.single('selfie'), async (req, r
       });
     }
 
-    const mimeType = req.file.mimetype || 'application/octet-stream';
+    const mimeType = validatedFile.mimeType;
     const nowIso = new Date().toISOString();
 
     const prev = await pool.query(

@@ -21,6 +21,7 @@ import {
   Platform,
   PermissionsAndroid,
   Linking,
+  findNodeHandle,
   TextInput,
   Easing,
   InteractionManager,
@@ -1688,6 +1689,59 @@ const GradientAttachmentActionIcon = ({
     </View>
   );
 };
+
+const IntimidadAddOptionsPanel = ({
+  imageGradientId,
+  textGradientId,
+  imageLabel,
+  textLabel,
+  onSelectImage,
+  onSelectText,
+}: {
+  imageGradientId: string;
+  textGradientId: string;
+  imageLabel: string;
+  textLabel: string;
+  onSelectImage: () => void;
+  onSelectText: () => void;
+}) => (
+  <View style={{ width: '100%', alignItems: 'center', marginBottom: 10 }}>
+    <View
+      style={{
+        minWidth: 148,
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        alignItems: 'center',
+        backgroundColor: 'transparent',
+        borderWidth: 1,
+        borderColor: '#3A3A3A',
+        borderRadius: 12,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+      }}
+    >
+      <TouchableOpacity activeOpacity={0.8} style={{ alignItems: 'center' }} onPress={onSelectImage}>
+        <BottomNavGradientIcon
+          name="image"
+          size={20}
+          library="material"
+          gradientId={imageGradientId}
+        />
+        <Text style={{ color: '#FFFFFF', fontSize: 10, marginTop: 4 }}>{imageLabel}</Text>
+      </TouchableOpacity>
+      <View style={{ width: 18 }} />
+      <TouchableOpacity activeOpacity={0.8} style={{ alignItems: 'center' }} onPress={onSelectText}>
+        <BottomNavGradientIcon
+          name="text-fields"
+          size={20}
+          library="material"
+          gradientId={textGradientId}
+        />
+        <Text style={{ color: '#FFFFFF', fontSize: 10, marginTop: 4 }}>{textLabel}</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+);
 
 const BottomNavActiveIndicator = ({ gradientId }: { gradientId: string }) => (
   <Svg width="32" height="3">
@@ -10705,6 +10759,8 @@ const FrontScreen = ({
   const profileDotsRef = useRef<PresentationDotsHandle | null>(null);
   const editDotsRef = useRef<PresentationDotsHandle | null>(null);
   const profilePresentationScrollRef = useRef<ScrollView | null>(null);
+  const presentationTitleInputRef = useRef<TextInput | null>(null);
+  const presentationBodyInputRef = useRef<TextInput | null>(null);
   const [profileViewMountKey, setProfileViewMountKey] = useState(0);
   const [profileCarouselMountKey, setProfileCarouselMountKey] = useState(0);
   const [profilePresentation, setProfilePresentation] = useState<PresentationContent | null>(null);
@@ -15583,14 +15639,40 @@ const FrontScreen = ({
   const hasOnlyRemoteCarouselImages = !authToken || carouselImages.every(img => String(img.uri || '').startsWith('http'));
   const canApplyPresentation = hasPresentationImage && titleReady && textReady && !hasUploadingCarouselImages && hasOnlyRemoteCarouselImages;
 
-  const scrollPresentationEditorIntoView = useCallback(() => {
-    requestAnimationFrame(() => {
-      profilePresentationScrollRef.current?.scrollToEnd({ animated: true });
-    });
+  const scrollPresentationEditorIntoView = useCallback((field: 'title' | 'body') => {
+    const targetInput = field === 'title'
+      ? presentationTitleInputRef.current
+      : presentationBodyInputRef.current;
+    const scrollResponder = profilePresentationScrollRef.current?.getScrollResponder?.() as {
+      scrollResponderScrollNativeHandleToKeyboard?: (
+        nodeHandle: number,
+        additionalOffset?: number,
+        preventNegativeScrollOffset?: boolean,
+      ) => void;
+    } | undefined;
+    const targetHandle = targetInput ? findNodeHandle(targetInput) : null;
+    const additionalOffset = field === 'title'
+      ? (Platform.OS === 'ios' ? 20 : 12)
+      : (Platform.OS === 'ios' ? 52 : 40);
 
-    setTimeout(() => {
-      profilePresentationScrollRef.current?.scrollToEnd({ animated: true });
-    }, Platform.OS === 'ios' ? 80 : 120);
+    const scrollFocusedField = () => {
+      if (targetHandle == null || !scrollResponder?.scrollResponderScrollNativeHandleToKeyboard) {
+        if (field === 'body') {
+          profilePresentationScrollRef.current?.scrollToEnd({ animated: true });
+        }
+        return;
+      }
+
+      scrollResponder.scrollResponderScrollNativeHandleToKeyboard(
+        targetHandle,
+        additionalOffset,
+        true,
+      );
+    };
+
+    requestAnimationFrame(scrollFocusedField);
+
+    setTimeout(scrollFocusedField, Platform.OS === 'ios' ? 80 : 120);
   }, []);
 
   const [showSocialPanel, setShowSocialPanel] = useState(false);
@@ -19812,6 +19894,7 @@ const FrontScreen = ({
                                 <View style={styles.overlayField}>
                                   <Text style={styles.overlayLabel}>{t('front.presentationTitleLabel' as TranslationKey)}</Text>
                                   <TextInput
+                                    ref={presentationTitleInputRef}
                                     style={styles.overlayInput}
                                     placeholder={t('front.presentationTitlePlaceholder' as TranslationKey)}
                                     placeholderTextColor="rgba(255, 255, 255, 0.27)"
@@ -19821,7 +19904,7 @@ const FrontScreen = ({
                                         setPresentationTitle(text);
                                       }
                                     }}
-                                    onFocus={scrollPresentationEditorIntoView}
+                                    onFocus={() => scrollPresentationEditorIntoView('title')}
                                     maxLength={120}
                                   />
                                   <Text style={styles.overlayCount}>
@@ -19831,6 +19914,7 @@ const FrontScreen = ({
                                 <View style={[styles.overlayField, styles.overlayFieldLarge]}>
                                   <Text style={styles.overlayLabel}>{t('front.presentationBodyLabel' as TranslationKey)}</Text>
                                   <TextInput
+                                    ref={presentationBodyInputRef}
                                     style={[styles.overlayInput, styles.overlayInputMultiline]}
                                     placeholder={t('front.presentationBodyPlaceholder' as TranslationKey)}
                                     placeholderTextColor="rgba(255, 255, 255, 0.5)"
@@ -19840,7 +19924,7 @@ const FrontScreen = ({
                                         setPresentationText(text);
                                       }
                                     }}
-                                    onFocus={scrollPresentationEditorIntoView}
+                                    onFocus={() => scrollPresentationEditorIntoView('body')}
                                     maxLength={480}
                                     multiline
                                     numberOfLines={PRESENTATION_BODY_VISIBLE_LINES}
@@ -19994,7 +20078,7 @@ const FrontScreen = ({
                               }}
                               multiline
                               maxLength={480}
-                              placeholder="Escribe un pie de foto..."
+                              placeholder={t('chat.addCaptionPlaceholder' as TranslationKey)}
                               placeholderTextColor="rgba(255, 255, 255, 0.5)"
                               value={textInputValue}
                               onChangeText={setTextInputValue}
@@ -20139,25 +20223,37 @@ const FrontScreen = ({
                       opacity: hasQuizIntimidad ? 0.5 : 1,
                     }}>
                     {!quizImageUri && (
-                      <TouchableOpacity
-                        onPress={() => setShowExtraOptions1(!showExtraOptions1)}
-                        style={{ width: 20, height: 20, justifyContent: 'center', alignItems: 'center', marginBottom: 15 }}
-                      >
-                        <View style={{
-                          position: 'absolute',
-                          width: 20,
-                          height: 4,
-                          borderRadius: 2,
-                          backgroundColor: '#FFB74D',
-                        }} />
-                        <View style={{
-                          position: 'absolute',
-                          width: 4,
-                          height: 20,
-                          borderRadius: 2,
-                          backgroundColor: '#FFB74D',
-                        }} />
-                      </TouchableOpacity>
+                      <View style={{ width: '100%', alignItems: 'center', marginBottom: 15 }}>
+                        {showExtraOptions1 && (
+                          <IntimidadAddOptionsPanel
+                            imageGradientId="quiz_intimidad_image_option_gradient"
+                            textGradientId="quiz_intimidad_text_option_gradient"
+                            imageLabel={t('front.image' as TranslationKey)}
+                            textLabel={t('front.text' as TranslationKey)}
+                            onSelectImage={handleSelectQuizImage}
+                            onSelectText={() => setShowQuizTextInput(true)}
+                          />
+                        )}
+                        <TouchableOpacity
+                          onPress={() => setShowExtraOptions1(!showExtraOptions1)}
+                          style={{ width: 20, height: 20, justifyContent: 'center', alignItems: 'center' }}
+                        >
+                          <View style={{
+                            position: 'absolute',
+                            width: 20,
+                            height: 4,
+                            borderRadius: 2,
+                            backgroundColor: '#FFB74D',
+                          }} />
+                          <View style={{
+                            position: 'absolute',
+                            width: 4,
+                            height: 20,
+                            borderRadius: 2,
+                            backgroundColor: '#FFB74D',
+                          }} />
+                        </TouchableOpacity>
+                      </View>
                     )}
 
                     <View style={{ width: '100%', paddingHorizontal: 0, marginBottom: 10 }}>
@@ -20192,7 +20288,7 @@ const FrontScreen = ({
                               }}
                               multiline
                               maxLength={480}
-                              placeholder="Escribe un pie de foto..."
+                              placeholder={t('chat.addCaptionPlaceholder' as TranslationKey)}
                               placeholderTextColor="rgba(255, 255, 255, 0.5)"
                               value={quizTextInputValue}
                               onChangeText={setQuizTextInputValue}
@@ -20500,20 +20596,6 @@ const FrontScreen = ({
                         {quizPublishError}
                       </Text>
                     ) : null}
-                    {showExtraOptions1 && (
-                      <View style={{ width: '100%', marginTop: 15, paddingHorizontal: 10 }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', backgroundColor: 'rgba(45, 27, 14, 0.5)', borderRadius: 10, padding: 10 }}>
-                          <TouchableOpacity style={{ alignItems: 'center' }} onPress={handleSelectQuizImage}>
-                            <MaterialIcons name="image" size={20} color="#FFB74D" />
-                            <Text style={{ color: '#FFFFFF', fontSize: 10, marginTop: 4 }}>{t('front.image' as TranslationKey)}</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity style={{ alignItems: 'center' }} onPress={() => setShowQuizTextInput(true)}>
-                            <MaterialIcons name="text-fields" size={20} color="#FFB74D" />
-                            <Text style={{ color: '#FFFFFF', fontSize: 10, marginTop: 4 }}>{t('front.text' as TranslationKey)}</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    )}
                   </View>
 
                   {/* Contenedor Encuesta */}
@@ -20535,13 +20617,25 @@ const FrontScreen = ({
                       opacity: hasSurveyIntimidad ? 0.5 : 1,
                     }}>
                     {!surveyImageUri && (
-                      <TouchableOpacity
-                        onPress={() => setShowExtraOptions2(!showExtraOptions2)}
-                        style={{ width: 20, height: 20, justifyContent: 'center', alignItems: 'center', marginBottom: 15 }}
-                      >
-                        <View style={{ position: 'absolute', width: 20, height: 4, borderRadius: 2, backgroundColor: '#FFB74D' }} />
-                        <View style={{ position: 'absolute', width: 4, height: 20, borderRadius: 2, backgroundColor: '#FFB74D' }} />
-                      </TouchableOpacity>
+                      <View style={{ width: '100%', alignItems: 'center', marginBottom: 15 }}>
+                        {showExtraOptions2 && (
+                          <IntimidadAddOptionsPanel
+                            imageGradientId="survey_intimidad_image_option_gradient"
+                            textGradientId="survey_intimidad_text_option_gradient"
+                            imageLabel={t('front.image' as TranslationKey)}
+                            textLabel={t('front.text' as TranslationKey)}
+                            onSelectImage={handleSelectSurveyImage}
+                            onSelectText={() => setShowSurveyTextInput(true)}
+                          />
+                        )}
+                        <TouchableOpacity
+                          onPress={() => setShowExtraOptions2(!showExtraOptions2)}
+                          style={{ width: 20, height: 20, justifyContent: 'center', alignItems: 'center' }}
+                        >
+                          <View style={{ position: 'absolute', width: 20, height: 4, borderRadius: 2, backgroundColor: '#FFB74D' }} />
+                          <View style={{ position: 'absolute', width: 4, height: 20, borderRadius: 2, backgroundColor: '#FFB74D' }} />
+                        </TouchableOpacity>
+                      </View>
                     )}
 
                     <View style={{ width: '100%', paddingHorizontal: 0, marginBottom: 10 }}>
@@ -20576,7 +20670,7 @@ const FrontScreen = ({
                               }}
                               multiline
                               maxLength={480}
-                              placeholder="Escribe un pie de foto..."
+                              placeholder={t('chat.addCaptionPlaceholder' as TranslationKey)}
                               placeholderTextColor="rgba(255, 255, 255, 0.5)"
                               value={surveyTextInputValue}
                               onChangeText={setSurveyTextInputValue}
@@ -20764,20 +20858,6 @@ const FrontScreen = ({
                         </Text>
                       ) : null}
                     </View >
-                    {showExtraOptions2 && (
-                      <View style={{ width: '100%', marginTop: 15, paddingHorizontal: 10 }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', backgroundColor: 'rgba(45, 27, 14, 0.5)', borderRadius: 10, padding: 10 }}>
-                          <TouchableOpacity style={{ alignItems: 'center' }} onPress={handleSelectSurveyImage}>
-                            <MaterialIcons name="image" size={20} color="#FFB74D" />
-                            <Text style={{ color: '#FFFFFF', fontSize: 10, marginTop: 4 }}>{t('front.image' as TranslationKey)}</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity style={{ alignItems: 'center' }} onPress={() => setShowSurveyTextInput(true)}>
-                            <MaterialIcons name="text-fields" size={20} color="#FFB74D" />
-                            <Text style={{ color: '#FFFFFF', fontSize: 10, marginTop: 4 }}>{t('front.text' as TranslationKey)}</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    )}
                   </View >
 
 
@@ -27753,85 +27833,84 @@ const FrontScreen = ({
         animationType="fade"
         onRequestClose={closeExpandedChannelReadingCitation}
       >
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={closeExpandedChannelReadingCitation}
-          style={styles.expandedChannelReadingCitationOverlay}
-        >
-          <TouchableWithoutFeedback>
-            <View style={styles.expandedChannelReadingCitationSheet}>
-              <View style={styles.expandedChannelReadingCitationHandle} />
-              <Text style={styles.expandedChannelReadingCitationSheetTitle}>{t('reading.citedUsersTitle')}</Text>
-              <Text style={styles.expandedChannelReadingCitationSheetExcerpt}>{expandedChannelReadingCitation?.text || ''}</Text>
+        <View style={styles.expandedChannelReadingCitationOverlay}>
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={closeExpandedChannelReadingCitation}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={styles.expandedChannelReadingCitationSheet}>
+            <View style={styles.expandedChannelReadingCitationHandle} />
+            <Text style={styles.expandedChannelReadingCitationSheetTitle}>{t('reading.citedUsersTitle')}</Text>
+            <Text style={styles.expandedChannelReadingCitationSheetExcerpt}>{expandedChannelReadingCitation?.text || ''}</Text>
 
-              <ScrollView
-                style={styles.expandedChannelReadingCitationUsersList}
-                contentContainerStyle={styles.expandedChannelReadingCitationUsersListContent}
-                showsVerticalScrollIndicator={(expandedChannelReadingCitation?.users.length || 0) > 5}
-                keyboardShouldPersistTaps="handled"
-                nestedScrollEnabled
-              >
-                {(expandedChannelReadingCitation?.users || []).map((user) => {
-                  const displayUsername = user.username.startsWith('@') ? user.username : `@${user.username}`;
-                  const normalizedUsername = String(displayUsername || '').trim().toLowerCase();
-                  const avatarUri = user.profile_photo_uri ? getServerResourceUrl(String(user.profile_photo_uri)) : '';
-                  const renderableSocials = getRenderableReadingCitationUserSocials(user.social_networks);
-                  const socialViewportCount = Math.min(renderableSocials.length, READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT);
-                  const socialViewportWidth = socialViewportCount > 0
-                    ? (socialViewportCount * READING_CITATION_USER_SOCIAL_ICON_SIZE) + ((socialViewportCount - 1) * READING_CITATION_USER_SOCIAL_ICON_GAP)
-                    : 0;
+            <ScrollView
+              style={styles.expandedChannelReadingCitationUsersList}
+              contentContainerStyle={styles.expandedChannelReadingCitationUsersListContent}
+              showsVerticalScrollIndicator={(expandedChannelReadingCitation?.users.length || 0) > 5}
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+            >
+              {(expandedChannelReadingCitation?.users || []).map((user) => {
+                const displayUsername = user.username.startsWith('@') ? user.username : `@${user.username}`;
+                const normalizedUsername = String(displayUsername || '').trim().toLowerCase();
+                const avatarUri = user.profile_photo_uri ? getServerResourceUrl(String(user.profile_photo_uri)) : '';
+                const renderableSocials = getRenderableReadingCitationUserSocials(user.social_networks);
+                const socialViewportCount = Math.min(renderableSocials.length, READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT);
+                const socialViewportWidth = socialViewportCount > 0
+                  ? (socialViewportCount * READING_CITATION_USER_SOCIAL_ICON_SIZE) + ((socialViewportCount - 1) * READING_CITATION_USER_SOCIAL_ICON_GAP)
+                  : 0;
 
-                  return (
-                    <View key={normalizedUsername} style={styles.expandedChannelReadingCitationUserRow}>
-                      {avatarUri ? (
-                        <Image source={{ uri: avatarUri }} style={styles.expandedChannelReadingCitationUserAvatar} resizeMode="cover" />
-                      ) : (
-                        <View style={styles.expandedChannelReadingCitationUserAvatarFallback}>
-                          <MaterialIcons name="person" size={18} color="#FFFFFF" />
-                        </View>
-                      )}
-                      <View style={styles.expandedChannelReadingCitationUserBody}>
-                        <Text style={styles.expandedChannelReadingCitationUserText}>{displayUsername}</Text>
-
-                        {renderableSocials.length > 0 ? (
-                          <View style={[styles.expandedChannelReadingCitationSocialViewport, { width: socialViewportWidth }]}>
-                            <ScrollView
-                              horizontal
-                              showsHorizontalScrollIndicator={false}
-                              scrollEnabled={renderableSocials.length > READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT}
-                              contentContainerStyle={styles.expandedChannelReadingCitationSocialRow}
-                              nestedScrollEnabled
-                            >
-                              {renderableSocials.map((social, socialIndex) => {
-                                const isLastSocial = socialIndex === renderableSocials.length - 1;
-
-                                return (
-                                  <TouchableOpacity
-                                    key={`${normalizedUsername}-${social.key}`}
-                                    accessibilityRole="button"
-                                    activeOpacity={0.85}
-                                    onPress={() => openExternalLink(social.link)}
-                                    style={isLastSocial ? null : styles.expandedChannelReadingCitationSocialIconSpacing}
-                                  >
-                                    <Image
-                                      source={social.iconSource}
-                                      style={styles.expandedChannelReadingCitationSocialIcon}
-                                      resizeMode="contain"
-                                    />
-                                  </TouchableOpacity>
-                                );
-                              })}
-                            </ScrollView>
-                          </View>
-                        ) : null}
+                return (
+                  <View key={normalizedUsername} style={styles.expandedChannelReadingCitationUserRow}>
+                    {avatarUri ? (
+                      <Image source={{ uri: avatarUri }} style={styles.expandedChannelReadingCitationUserAvatar} resizeMode="cover" />
+                    ) : (
+                      <View style={styles.expandedChannelReadingCitationUserAvatarFallback}>
+                        <MaterialIcons name="person" size={18} color="#FFFFFF" />
                       </View>
+                    )}
+                    <View style={styles.expandedChannelReadingCitationUserBody}>
+                      <Text style={styles.expandedChannelReadingCitationUserText}>{displayUsername}</Text>
+
+                      {renderableSocials.length > 0 ? (
+                        <View style={[styles.expandedChannelReadingCitationSocialViewport, { width: socialViewportWidth }]}>
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            scrollEnabled={renderableSocials.length > READING_CITATION_USER_SOCIAL_VIEWPORT_COUNT}
+                            contentContainerStyle={styles.expandedChannelReadingCitationSocialRow}
+                            nestedScrollEnabled
+                          >
+                            {renderableSocials.map((social, socialIndex) => {
+                              const isLastSocial = socialIndex === renderableSocials.length - 1;
+
+                              return (
+                                <TouchableOpacity
+                                  key={`${normalizedUsername}-${social.key}`}
+                                  accessibilityRole="button"
+                                  activeOpacity={0.85}
+                                  onPress={() => openExternalLink(social.link)}
+                                  style={isLastSocial ? null : styles.expandedChannelReadingCitationSocialIconSpacing}
+                                >
+                                  <Image
+                                    source={social.iconSource}
+                                    style={styles.expandedChannelReadingCitationSocialIcon}
+                                    resizeMode="contain"
+                                  />
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </ScrollView>
+                        </View>
+                      ) : null}
                     </View>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          </TouchableWithoutFeedback>
-        </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
       </Modal>
 
       <Modal

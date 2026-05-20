@@ -8,6 +8,7 @@ module.exports = {
     '^react-native-google-mobile-ads$': '<rootDir>/__mocks__/react-native-google-mobile-ads.js',
     '^@react-native-masked-view/masked-view$': '<rootDir>/__mocks__/react-native-masked-view.js',
     '^react-native-audio-recorder-player$': '<rootDir>/__mocks__/react-native-audio-recorder-player.js',
+    '^react-native-keychain$': '<rootDir>/__mocks__/react-native-keychain.js',
   },
   transformIgnorePatterns: [
     'node_modules/(?!(react-native|@react-native|@react-native-community|react-native-vector-icons|react-native-inappbrowser-reborn)/)',

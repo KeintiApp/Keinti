@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Keychain from 'react-native-keychain';
 import {
   clearKeintiAuthSession,
   loadKeintiAuthSession,
@@ -8,6 +9,7 @@ import {
 describe('authSessionStorage preferredLanguage persistence', () => {
   beforeEach(async () => {
     await AsyncStorage.clear();
+    (Keychain as any).__reset?.();
   });
 
   afterEach(async () => {

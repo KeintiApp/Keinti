@@ -11,6 +11,7 @@ const {
   getPublicUrl,
   isSupabaseConfigured,
 } = require('../services/supabaseStorageService');
+const { validateUploadedFile } = require('../services/uploadValidationService');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -302,6 +303,11 @@ router.post('/', authenticateToken, upload.single('image'), async (req, res) => 
   }
 
   try {
+    const validatedFile = validateUploadedFile(file);
+    if (!validatedFile.ok) {
+      return res.status(validatedFile.status).json({ error: validatedFile.error });
+    }
+
     const countResult = await pool.query(
       'SELECT COUNT(*)::int AS count FROM user_groups WHERE owner_email = $1',
       [ownerEmail]
@@ -316,7 +322,7 @@ router.post('/', authenticateToken, upload.single('image'), async (req, res) => 
         `INSERT INTO user_groups (owner_email, hashtag, image_data, mime_type, image_uri)
          VALUES ($1, $2, $3, $4, NULL)
          RETURNING id, owner_email, hashtag, created_at, updated_at`,
-        [ownerEmail, hashtag, file.buffer, file.mimetype]
+        [ownerEmail, hashtag, file.buffer, validatedFile.mimeType]
       );
 
       const row = legacy.rows[0];
@@ -341,12 +347,12 @@ router.post('/', authenticateToken, upload.single('image'), async (req, res) => 
       kind: 'group-images',
       ownerEmail,
       groupId: row.id,
-      mimeType: file.mimetype,
+      mimeType: validatedFile.mimeType,
     });
 
     const uploaded = await uploadBuffer({
       buffer: file.buffer,
-      mimeType: file.mimetype,
+      mimeType: validatedFile.mimeType,
       path: objectPath,
     });
 
@@ -362,7 +368,7 @@ router.post('/', authenticateToken, upload.single('image'), async (req, res) => 
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $5 AND owner_email = $6
        RETURNING id, owner_email, hashtag, created_at, updated_at, image_uri, image_storage_bucket, image_storage_path`,
-      [file.mimetype, publicUrl, uploaded.bucket, uploaded.path, row.id, ownerEmail]
+      [validatedFile.mimeType, publicUrl, uploaded.bucket, uploaded.path, row.id, ownerEmail]
     );
 
     const out = updated.rows[0] || row;
@@ -399,6 +405,11 @@ router.put('/:id', authenticateToken, upload.single('image'), async (req, res) =
   try {
     let result;
     if (file) {
+      const validatedFile = validateUploadedFile(file);
+      if (!validatedFile.ok) {
+        return res.status(validatedFile.status).json({ error: validatedFile.error });
+      }
+
       if (!isSupabaseConfigured()) {
         result = await pool.query(
           `UPDATE user_groups
@@ -411,7 +422,7 @@ router.put('/:id', authenticateToken, upload.single('image'), async (req, res) =
                updated_at = CURRENT_TIMESTAMP
            WHERE id = $4 AND owner_email = $5
            RETURNING id, owner_email, hashtag, created_at, updated_at, image_uri, image_storage_bucket, image_storage_path`,
-          [hashtag, file.buffer, file.mimetype, id, ownerEmail]
+          [hashtag, file.buffer, validatedFile.mimeType, id, ownerEmail]
         );
       } else {
       const prev = await pool.query(
@@ -425,12 +436,12 @@ router.put('/:id', authenticateToken, upload.single('image'), async (req, res) =
         kind: 'group-images',
         ownerEmail,
         groupId: id,
-        mimeType: file.mimetype,
+        mimeType: validatedFile.mimeType,
       });
 
       const uploaded = await uploadBuffer({
         buffer: file.buffer,
-        mimeType: file.mimetype,
+        mimeType: validatedFile.mimeType,
         path: objectPath,
       });
 
@@ -447,7 +458,7 @@ router.put('/:id', authenticateToken, upload.single('image'), async (req, res) =
              updated_at = CURRENT_TIMESTAMP
          WHERE id = $6 AND owner_email = $7
          RETURNING id, owner_email, hashtag, created_at, updated_at, image_uri, image_storage_bucket, image_storage_path`,
-        [hashtag, file.mimetype, publicUrl, uploaded.bucket, uploaded.path, id, ownerEmail]
+        [hashtag, validatedFile.mimeType, publicUrl, uploaded.bucket, uploaded.path, id, ownerEmail]
       );
 
       if (prevBucket && prevPath) {

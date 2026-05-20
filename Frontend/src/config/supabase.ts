@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { secureKeyValueStorage } from '../services/secureKeyValueStorage';
 
 // NOTE:
 // - `SUPABASE_ANON_KEY` is safe to ship in the mobile app (it's public).
@@ -28,7 +28,7 @@ if (__DEV__) {
 export const supabase: SupabaseClient | null = isSupabaseConfigured()
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
-        storage: AsyncStorage,
+        storage: secureKeyValueStorage,
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: false,

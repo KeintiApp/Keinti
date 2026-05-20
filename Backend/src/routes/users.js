@@ -15,6 +15,7 @@ const {
   isSupabaseConfigured: isSupabaseAdminConfigured,
   isSupabaseAuthConfigured,
 } = require('../config/supabase');
+const { validateUploadedFile } = require('../services/uploadValidationService');
 
 const router = express.Router();
 
@@ -771,6 +772,11 @@ router.post('/profile-photo', authenticateToken, upload.single('photo'), async (
       return res.status(400).json({ error: 'No se proporcionó una imagen' });
     }
 
+    const validatedFile = validateUploadedFile(req.file);
+    if (!validatedFile.ok) {
+      return res.status(validatedFile.status).json({ error: validatedFile.error });
+    }
+
     const email = String(req.user?.email || '').trim().toLowerCase();
     if (!email) {
       return res.status(400).json({ error: 'Email de usuario inválido' });
@@ -782,7 +788,7 @@ router.post('/profile-photo', authenticateToken, upload.single('photo'), async (
     // Guardar avatar en PostgreSQL (sin procesado nativo) para evitar fallos de decodificación
     // que pueden tumbar la conexión y aparecer como "Network request failed" en React Native.
     const ownerEmail = email;
-    const mimeType = req.file.mimetype || 'application/octet-stream';
+    const mimeType = validatedFile.mimeType;
     const accessToken = generateAccessToken();
 
     if (!isSupabaseStorageConfigured()) {

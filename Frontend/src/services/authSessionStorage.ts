@@ -1,5 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isSupportedLanguage, type Language } from '../i18n/translations';
+import { secureKeyValueStorage } from './secureKeyValueStorage';
 
 export type KeintiAuthSessionV1 = {
   version: 1;
@@ -33,7 +33,7 @@ const normalizeOptionalLanguage = (input: unknown): Language | undefined => {
 
 export const loadKeintiAuthSession = async (): Promise<KeintiAuthSessionV1 | null> => {
   try {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    const raw = await secureKeyValueStorage.getItem(STORAGE_KEY);
     if (!raw) {return null;}
     const parsed = safeJsonParse(raw);
     if (!parsed || parsed.version !== 1) {return null;}
@@ -80,12 +80,12 @@ export const saveKeintiAuthSession = async (session: Omit<KeintiAuthSessionV1, '
 
   if (!payload.token || !payload.user.email) {return;}
 
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  await secureKeyValueStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 };
 
 export const clearKeintiAuthSession = async (): Promise<void> => {
   try {
-    await AsyncStorage.removeItem(STORAGE_KEY);
+    await secureKeyValueStorage.removeItem(STORAGE_KEY);
   } catch {
     // ignore
   }
