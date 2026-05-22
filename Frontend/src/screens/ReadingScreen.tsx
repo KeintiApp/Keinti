@@ -1547,6 +1547,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
           uploadedUrl = await uploadImage(uploadedUrl, normalizedToken, {
             postId: normalizedChannelPostId,
             timeoutMs: 120000,
+            mimeType: voiceNote.mimeType || READING_VOICE_NOTE_MIME_TYPE,
           });
         }
 
@@ -1578,6 +1579,7 @@ const ReadingScreen = ({ onBack, authToken, channelPostId }: ReadingScreenProps)
               uploadedUrl = await uploadImage(uploadedUrl, normalizedToken, {
                 postId: normalizedChannelPostId,
                 timeoutMs: 120000,
+                mimeType: insertion.mimeType || READING_VOICE_NOTE_MIME_TYPE,
               });
             }
 

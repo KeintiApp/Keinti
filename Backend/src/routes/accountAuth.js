@@ -579,6 +579,7 @@ router.post('/selfie', authenticateToken, upload.single('selfie'), async (req, r
 
     const storageEnabled = isSupabaseConfigured();
     let uploaded = null;
+    let useDatabaseStorage = !storageEnabled;
     if (storageEnabled) {
       const objectPath = buildObjectPath({
         kind: 'account-selfies',
@@ -586,11 +587,20 @@ router.post('/selfie', authenticateToken, upload.single('selfie'), async (req, r
         mimeType,
       });
 
-      uploaded = await uploadBuffer({
-        buffer: req.file.buffer,
-        mimeType,
-        path: objectPath,
-      });
+      try {
+        uploaded = await uploadBuffer({
+          buffer: req.file.buffer,
+          mimeType,
+          path: objectPath,
+        });
+      } catch (storageError) {
+        useDatabaseStorage = true;
+        console.warn('Account selfie storage upload failed, falling back to database storage:', {
+          email,
+          mimeType,
+          error: storageError instanceof Error ? storageError.message : String(storageError || 'unknown_error'),
+        });
+      }
     }
 
     const accessToken = generateAccessToken();
@@ -600,7 +610,9 @@ router.post('/selfie', authenticateToken, upload.single('selfie'), async (req, r
       await deleteUploadedImageById(prevId);
     }
 
-    const insert = storageEnabled
+    const useStoragePointer = !useDatabaseStorage && !!uploaded?.bucket && !!uploaded?.path;
+
+    const insert = useStoragePointer
       ? await pool.query(
           `INSERT INTO uploaded_images (owner_email, post_id, group_id, image_data, mime_type, access_token, storage_bucket, storage_path)
            VALUES ($1, NULL, NULL, NULL, $2, $3, $4, $5)

@@ -7633,7 +7633,7 @@ const FrontScreen = ({
       if (channelEventVoiceNote) {
         let eventAudioUrl = String(channelEventVoiceNote.uri || '').trim();
         if (eventAudioUrl && !eventAudioUrl.startsWith('http')) {
-          eventAudioUrl = await uploadImage(eventAudioUrl, authToken, { postId: targetPostId, timeoutMs: 120000 });
+          eventAudioUrl = await uploadImage(eventAudioUrl, authToken, { postId: targetPostId, timeoutMs: 120000, mimeType: channelEventVoiceNote.mimeType || CHANNEL_EVENT_VOICE_NOTE_MIME_TYPE });
         }
 
         if (eventAudioUrl) {

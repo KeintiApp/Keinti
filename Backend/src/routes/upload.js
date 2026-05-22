@@ -18,6 +18,10 @@ const POST_TTL_MINUTES = getPostTtlMinutes();
 
 const storage = multer.memoryStorage();
 
+function normalizeEmailKey(rawValue) {
+  return String(rawValue || '').trim().toLowerCase();
+}
+
 function isAudioUploadMimeType(mimeType) {
   return String(mimeType || '').toLowerCase().startsWith('audio/');
 }
@@ -99,25 +103,66 @@ async function tryCreateUploadedImageSignedUrl({ bucket, path, expiresInSeconds,
   }
 }
 
-async function validateOwnedActivePost(postId, ownerEmail) {
+async function isBlockedBetween(emailA, emailB) {
+  const result = await pool.query(
+    `SELECT 1
+     FROM group_join_requests r
+     WHERE r.status = 'blocked'
+       AND (
+         (r.requester_email = $1 AND r.target_email = $2)
+         OR (r.requester_email = $2 AND r.target_email = $1)
+       )
+     LIMIT 1`,
+    [emailA, emailB]
+  );
+
+  return (result.rows?.length || 0) > 0;
+}
+
+async function validateAccessibleActivePost(postId, requesterEmail) {
   const pid = Number(postId);
   if (!Number.isFinite(pid) || pid <= 0) return { ok: false, status: 400, error: 'postId inválido' };
-  const email = ownerEmail ? String(ownerEmail) : '';
+  const email = normalizeEmailKey(requesterEmail);
   if (!email) return { ok: false, status: 401, error: 'No autorizado' };
 
   const result = await pool.query(
-    `SELECT 1
+    `SELECT user_email
      FROM Post_users
      WHERE id = $1
-       AND user_email = $2
        AND deleted_at IS NULL
-       AND created_at >= NOW() - ($3 * INTERVAL '1 minute')
+       AND created_at >= NOW() - ($2 * INTERVAL '1 minute')
      LIMIT 1`,
-    [pid, email, POST_TTL_MINUTES]
+    [pid, POST_TTL_MINUTES]
   );
 
   if ((result.rows?.length || 0) === 0) {
     return { ok: false, status: 403, error: 'Post no encontrado, no autorizado o expirado' };
+  }
+
+  const publisherEmail = normalizeEmailKey(result.rows[0]?.user_email);
+  if (!publisherEmail) {
+    return { ok: false, status: 403, error: 'Post no encontrado, no autorizado o expirado' };
+  }
+
+  if (email === publisherEmail) {
+    return { ok: true, postId: pid };
+  }
+
+  if (await isBlockedBetween(email, publisherEmail)) {
+    return { ok: false, status: 403, error: 'No autorizado' };
+  }
+
+  const subscriptionResult = await pool.query(
+    `SELECT 1
+     FROM channel_subscriptions
+     WHERE viewer_email = $1
+       AND post_id = $2
+     LIMIT 1`,
+    [email, pid]
+  );
+
+  if ((subscriptionResult.rows?.length || 0) === 0) {
+    return { ok: false, status: 403, error: 'No estás suscrito a este canal' };
   }
 
   return { ok: true, postId: pid };
@@ -177,7 +222,7 @@ router.post('/', authenticateToken, upload.single('image'), async (req, res) => 
     }
 
     if (hasPostId) {
-      const validation = await validateOwnedActivePost(postIdRaw, ownerEmail);
+      const validation = await validateAccessibleActivePost(postIdRaw, ownerEmail);
       if (!validation.ok) {
         return res.status(validation.status).json({ error: validation.error });
       }
@@ -192,14 +237,42 @@ router.post('/', authenticateToken, upload.single('image'), async (req, res) => 
       groupId = validation.groupId;
     }
 
-    if (isAudioUpload && !isSupabaseConfigured()) {
-      return res.status(503).json({ error: 'La subida de audio requiere Supabase Storage configurado' });
-    }
-
     const accessToken = generateAccessToken();
 
-    // Fallback: if Supabase is not configured yet, store in Postgres (legacy behavior).
-    if (!isSupabaseConfigured()) {
+    let useDatabaseStorage = !isSupabaseConfigured();
+    let uploaded = null;
+
+    // Fallback: if Supabase is not configured yet, or the storage write fails,
+    // persist the binary in Postgres so channel creation does not fail.
+    if (!useDatabaseStorage) {
+      const objectPath = buildObjectPath({
+        kind: 'uploads',
+        ownerEmail,
+        postId,
+        groupId,
+        mimeType,
+      });
+
+      try {
+        uploaded = await uploadBuffer({
+          buffer: req.file.buffer,
+          mimeType,
+          path: objectPath,
+        });
+      } catch (storageError) {
+        useDatabaseStorage = true;
+        console.warn('[Upload] Supabase Storage upload failed, falling back to database storage:', {
+          ownerEmail,
+          postId,
+          groupId,
+          mimeType,
+          isAudioUpload,
+          error: storageError instanceof Error ? storageError.message : String(storageError || 'unknown_error'),
+        });
+      }
+    }
+
+    if (useDatabaseStorage) {
       const result = await pool.query(
         'INSERT INTO uploaded_images (owner_email, post_id, group_id, image_data, mime_type, access_token) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
         [ownerEmail, postId, groupId, req.file.buffer, mimeType, accessToken]
@@ -209,21 +282,6 @@ router.post('/', authenticateToken, upload.single('image'), async (req, res) => 
       const imageUrl = `/api/upload/image/${id}?token=${accessToken}`;
       return res.json({ url: imageUrl, id, token: accessToken, storage: 'db' });
     }
-
-    // Store the binary in Supabase Storage; keep DB row as a pointer.
-    const objectPath = buildObjectPath({
-      kind: 'uploads',
-      ownerEmail,
-      postId,
-      groupId,
-      mimeType,
-    });
-
-    const uploaded = await uploadBuffer({
-      buffer: req.file.buffer,
-      mimeType,
-      path: objectPath,
-    });
 
     const result = await pool.query(
       `INSERT INTO uploaded_images (owner_email, post_id, group_id, image_data, mime_type, access_token, storage_bucket, storage_path)

@@ -1575,61 +1575,71 @@ router.post('/messages', authenticateToken, async (req, res) => {
         }
         channelEventTaskRewards = Array.isArray(rewardReservation?.rewards) ? rewardReservation.rewards : [];
 
-        const replyNotificationRecipient = await resolveChannelReplyNotificationRecipient(client, {
-          postId: numericPostId,
-          publisherEmail,
-          message: storedMessage,
-        });
+        try {
+          const replyNotificationRecipient = await resolveChannelReplyNotificationRecipient(client, {
+            postId: numericPostId,
+            publisherEmail,
+            message: storedMessage,
+          });
 
-        if (replyNotificationRecipient?.email) {
-          await client.query(
-            `INSERT INTO channel_reply_notifications (
-               post_id,
-               channel_message_id,
-               publisher_email,
-               viewer_email,
-               created_at
-             )
-             VALUES ($1, $2, $3, $4, COALESCE($5, CURRENT_TIMESTAMP))
-             ON CONFLICT (channel_message_id) DO NOTHING`,
-            [
-              numericPostId,
-              insertedMessage.id,
-              senderEmail,
-              replyNotificationRecipient.email,
-              insertedMessage.created_at || null,
-            ]
-          );
-        }
-
-        const interactionKind = getJoinedChannelInteractionKind(storedMessage, replyNotificationRecipient);
-        if (interactionKind) {
-          const interactionRecipients = interactionKind === 'reply'
-            ? [replyNotificationRecipient]
-            : await listJoinedChannelInteractionRecipients(client, {
-              postId: numericPostId,
-              publisherEmail,
-            });
-
-          if (interactionRecipients.length > 0) {
-            const publisherUserResult = await client.query(
-              `SELECT username
-               FROM users
-               WHERE lower(email) = lower($1)
-               LIMIT 1`,
-              [publisherEmail]
+          if (replyNotificationRecipient?.email) {
+            await client.query(
+              `INSERT INTO channel_reply_notifications (
+                 post_id,
+                 channel_message_id,
+                 publisher_email,
+                 viewer_email,
+                 created_at
+               )
+               VALUES ($1, $2, $3, $4, COALESCE($5, CURRENT_TIMESTAMP))
+               ON CONFLICT (channel_message_id) DO NOTHING`,
+              [
+                numericPostId,
+                insertedMessage.id,
+                senderEmail,
+                replyNotificationRecipient.email,
+                insertedMessage.created_at || null,
+              ]
             );
-
-            pushTargets = await prepareJoinedChannelPushTargets(client, {
-              postId: numericPostId,
-              publisherEmail,
-              publisherUsername: String(publisherUserResult.rows?.[0]?.username || '').trim(),
-              channelMessageId: insertedMessage.id,
-              createdAt: insertedMessage.created_at || null,
-              interactionKind,
-              recipients: interactionRecipients,
-            });
           }
+
+          const interactionKind = getJoinedChannelInteractionKind(storedMessage, replyNotificationRecipient);
+          if (interactionKind) {
+            const interactionRecipients = interactionKind === 'reply'
+              ? [replyNotificationRecipient]
+              : await listJoinedChannelInteractionRecipients(client, {
+                postId: numericPostId,
+                publisherEmail,
+              });
+
+            if (interactionRecipients.length > 0) {
+              const publisherUserResult = await client.query(
+                `SELECT username
+                 FROM users
+                 WHERE lower(email) = lower($1)
+                 LIMIT 1`,
+                [publisherEmail]
+              );
+
+              pushTargets = await prepareJoinedChannelPushTargets(client, {
+                postId: numericPostId,
+                publisherEmail,
+                publisherUsername: String(publisherUserResult.rows?.[0]?.username || '').trim(),
+                channelMessageId: insertedMessage.id,
+                createdAt: insertedMessage.created_at || null,
+                interactionKind,
+                recipients: interactionRecipients,
+              });
+            }
+          }
+        } catch (interactionSideEffectError) {
+          console.error('Non-fatal channel interaction side-effect error:', {
+            postId: numericPostId,
+            channelMessageId: insertedMessage?.id || null,
+            senderEmail,
+            publisherEmail,
+            error: interactionSideEffectError,
+          });
         }
       }
 

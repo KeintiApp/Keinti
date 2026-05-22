@@ -116,8 +116,8 @@ android {
         applicationId "com.keintiapp.keinti"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 57
-        versionName "1.5.7"
+        versionCode 58
+        versionName "1.5.8"
 
         if (isReleaseBuild) {
             // Play only needs device ABIs here. Excluding x86/x86_64 from release

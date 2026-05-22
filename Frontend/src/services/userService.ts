@@ -64,7 +64,7 @@ export const updatePreferredLanguage = async (data: { token: string; language: L
 export const uploadImage = async (
   imageUri: string,
   token: string,
-  options?: { postId?: string | number; groupId?: string | number; timeoutMs?: number }
+  options?: { postId?: string | number; groupId?: string | number; timeoutMs?: number; mimeType?: string }
 ) => {
   try {
     const normalizeUploadUri = (raw: string) => {
@@ -143,7 +143,8 @@ export const uploadImage = async (
     };
 
     const normalizedUri = normalizeUploadUri(imageUri);
-    const mimeType = guessMimeType(normalizedUri);
+    const explicitMimeType = String(options?.mimeType || '').trim().toLowerCase();
+    const mimeType = explicitMimeType || guessMimeType(normalizedUri);
     const fileName = `upload.${guessExtension(mimeType)}`;
 
     // Some Android stacks are picky about file:// URI formatting.
@@ -187,7 +188,8 @@ export const uploadImage = async (
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      throw new Error('Error al subir archivo');
+      const errorPayload = await response.json().catch(() => ({}));
+      throw new Error((errorPayload as any)?.error || 'Error al subir archivo');
     }
 
     const data = await response.json();

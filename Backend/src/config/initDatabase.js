@@ -441,6 +441,22 @@ async function initDatabase() {
        ON channel_interaction_states (publisher_email);`
     ).catch(() => {});
 
+    await pool.query(
+      `ALTER TABLE device_push_tokens ENABLE ROW LEVEL SECURITY;`
+    ).catch(() => {});
+
+    await pool.query(
+      `ALTER TABLE channel_interaction_states ENABLE ROW LEVEL SECURITY;`
+    ).catch(() => {});
+
+    await pool.query(
+      `REVOKE ALL ON TABLE device_push_tokens FROM PUBLIC, anon, authenticated;`
+    ).catch(() => {});
+
+    await pool.query(
+      `REVOKE ALL ON TABLE channel_interaction_states FROM PUBLIC, anon, authenticated;`
+    ).catch(() => {});
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS channel_event_task_rewards (
         id SERIAL PRIMARY KEY,
